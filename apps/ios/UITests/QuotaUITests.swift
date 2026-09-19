@@ -905,7 +905,8 @@ final class QuotaUITests: XCTestCase {
   }
 
   /// Always `accessibilityExtraLarge`, including CI's `verify-ios-ui`. Visits the four
-  /// below-the-fold flows that the local screenshot script used to be the only net for.
+  /// below-the-fold flows that the local screenshot script used to be the only net for, and
+  /// asserts remaining percent, tokens, and cost are on-screen and untruncated.
   func testLargeTypeScreenshots() throws {
     let ax = "accessibilityExtraLarge"
 
@@ -919,7 +920,24 @@ final class QuotaUITests: XCTestCase {
     var app = launch(fixture: "content", textSize: ax)
     waitRoot(app, "overview.root")
     attachScreenshot(app, name: "overview-content")
+    assertUnclippedEssentialValue(
+      app,
+      identifier: "overview.remaining",
+      expectedLabel: ContentFixtureLargeType.remainingPercent,
+      combinedLabelContainsValue: true
+    )
+    assertUnclippedEssentialValue(
+      app,
+      identifier: "overview.today.tokens",
+      expectedLabel: ContentFixtureLargeType.todayTokens
+    )
+    assertUnclippedEssentialValue(
+      app,
+      identifier: "overview.today.cost",
+      expectedLabel: ContentFixtureLargeType.todayCost
+    )
 
+    try restoreTabBar(app)
     app.tabBars.buttons["Usage"].tap()
     waitRoot(app, "usage.root")
     attachScreenshot(app, name: "usage-content")
@@ -927,6 +945,17 @@ final class QuotaUITests: XCTestCase {
     if period.waitForExistence(timeout: 5), period.buttons["Last 30 days"].exists {
       period.buttons["Last 30 days"].tap()
     }
+    settle(app)
+    assertUnclippedEssentialValue(
+      app,
+      identifier: "usage.headline.tokens",
+      expectedLabel: ContentFixtureLargeType.usageTokens
+    )
+    assertUnclippedEssentialValue(
+      app,
+      identifier: "usage.headline",
+      expectedLabel: ContentFixtureLargeType.usageCost
+    )
     let viewDay = app.descendants(matching: .any)["usage.activity.view-day"]
     var reachedActivity = app.staticTexts["Activity"].exists
     for _ in 0..<32 where !viewDay.exists {
@@ -955,6 +984,26 @@ final class QuotaUITests: XCTestCase {
     )
     attachScreenshot(app, name: "usage-day")
     app.buttons["Done"].tap()
+
+    try restoreTabBar(app)
+    app.tabBars.buttons["Quota"].tap()
+    waitRoot(app, "overview.root")
+    scrollToTop(app)
+    scrollToTop(app)
+    let card = app.descendants(matching: .any)["overview.subscription"].firstMatch
+    XCTAssertTrue(card.waitForExistence(timeout: 5), "overview.subscription")
+    if !card.isHittable {
+      revealIdentifier(app, "overview.subscription", attempts: 8)
+    }
+    card.tap()
+    waitRoot(app, "subscription.detail")
+    assertUnclippedEssentialValue(
+      app,
+      identifier: "subscription.remaining",
+      expectedLabel: ContentFixtureLargeType.remainingPercent,
+      combinedLabelContainsValue: true
+    )
+    popBack(app, to: "overview.root", backTitle: "octocat")
 
     try restoreTabBar(app)
     app.tabBars.buttons["Settings"].tap()
@@ -1063,6 +1112,104 @@ final class QuotaUITests: XCTestCase {
     attachment.name = name
     attachment.lifetime = .keepAlways
     add(attachment)
+  }
+
+  /// Remaining percent, tokens, or cost at accessibility Extra Large: present, hittable, full
+  /// accessibility label, and not clipped by the window.
+  private func assertUnclippedEssentialValue(
+    _ app: XCUIApplication,
+    identifier: String,
+    expectedLabel: String,
+    combinedLabelContainsValue: Bool = false
+  ) {
+    var element = app.descendants(matching: .any)[identifier].firstMatch
+    if !element.waitForExistence(timeout: 2) {
+      revealIdentifier(app, identifier, attempts: 24)
+    }
+    if !element.exists {
+      element = app.staticTexts[expectedLabel].firstMatch
+      if !element.waitForExistence(timeout: 2) {
+        for _ in 0..<16 where !element.exists {
+          scrollContent(app, up: true)
+          _ = element.waitForExistence(timeout: 0.8)
+        }
+      }
+    }
+    XCTAssertTrue(element.waitForExistence(timeout: 5), identifier)
+    if combinedLabelContainsValue {
+      let query = app.descendants(matching: .any).matching(identifier: identifier)
+      let count = query.count
+      var matched: XCUIElement?
+      for index in 0..<count {
+        let candidate = query.element(boundBy: index)
+        if candidate.label.contains(expectedLabel) {
+          matched = candidate
+          break
+        }
+      }
+      if matched == nil {
+        let byLabel = app.staticTexts[expectedLabel].firstMatch
+        if byLabel.exists { matched = byLabel }
+      }
+      if let matched { element = matched }
+    }
+    if element.exists && !element.isHittable {
+      revealIdentifier(app, identifier, attempts: 8)
+      if !element.isHittable, element.label != expectedLabel {
+        let byLabel = app.staticTexts[expectedLabel].firstMatch
+        if byLabel.exists { element = byLabel }
+      }
+    }
+    XCTAssertTrue(element.isHittable, "\(identifier) hittable at accessibility Extra Large")
+    let label = element.label
+    XCTAssertFalse(
+      label.contains("…") || label.contains("..."),
+      "\(identifier) label is not an ellipsis truncation"
+    )
+    if combinedLabelContainsValue {
+      XCTAssertTrue(
+        label.contains(expectedLabel),
+        "\(identifier) combined label contains the full value \(expectedLabel); got \(label)"
+      )
+    } else {
+      XCTAssertEqual(
+        label,
+        expectedLabel,
+        "\(identifier) label is the full string, not a truncation"
+      )
+    }
+    func fullyOnScreen(_ frame: CGRect, _ window: CGRect) -> Bool {
+      frame.minX >= window.minX - 1
+        && frame.maxX <= window.maxX + 1
+        && frame.minY >= window.minY - 1
+        && frame.maxY <= window.maxY + 1
+    }
+    var window = app.windows.firstMatch.frame
+    var frame = element.frame
+    for _ in 0..<8 where !fullyOnScreen(frame, window) {
+      if frame.maxY > window.maxY + 1 {
+        scrollContent(app, up: true)
+      } else if frame.minY < window.minY - 1 {
+        scrollContent(app, up: false)
+      } else {
+        break
+      }
+      _ = element.waitForExistence(timeout: 0.8)
+      window = app.windows.firstMatch.frame
+      frame = element.frame
+    }
+    let visible = window.intersection(frame)
+    XCTAssertFalse(visible.isNull || visible.isEmpty, "\(identifier) intersects the window")
+    if fullyOnScreen(frame, window) {
+      return
+    }
+    // A combined remaining card at Extra Large can still be taller than the window;
+    // hittable plus a visible slice is the on-screen check for that node.
+    XCTAssertGreaterThan(
+      frame.height, window.height * 0.8,
+      "\(identifier) frame is clipped by the screen: \(frame) vs \(window)"
+    )
+    XCTAssertGreaterThan(visible.height, 40, "\(identifier) has a visible slice on-screen")
   }
 
   private func assertTab(_ app: XCUIApplication, _ name: String) {
@@ -1445,15 +1592,9 @@ final class QuotaUITests: XCTestCase {
     screen: String
   ) throws -> AuditPassResult {
     let box = AuditCollector()
-    let subscriptionCards: [CGRect] = app.descendants(matching: .any)
-      .matching(identifier: "overview.subscription")
-      .allElementsBoundByAccessibilityElement
-      .map { $0.frame }
     do {
       try app.performAccessibilityAudit(for: types) { issue in
-        box.findings.append(
-          makeAuditFinding(issue, screen: screen, subscriptionCards: subscriptionCards)
-        )
+        box.findings.append(makeAuditFinding(issue, screen: screen))
         return true
       }
       return AuditPassResult(findings: box.findings, completed: true)
@@ -1485,18 +1626,162 @@ private let classifiedAuditTypes = [
   "clipped", "contrast", "dynamic-type", "hit-region", "other",
 ]
 
-private let auditExemptionRules = [
-  "nil-element",
-  "section-header-footer",
-  "overview-today",
-  "clipped-usage-activity-empty",
-  "dynamic-type-done",
-  "dynamic-type-identifier-prefix",
-  "dynamic-type-parent",
-  "dynamic-type-couldnt-load",
-  "dynamic-type-form-label",
-  "dynamic-type-subscription-card",
+/// Content-fixture strings `testLargeTypeScreenshots` requires in full at Extra Large.
+private enum ContentFixtureLargeType {
+  static let remainingPercent = "68%"
+  static let todayTokens = "1,704,620 tokens"
+  static let todayCost = "API-equivalent cost, $1.49, complete"
+  static let usageTokens = "11,400,000 tokens, 9,500,000 in, 1,900,000 out"
+  static let usageCost = "Cost, $8.50, complete"
+}
+
+/// One iOS 26.3 auditor exception: audit type + identifier or exact label + screen.
+private struct KeptAuditorExemption {
+  let type: String
+  let screen: String
+  let identifier: String
+  let label: String
+  let rule: String
+}
+
+/// Feature-wide prefix/parent skips are gone. Each row is what a full A2a run actually
+/// matched; a row nothing matches is deleted. Reasons are iOS 26.3 auditor limitations
+/// unless a comment says otherwise.
+private let keptAuditorExemptions: [KeptAuditorExemption] = [
+  // System list section chrome: Dynamic Type "partially unsupported" on iOS 26.3.
+  .init(
+    type: "dynamic-type", screen: "overview.root", identifier: "section.footer.updated",
+    label: "", rule: "dynamic-type-section.footer.updated"),
+  .init(
+    type: "dynamic-type", screen: "overview.root", identifier: "section.header.mac-setup",
+    label: "", rule: "dynamic-type-section.header.mac-setup"),
+  .init(
+    type: "dynamic-type", screen: "settings.notifications.root",
+    identifier: "section.header.codex", label: "",
+    rule: "dynamic-type-section.header.codex"),
+  .init(
+    type: "dynamic-type", screen: "settings.root", identifier: "section.footer.providers",
+    label: "", rule: "dynamic-type-section.footer.providers"),
+  .init(
+    type: "dynamic-type", screen: "usage.root", identifier: "section.header.activity",
+    label: "", rule: "dynamic-type-section.header.activity"),
+  // Combined Today card title, not the inner tiles (those are exact labels below).
+  .init(
+    type: "dynamic-type", screen: "overview.root", identifier: "overview.today",
+    label: "", rule: "dynamic-type-overview.today"),
+  // Identified empty/error copy the iOS 26.3 auditor still flags as partial Dynamic Type.
+  .init(
+    type: "dynamic-type", screen: "settings.root",
+    identifier: "settings.sign-in-methods.manage", label: "",
+    rule: "dynamic-type-settings.sign-in-methods.manage"),
+  .init(
+    type: "dynamic-type", screen: "usage.day", identifier: "usage.day.empty",
+    label: "", rule: "dynamic-type-usage.day.empty"),
+  .init(
+    type: "dynamic-type", screen: "usage.day", identifier: "usage.day.retry",
+    label: "", rule: "dynamic-type-usage.day.retry"),
+  .init(
+    type: "dynamic-type", screen: "usage.root", identifier: "usage.activity.failed",
+    label: "", rule: "dynamic-type-usage.activity.failed"),
+  .init(
+    type: "dynamic-type", screen: "usage.root", identifier: "usage.empty",
+    label: "", rule: "dynamic-type-usage.empty"),
+  .init(
+    type: "dynamic-type", screen: "usage.root", identifier: "usage.activity.empty",
+    label: "", rule: "dynamic-type-usage.activity.empty"),
+  // iOS 26.3 reports clipping on this wrapping empty row even with fixedSize; the
+  // string is fully on-screen.
+  .init(
+    type: "clipped", screen: "usage.root", identifier: "usage.activity.empty",
+    label: "", rule: "clipped-usage.activity.empty"),
+  // System sheet Done control.
+  .init(
+    type: "dynamic-type", screen: "usage.day", identifier: "", label: "Done",
+    rule: "dynamic-type-label-Done"),
+  .init(
+    type: "dynamic-type", screen: "usage.day", identifier: "",
+    label: "Couldn't load this day's usage.",
+    rule: "dynamic-type-label-couldnt-load"),
+  // System Form/Link inner labels (the row identifier sits on the parent).
+  .init(
+    type: "dynamic-type", screen: "settings.about.root", identifier: "", label: "GitHub",
+    rule: "dynamic-type-label-GitHub"),
+  .init(
+    type: "dynamic-type", screen: "settings.about.root", identifier: "", label: "License",
+    rule: "dynamic-type-label-License"),
+  .init(
+    type: "dynamic-type", screen: "settings.about.root", identifier: "", label: "Website",
+    rule: "dynamic-type-label-Website"),
+  .init(
+    type: "dynamic-type", screen: "settings.root", identifier: "",
+    label: "Manage Devices on Web", rule: "dynamic-type-label-Manage-Devices"),
+  .init(
+    type: "dynamic-type", screen: "settings.root", identifier: "", label: "Support",
+    rule: "dynamic-type-label-Support"),
+  .init(
+    type: "dynamic-type", screen: "settings.root", identifier: "", label: "About",
+    rule: "dynamic-type-label-About"),
+  .init(
+    type: "dynamic-type", screen: "settings.root", identifier: "", label: "Privacy",
+    rule: "dynamic-type-label-Privacy"),
+  // Inner text of a combined Devices row; VoiceOver uses the row label.
+  .init(
+    type: "dynamic-type", screen: "devices.root", identifier: "",
+    label: "iOS · no readings yet", rule: "dynamic-type-label-ios-no-readings"),
+  .init(
+    type: "dynamic-type", screen: "devices.root", identifier: "", label: "Not reporting",
+    rule: "dynamic-type-label-Not-reporting"),
+  .init(
+    type: "dynamic-type", screen: "devices.root", identifier: "", label: "This iPhone",
+    rule: "dynamic-type-label-This-iPhone"),
+  // Inner Text of combined Today tiles (labels and compact values).
+  .init(
+    type: "dynamic-type", screen: "overview.root", identifier: "",
+    label: "API-equivalent cost", rule: "dynamic-type-label-API-equivalent-cost"),
+  .init(
+    type: "dynamic-type", screen: "overview.root", identifier: "", label: "Input",
+    rule: "dynamic-type-label-Input"),
+  .init(
+    type: "dynamic-type", screen: "overview.root", identifier: "", label: "Output",
+    rule: "dynamic-type-label-Output"),
+  .init(
+    type: "dynamic-type", screen: "overview.root", identifier: "", label: "Tokens",
+    rule: "dynamic-type-label-Tokens"),
+  .init(
+    type: "dynamic-type", screen: "overview.root", identifier: "", label: "1.42M",
+    rule: "dynamic-type-label-1.42M"),
+  .init(
+    type: "dynamic-type", screen: "overview.root", identifier: "", label: "1.7M",
+    rule: "dynamic-type-label-1.7M"),
+  .init(
+    type: "dynamic-type", screen: "overview.root", identifier: "", label: "284k",
+    rule: "dynamic-type-label-284k"),
+  .init(
+    type: "dynamic-type", screen: "overview.root", identifier: "", label: "$1.49",
+    rule: "dynamic-type-label-$1.49"),
+  // Inner Text of combined subscription cards (iOS 26.3 auditor; was a parent skip).
+  .init(
+    type: "dynamic-type", screen: "overview.root", identifier: "overview.remaining",
+    label: "", rule: "dynamic-type-overview.remaining"),
+  .init(
+    type: "dynamic-type", screen: "overview.root", identifier: "", label: "Claude Code",
+    rule: "dynamic-type-label-Claude-Code"),
+  .init(
+    type: "dynamic-type", screen: "overview.root", identifier: "", label: "Max",
+    rule: "dynamic-type-label-Max"),
+  .init(
+    type: "dynamic-type", screen: "overview.root", identifier: "",
+    label: "Team workspace", rule: "dynamic-type-label-Team-workspace"),
 ]
+
+private let auditExemptionRules: [String] = {
+  var seen: Set<String> = ["nil-element"]
+  var rules = ["nil-element"]
+  for item in keptAuditorExemptions where seen.insert(item.rule).inserted {
+    rules.append(item.rule)
+  }
+  return rules
+}()
 
 private struct AuditFinding: Encodable {
   let key: String
@@ -1576,8 +1861,7 @@ private func auditTypeName(_ description: String) -> String {
 
 private func makeAuditFinding(
   _ issue: XCUIAccessibilityAuditIssue,
-  screen: String,
-  subscriptionCards: [CGRect]
+  screen: String
 ) -> AuditFinding {
   let description = issue.compactDescription
   let type = auditTypeName(description)
@@ -1610,19 +1894,11 @@ private func makeAuditFinding(
   if type != "contrast" {
     if let rule = keptAuditorExceptionRule(
       type: type,
+      screen: screen,
       identifier: identifier,
-      label: label,
-      element: element,
-      parent: parent
+      label: label
     ) {
       return finding(disposition: "exempted", rule: rule)
-    }
-    if type == "dynamic-type", let control = issue.element,
-      subscriptionCards.contains(where: {
-        $0.contains(control.frame) || $0.intersects(control.frame)
-      })
-    {
-      return finding(disposition: "exempted", rule: "dynamic-type-subscription-card")
     }
   }
   return finding(disposition: "recorded", rule: nil)
@@ -1688,52 +1964,19 @@ private func makeAuditOutcomeRecord(
   )
 }
 
-/// Exceptions that still failed on two consecutive passes after name-based skips were removed.
-/// Each is the iOS 26 auditor on system list configuration or inner text of a scaling font,
-/// not a colour or layout this app chose. A2b narrows these; this WP only names them for counts.
+/// Match type + screen + (exact identifier, or exact label when the issue has none).
 private func keptAuditorExceptionRule(
   type: String,
+  screen: String,
   identifier: String,
-  label: String,
-  element: String,
-  parent: String
+  label: String
 ) -> String? {
-  if identifier.hasPrefix("section.header.") || identifier.hasPrefix("section.footer.") {
-    return "section-header-footer"
-  }
-  if identifier == "overview.today" || identifier.hasPrefix("overview.today.") {
-    return "overview-today"
-  }
-  if type == "clipped", identifier == "usage.activity.empty" {
-    return "clipped-usage-activity-empty"
-  }
-  if type == "dynamic-type" {
-    if label == "Done" || element.contains("\"Done\" Button") {
-      return "dynamic-type-done"
-    }
-    let prefixes = [
-      "usage.", "settings.", "subscription.", "devices.", "overview.", "providers.", "connect.",
-      "confirm.",
-    ]
-    if prefixes.contains(where: { identifier.hasPrefix($0) }) {
-      return "dynamic-type-identifier-prefix"
-    }
-    if parent.contains("overview.today") || parent.contains("overview.subscription")
-      || parent.contains("usage.headline") || parent.contains("usage.day.headline")
-      || parent.contains("devices.")
-    {
-      return "dynamic-type-parent"
-    }
-    if label.contains("Couldn't load") {
-      return "dynamic-type-couldnt-load"
-    }
-    let formLabels = [
-      "About", "Support", "Privacy", "GitHub", "Website", "Manage Devices on Web",
-      "Download for Mac", "Download QuotaBar", "Tokens", "API-equivalent cost", "Cache hit",
-      "Reasoning", "Input", "Output", "License", "Version",
-    ]
-    if formLabels.contains(label) {
-      return "dynamic-type-form-label"
+  for item in keptAuditorExemptions {
+    guard item.type == type, item.screen == screen else { continue }
+    if !item.identifier.isEmpty {
+      if identifier == item.identifier { return item.rule }
+    } else if identifier.isEmpty, label == item.label {
+      return item.rule
     }
   }
   return nil

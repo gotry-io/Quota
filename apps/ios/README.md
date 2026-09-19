@@ -175,12 +175,18 @@ unnamed clipping skip and no whole-type contrast skip. Each screen audit attache
 two passes), `unconfirmed` (first pass only), or `incomplete` (timed out) — plus exempted counts
 and the raw first- and second-pass findings, including nil-element and exempted issues. Confirmed
 non-contrast findings still fail the test; contrast never gates; incomplete does not fail.
+Unnamed glass (`issue.element == nil`) stays recorded and non-gating: the auditor names no
+element to fix. Kept exemptions are one audit type, one identifier or exact label, and one
+screen, each with a reason (iOS 26.3 auditor limitations on system list chrome, Form inner
+labels, combined-row inner text, and the sheet Done control).
 `scripts/ios-ui-audit-summary.mjs` prints those outcomes from an `.xcresult` (CI
 `verify-ios-ui` appends it to the job summary). Log Out and Delete Account sit on the
 Settings hub. Delete Account starts on the website. `testLargeTypeScreenshots` always runs at
 `accessibilityExtraLarge` (CI's `verify-ios-ui` included) and opens **View day**, Settings › About,
 hub Log Out after a pop, and a connected Providers session so a below-the-fold regression fails
-that job rather than only a local screenshot run.
+that job rather than only a local screenshot run. At that size it also asserts remaining percent,
+tokens, and cost on Overview, subscription detail, and Usage: each exists, is hittable, has the
+full accessibility label, and is not clipped by the window.
 
 ```bash
 ./scripts/ios-ui-screenshots.sh

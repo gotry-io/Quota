@@ -213,15 +213,16 @@ struct QuotaWindowBlock: View {
       .font(QuotaDesign.Typography.support)
       .foregroundStyle(QuotaTheme.secondary)
       .fixedSize(horizontal: false, vertical: true)
+      .accessibilityIdentifier(remainingIdentifier)
   }
 
   private var remainingValue: some View {
     Text(QuotaFormat.remaining(window))
       .font(QuotaDesign.Typography.remainingValue)
       .foregroundStyle(.primary)
-      .lineLimit(1)
-      .minimumScaleFactor(0.7)
+      .fixedSize(horizontal: false, vertical: true)
       .frame(maxWidth: .infinity, alignment: .leading)
+      .accessibilityIdentifier(remainingIdentifier)
   }
 
   private var compactRemaining: some View {
@@ -229,6 +230,15 @@ struct QuotaWindowBlock: View {
       .font(.body.monospacedDigit().weight(.semibold))
       .foregroundStyle(.primary)
       .fixedSize(horizontal: false, vertical: true)
+      .accessibilityIdentifier(remainingIdentifier)
+  }
+
+  /// Hero remaining on Overview; the same reading on subscription detail.
+  private var remainingIdentifier: String {
+    switch presentation {
+    case .overviewHero, .overviewCompact: "overview.remaining"
+    case .detail: "subscription.remaining"
+    }
   }
 
   @ViewBuilder
@@ -247,16 +257,19 @@ struct QuotaWindowBlock: View {
         .font(QuotaDesign.Typography.meta)
         .foregroundStyle(paceWarns ? QuotaTheme.warning : Color.primary)
         .fixedSize(horizontal: false, vertical: true)
+        .accessibilityIdentifier(remainingIdentifier)
     } else if let reset {
       Text(reset)
         .font(QuotaDesign.Typography.meta)
         .foregroundStyle(.primary)
         .fixedSize(horizontal: false, vertical: true)
+        .accessibilityIdentifier(remainingIdentifier)
     } else if let paceHeadline {
       Text(paceHeadline)
         .font(QuotaDesign.Typography.meta)
         .foregroundStyle(paceWarns ? QuotaTheme.warning : Color.primary)
         .fixedSize(horizontal: false, vertical: true)
+        .accessibilityIdentifier(remainingIdentifier)
     }
   }
 
@@ -269,6 +282,7 @@ struct QuotaWindowBlock: View {
         .font(QuotaDesign.Typography.meta.monospacedDigit())
         .foregroundStyle(.primary)
         .fixedSize(horizontal: false, vertical: true)
+        .accessibilityIdentifier(remainingIdentifier)
         .accessibilityLabel(
           Text("Resets in ") + Text(timerInterval: min(now, end)...end, countsDown: true))
     case .copy(let text):
@@ -276,6 +290,7 @@ struct QuotaWindowBlock: View {
         .font(QuotaDesign.Typography.meta)
         .foregroundStyle(.primary)
         .fixedSize(horizontal: false, vertical: true)
+        .accessibilityIdentifier(remainingIdentifier)
     case nil:
       EmptyView()
     }
