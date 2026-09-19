@@ -244,8 +244,8 @@ func loadQuotaHistoryFoldsSamplesOnDemandAndLeavesStateOnTheCurrentWindow() asyn
     cache: .settled
   )
   let samples = LocalServiceQuotaHistory(
-    samplesByProvider: [
-      "codex": [
+    samplesBySubscription: [
+      "ccfc96629357": [
         "five_hour": [
           QuotaSample(resetsAt: fiveHourReset, observedAt: observed, usedPercent: 10),
           QuotaSample(resetsAt: fiveHourReset, observedAt: now, usedPercent: 40),
@@ -272,8 +272,8 @@ func loadQuotaHistoryFoldsSamplesOnDemandAndLeavesStateOnTheCurrentWindow() asyn
   }
 
   #expect(model.quotaHistorySamples == samples)
-  let fiveHour = try #require(model.quotaHistory[.codex]?["five_hour"])
-  let weekly = try #require(model.quotaHistory[.codex]?["weekly"])
+  let fiveHour = try #require(model.quotaHistory["ccfc96629357"]?["five_hour"])
+  let weekly = try #require(model.quotaHistory["ccfc96629357"]?["weekly"])
   #expect(fiveHour.points.map(\.usedPercent) == [10, 40])
   #expect(weekly.points.map(\.usedPercent) == [20])
 }

@@ -46,9 +46,16 @@ struct DashboardView: View {
             provider: provider.provider,
             size: QuotaDesign.Layout.settingsIconColumnWidth
           )
-          Text(provider.provider.displayName)
-            .quotaRowTitleStyle()
-            .lineLimit(1)
+          VStack(alignment: .leading, spacing: 0) {
+            Text(provider.provider.displayName)
+              .quotaRowTitleStyle()
+              .lineLimit(1)
+            if let accountLabel = provider.accountLabel {
+              Text(accountLabel)
+                .quotaMetaStyle()
+                .lineLimit(1)
+            }
+          }
         }
         .accessibilityAddTraits(.isHeader)
 
@@ -112,6 +119,9 @@ struct DashboardView: View {
 
   private func headerLine(_ provider: DashboardProvider, now: Date) -> String {
     var parts = [provider.provider.displayName]
+    if let accountLabel = provider.accountLabel {
+      parts.append(accountLabel)
+    }
     if let remaining = provider.remainingPercent {
       parts.append("\(RemainingQuotaFormat.percent(remaining)) remaining")
     }

@@ -4,45 +4,66 @@ import QuotaWire
 
 /// What this iPhone has read of its own quota, over time.
 ///
-/// One entry per provider and window id, oldest reading first. It is the phone's half of the
+/// One entry per subscription and window id, oldest reading first. It is the phone's half of the
 /// same decision QuotaBar's service keeps in `cache.sqlite`: samples belong to the device that
-/// took them, are kept for thirty days, and are never uploaded
+/// took them, are keyed by the local subscription selector, are kept for thirty days, and are
+/// never uploaded
 /// ([ADR 0042](../../../docs/decisions/0042-quota-history-is-local-samples.md)).
 struct LocalQuotaSamples: Codable, Equatable, Sendable {
-  /// One entry per provider and window id. A list rather than a keyed map because the wire
+  /// Journal files written before this version have no subscription key and cannot be
+  /// attributed, so they are discarded on load.
+  static let schemaVersion = 1
+
+  /// One entry per subscription and window id. A list rather than a keyed map because the wire
   /// codec renames keys between camelCase and `snake_case`, which a composite key would not
   /// survive.
   struct Entry: Codable, Equatable, Sendable {
+    var subscriptionKey: String
     var provider: ProviderID
     var windowID: String
     var samples: [QuotaSample]
   }
 
+  var schemaVersion: Int
   var windows: [Entry]
 
   init(windows: [Entry] = []) {
+    self.schemaVersion = Self.schemaVersion
     self.windows = windows
   }
 
-  func samples(provider: ProviderID, windowID: String) -> [QuotaSample] {
-    windows.first { $0.provider == provider && $0.windowID == windowID }?.samples ?? []
+  func samples(for subscription: QuotaSubscription, windowID: String) -> [QuotaSample] {
+    samples(subscriptionKey: Self.key(for: subscription), windowID: windowID)
+  }
+
+  func samples(subscriptionKey: String, windowID: String) -> [QuotaSample] {
+    windows.first {
+      $0.subscriptionKey == subscriptionKey && $0.windowID == windowID
+    }?.samples ?? []
   }
 
   /// Take one collection pass into the journal, then drop what has aged out.
   ///
   /// A window whose numbers have not moved since the last reading of the same window adds
-  /// nothing to the curve, so it is not written again.
+  /// nothing to the curve, so it is not written again. Each snapshot is stored under the
+  /// subscription it belongs to, so two accounts of one provider keep separate histories.
   mutating func record(_ snapshots: [QuotaSnapshot], now: Date) {
     for snapshot in snapshots {
+      let key = Self.key(for: snapshot)
       for window in snapshot.windows {
         guard let resetsAt = window.resetsAt else { continue }
         let index =
           windows.firstIndex {
-            $0.provider == snapshot.provider && $0.windowID == window.id
+            $0.subscriptionKey == key && $0.windowID == window.id
           }
           ?? {
             windows.append(
-              Entry(provider: snapshot.provider, windowID: window.id, samples: [])
+              Entry(
+                subscriptionKey: key,
+                provider: snapshot.provider,
+                windowID: window.id,
+                samples: []
+              )
             )
             return windows.count - 1
           }()
@@ -70,6 +91,33 @@ struct LocalQuotaSamples: Codable, Equatable, Sendable {
       windows[index].samples.removeAll { $0.observedAt < horizon }
     }
     windows.removeAll { $0.samples.isEmpty }
+  }
+
+  /// The local opaque selector both clients already compute. Source-scoped snapshots collected
+  /// on this phone use this device's source id.
+  static func key(for snapshot: QuotaSnapshot) -> String {
+    SubscriptionSelector.make(
+      provider: snapshot.provider.rawValue,
+      fingerprint: snapshot.account.fingerprint,
+      fingerprintScope: snapshot.account.fingerprintScope.rawValue,
+      sourceID: snapshot.account.fingerprintScope == .source ? ThisDevice.sourceID : nil
+    )
+  }
+
+  static func key(for subscription: QuotaSubscription) -> String {
+    SubscriptionSelector.make(
+      provider: subscription.provider.rawValue,
+      fingerprint: subscription.snapshot.account.fingerprint,
+      fingerprintScope: subscription.snapshot.account.fingerprintScope.rawValue,
+      sourceID: sourceID(fromKey: subscription.key)
+    )
+  }
+
+  /// `provider|fingerprint|scope|source_id`; empty when the subscription is global.
+  private static func sourceID(fromKey key: String) -> String? {
+    let parts = key.split(separator: "|", omittingEmptySubsequences: false)
+    guard parts.count >= 4, !parts[3].isEmpty else { return nil }
+    return String(parts[3])
   }
 }
 
@@ -102,11 +150,21 @@ struct FileLocalQuotaSampleStore: LocalQuotaSampleStoring {
 
   func load() throws -> LocalQuotaSamples? {
     guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
-    return try WireCodec.decode(LocalQuotaSamples.self, from: Data(contentsOf: fileURL))
+    let data = try Data(contentsOf: fileURL)
+    guard let samples = try? WireCodec.decode(LocalQuotaSamples.self, from: data),
+      samples.schemaVersion == LocalQuotaSamples.schemaVersion,
+      samples.windows.allSatisfy({ !$0.subscriptionKey.isEmpty })
+    else {
+      try? FileManager.default.removeItem(at: fileURL)
+      return nil
+    }
+    return samples
   }
 
   func save(_ value: LocalQuotaSamples) throws {
-    let data = try WireCodec.encode(value)
+    var stored = value
+    stored.schemaVersion = LocalQuotaSamples.schemaVersion
+    let data = try WireCodec.encode(stored)
     try FileManager.default.createDirectory(
       at: fileURL.deletingLastPathComponent(),
       withIntermediateDirectories: true

@@ -9,6 +9,7 @@
 //!     -- history_payload --ignored --nocapture
 //! ```
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -20,8 +21,8 @@ use uuid::Uuid;
 use super::{LocalQuotaHistory, overview_item};
 use crate::catalog::ProviderId;
 use crate::history::{HISTORY_DECIMATION_SECONDS, HISTORY_RETENTION_DAYS, QuotaSample};
-use crate::protocol::QuotaOverviewItem;
-use crate::state::{QuotaSamplesByProvider, StateStore};
+use crate::protocol::{QuotaOverviewIdentity, QuotaOverviewItem};
+use crate::state::{QuotaSamplesBySubscription, StateStore};
 
 /// Above this, the 30-day fold does not ride on every state push (plan B).
 const PLAN_A_BUDGET_BYTES: usize = 200 * 1024;
@@ -113,7 +114,7 @@ fn plan_a_history_payload_size() {
     }
 }
 
-fn measure(samples: &QuotaSamplesByProvider, now: DateTime<Utc>) -> PayloadSize {
+fn measure(samples: &QuotaSamplesBySubscription, now: DateTime<Utc>) -> PayloadSize {
     let snapshots = snapshots_from_samples(samples, now);
     let history = LocalQuotaHistory::new(samples.clone(), now);
     let items: Vec<QuotaOverviewItem> = snapshots
@@ -144,10 +145,20 @@ fn measure(samples: &QuotaSamplesByProvider, now: DateTime<Utc>) -> PayloadSize 
     }
 }
 
-fn snapshots_from_samples(samples: &QuotaSamplesByProvider, now: DateTime<Utc>) -> Vec<Value> {
+fn snapshots_from_samples(samples: &QuotaSamplesBySubscription, now: DateTime<Utc>) -> Vec<Value> {
+    let providers: BTreeMap<String, &'static str> = ProviderId::ALL
+        .iter()
+        .map(|provider| {
+            (
+                QuotaOverviewIdentity::selector_for(provider.as_str(), "measure", "global", None),
+                provider.as_str(),
+            )
+        })
+        .collect();
     samples
         .iter()
-        .map(|(provider, windows)| {
+        .map(|(key, windows)| {
+            let provider = providers.get(key).copied().unwrap_or("codex");
             let window_values: Vec<Value> = windows
                 .iter()
                 .filter_map(|(id, group)| {
@@ -190,11 +201,11 @@ fn history_bytes_in(value: &Value) -> usize {
         .sum()
 }
 
-fn synthetic_samples(now: DateTime<Utc>) -> QuotaSamplesByProvider {
-    let mut samples = QuotaSamplesByProvider::new();
-    for (provider, window_id, resets_at, observed_at, used_percent) in synthetic_rows(now) {
+fn synthetic_samples(now: DateTime<Utc>) -> QuotaSamplesBySubscription {
+    let mut samples = QuotaSamplesBySubscription::new();
+    for (key, _provider, window_id, resets_at, observed_at, used_percent) in synthetic_rows(now) {
         samples
-            .entry(provider.to_owned())
+            .entry(key)
             .or_default()
             .entry(window_id.to_owned())
             .or_default()
@@ -211,6 +222,7 @@ fn synthetic_rows(
     now: DateTime<Utc>,
 ) -> impl Iterator<
     Item = (
+        String,
         &'static str,
         &'static str,
         DateTime<Utc>,
@@ -226,6 +238,8 @@ fn synthetic_rows(
     });
     timestamps.flat_map(move |observed_at| {
         ProviderId::ALL.iter().flat_map(move |provider| {
+            let key =
+                QuotaOverviewIdentity::selector_for(provider.as_str(), "measure", "global", None);
             WINDOWS.iter().map(move |&(window_id, duration)| {
                 let resets_at = containing_resets_at(observed_at, now, duration);
                 let window_start = resets_at - Duration::seconds(duration);
@@ -234,6 +248,7 @@ fn synthetic_rows(
                     / duration as f64)
                     .clamp(0.0, 1.0);
                 (
+                    key.clone(),
                     provider.as_str(),
                     window_id,
                     resets_at,
@@ -294,10 +309,10 @@ fn rfc3339(instant: DateTime<Utc>) -> String {
     instant.to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
-fn samples_from_readonly_cache(path: &Path) -> Result<QuotaSamplesByProvider, rusqlite::Error> {
+fn samples_from_readonly_cache(path: &Path) -> Result<QuotaSamplesBySubscription, rusqlite::Error> {
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let mut statement = conn.prepare(
-        "SELECT provider, window_id, resets_at, observed_at, used_percent
+        "SELECT subscription_key, window_id, resets_at, observed_at, used_percent
          FROM quota_samples ORDER BY observed_at",
     )?;
     let rows = statement.query_map([], |row| {
@@ -309,9 +324,9 @@ fn samples_from_readonly_cache(path: &Path) -> Result<QuotaSamplesByProvider, ru
             row.get::<_, f64>(4)?,
         ))
     })?;
-    let mut samples = QuotaSamplesByProvider::new();
+    let mut samples = QuotaSamplesBySubscription::new();
     for row in rows {
-        let (provider, window_id, resets_at, observed_at, used_percent) = row?;
+        let (subscription_key, window_id, resets_at, observed_at, used_percent) = row?;
         let (Ok(resets_at), Ok(observed_at)) = (
             DateTime::parse_from_rfc3339(&resets_at),
             DateTime::parse_from_rfc3339(&observed_at),
@@ -319,7 +334,7 @@ fn samples_from_readonly_cache(path: &Path) -> Result<QuotaSamplesByProvider, ru
             continue;
         };
         samples
-            .entry(provider)
+            .entry(subscription_key)
             .or_default()
             .entry(window_id)
             .or_default()

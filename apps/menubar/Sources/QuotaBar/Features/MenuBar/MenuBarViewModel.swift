@@ -128,9 +128,9 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
   /// four `get_state` carries are the ones worth keeping.
   private(set) var customUsagePeriods: [String: LocalServiceUsageDetail] = [:]
   private(set) var customUsageLoading = false
-  /// Folded 30-day quota history, keyed provider then window id. Empty until
+  /// Folded 30-day quota history, keyed subscription selector then window id. Empty until
   /// ``loadQuotaHistory()``; state pushes keep the current-window slice Overview already draws.
-  private(set) var quotaHistory: [ProviderID: [String: QuotaHistory]] = [:]
+  private(set) var quotaHistory: [String: [String: QuotaHistory]] = [:]
   /// The samples the last `quota_history` read returned, so a later surface can re-fold a range.
   private(set) var quotaHistorySamples: LocalServiceQuotaHistory?
   /// Why the last `quota_history` read failed. Dashboard's line, not the panel's.
@@ -843,17 +843,17 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
     }
   }
 
-  /// One fold per provider and window id, from the samples `quota_history` returned and the
+  /// One fold per subscription and window id, from the samples `quota_history` returned and the
   /// cadence the current Overview reading already names.
   static func foldQuotaHistory(
     _ payload: LocalServiceQuotaHistory,
     overview: [LocalServiceOverviewItem],
     now: Date
-  ) -> [ProviderID: [String: QuotaHistory]] {
-    var result: [ProviderID: [String: QuotaHistory]] = [:]
+  ) -> [String: [String: QuotaHistory]] {
+    var result: [String: [String: QuotaHistory]] = [:]
     for item in overview {
-      let provider = item.identity.provider
-      guard let byWindow = payload.samplesByProvider[provider.rawValue] else { continue }
+      let key = item.identity.subscriptionSelector
+      guard let byWindow = payload.samplesBySubscription[key] else { continue }
       for window in item.snapshot.windows {
         guard let samples = byWindow[window.id],
           let folded = QuotaHistory.fold(
@@ -864,7 +864,7 @@ final class MenuBarViewModel: BrowserAccessGrantHandling {
             utcOffsetSeconds: payload.utcOffsetSeconds
           )
         else { continue }
-        result[provider, default: [:]][window.id] = folded
+        result[key, default: [:]][window.id] = folded
       }
     }
     return result

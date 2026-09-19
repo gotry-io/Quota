@@ -37,11 +37,13 @@ enum DashboardRange: String, CaseIterable, Identifiable, Sendable {
   }
 }
 
-/// One provider as Dashboard's Quota section draws it.
+/// One subscription as Dashboard's Quota section draws it.
 struct DashboardProvider: Equatable, Identifiable {
-  var id: ProviderID { provider }
+  let id: String
   let provider: ProviderID
-  /// Windows the last `quota_history` fold named for this provider.
+  /// Distinguishes several accounts of one provider. Omitted when the reading has no label.
+  let accountLabel: String?
+  /// Windows the last `quota_history` fold named for this subscription.
   let windows: [QuotaHistoryWindow]
   let currentReading: QuotaSnapshot?
   /// The same sentence the panel prints for this reading (ADR 0035).
@@ -170,7 +172,13 @@ final class DashboardModel {
   }
 
   func providers(now: Date) -> [DashboardProvider] {
-    sidebarProviders.map { makeProvider($0, now: now) }
+    sidebarProviders.flatMap { provider in
+      let accounts = model.displaySnapshots(for: provider)
+      if accounts.isEmpty {
+        return [makeEmptyProvider(provider, now: now)]
+      }
+      return accounts.map { makeProvider(account: $0, now: now) }
+    }
   }
 
   func displayedProviders(now: Date) -> [DashboardProvider] {
@@ -231,10 +239,41 @@ final class DashboardModel {
     defaults.set(range.rawValue, forKey: DashboardRange.storageKey)
   }
 
-  private func makeProvider(_ provider: ProviderID, now: Date) -> DashboardProvider {
-    let accounts = model.displaySnapshots(for: provider)
-    let snapshot = accounts.first?.snapshot
-    let histories = model.quotaHistory[provider] ?? [:]
+  private func makeEmptyProvider(_ provider: ProviderID, now: Date) -> DashboardProvider {
+    makeProvider(
+      id: "empty:\(provider.rawValue)",
+      provider: provider,
+      accountLabel: nil,
+      snapshot: nil,
+      subscriptionKey: nil,
+      accounts: [],
+      now: now
+    )
+  }
+
+  private func makeProvider(account: AccountQuotaPresentation, now: Date) -> DashboardProvider {
+    let key = Self.subscriptionSelector(for: account.identity)
+    return makeProvider(
+      id: key,
+      provider: account.identity.provider,
+      accountLabel: PlanDisplay.accountLabel(account.snapshot.account.label),
+      snapshot: account.snapshot,
+      subscriptionKey: key,
+      accounts: [account],
+      now: now
+    )
+  }
+
+  private func makeProvider(
+    id: String,
+    provider: ProviderID,
+    accountLabel: String?,
+    snapshot: QuotaSnapshot?,
+    subscriptionKey: String?,
+    accounts: [AccountQuotaPresentation],
+    now: Date
+  ) -> DashboardProvider {
+    let histories = subscriptionKey.flatMap { model.quotaHistory[$0] } ?? [:]
     let windows = histories.values.flatMap(\.windowsToday).sorted { $0.startedAt < $1.startedAt }
     let paceWindow = snapshot.flatMap { $0.primaryCadenceWindows.first ?? $0.windows.first }
     let pacePhrase: String?
@@ -247,9 +286,12 @@ final class DashboardModel {
       windows.first(where: \.isCurrent)?.peakUsedPercent
       ?? windows.map(\.peakUsedPercent).max()
       ?? paceWindow?.usedPercent
-    let series = makeSeries(provider: provider, snapshot: snapshot, now: now)
+    let series = makeSeries(
+      subscriptionKey: subscriptionKey, snapshot: snapshot, now: now)
     return DashboardProvider(
+      id: id,
       provider: provider,
+      accountLabel: accountLabel,
       windows: windows,
       currentReading: snapshot,
       pacePhrase: pacePhrase,
@@ -262,13 +304,13 @@ final class DashboardModel {
   }
 
   private func makeSeries(
-    provider: ProviderID,
+    subscriptionKey: String?,
     snapshot: QuotaSnapshot?,
     now: Date
   ) -> [DashboardQuotaSeries] {
-    guard let snapshot else { return [] }
+    guard let snapshot, let subscriptionKey else { return [] }
     let start = range.start(now: now)
-    let byWindow = model.quotaHistorySamples?.samplesByProvider[provider.rawValue] ?? [:]
+    let byWindow = model.quotaHistorySamples?.samplesBySubscription[subscriptionKey] ?? [:]
     var rank = 0
     var result: [DashboardQuotaSeries] = []
     for window in snapshot.windows {
@@ -282,7 +324,7 @@ final class DashboardModel {
         }
       guard !points.isEmpty else { continue }
       let projection: DashboardQuotaPoint?
-      if let projected = model.quotaHistory[provider]?[window.id]?.projection,
+      if let projected = model.quotaHistory[subscriptionKey]?[window.id]?.projection,
         let resetsAt = window.resetsAt, let last = points.last
       {
         projection = Self.projectionPoint(
@@ -308,6 +350,28 @@ final class DashboardModel {
       rank += 1
     }
     return result
+  }
+
+  static func subscriptionSelector(for identity: QuotaSubscriptionIdentity) -> String {
+    let sourceID: String?
+    let scope: String
+    switch identity.scope {
+    case .global:
+      sourceID = nil
+      scope = "global"
+    case .source(.local):
+      sourceID = "local"
+      scope = "source"
+    case .source(.device(let id)):
+      sourceID = id
+      scope = "source"
+    }
+    return SubscriptionSelector.make(
+      provider: identity.provider.rawValue,
+      fingerprint: identity.fingerprint,
+      fingerprintScope: scope,
+      sourceID: sourceID
+    )
   }
 
   /// The projection ends at the reset, or at the moment the line would cross 100%: a window
@@ -354,8 +418,8 @@ final class DashboardModel {
     utcOffsetSeconds: Int,
     resetStyle: ResetCopyStyle
   ) -> [DashboardTodayRow] {
-    let byWindow = model.quotaHistorySamples?.samplesByProvider[provider.provider.rawValue] ?? [:]
-    let histories = model.quotaHistory[provider.provider] ?? [:]
+    let byWindow = model.quotaHistorySamples?.samplesBySubscription[provider.id] ?? [:]
+    let histories = model.quotaHistory[provider.id] ?? [:]
     let cost = todayCost(for: provider.provider)
     let snapshotWindows = Dictionary(
       uniqueKeysWithValues: (provider.currentReading?.windows ?? []).map { ($0.id, $0) }
@@ -378,7 +442,7 @@ final class DashboardModel {
         let usedNow = todaySamples.last?.usedPercent ?? window.peakUsedPercent
         rows.append(
           DashboardTodayRow(
-            id: "\(provider.provider.rawValue)|\(windowId)|\(window.startedAt.timeIntervalSince1970)",
+            id: "\(provider.id)|\(windowId)|\(window.startedAt.timeIntervalSince1970)",
             provider: provider.provider,
             windowTitle: title,
             usedStartPercent: usedStart,

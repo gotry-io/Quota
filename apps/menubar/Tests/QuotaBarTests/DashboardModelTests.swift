@@ -232,8 +232,8 @@
         ]
       )
       let samples = LocalServiceQuotaHistory(
-        samplesByProvider: [
-          "codex": [
+        samplesBySubscription: [
+          "ccfc96629357": [
             "five_hour": [
               QuotaSample(
                 resetsAt: reset, observedAt: now.addingTimeInterval(-10 * 86_400), usedPercent: 10),
@@ -267,6 +267,98 @@
       #expect(todayCount == 1)
       #expect(weekCount == 2)
       #expect(monthCount == 3)
+    }
+
+    @Test
+    func twoAccountsOfOneProviderEachHaveTheirOwnChart() async throws {
+      let defaults = dashboardDefaults()
+      defer { defaults.tearDown() }
+      let now = Date(timeIntervalSince1970: 1_788_100_000)
+      let reset = now.addingTimeInterval(2 * 3_600)
+      func item(fingerprint: String, used: Double) -> LocalServiceOverviewItem {
+        let snapshot = QuotaSnapshot(
+          provider: .codex,
+          account: QuotaAccount(
+            fingerprint: fingerprint,
+            label: fingerprint,
+            plan: "Plus",
+            fingerprintScope: .global
+          ),
+          windows: [
+            QuotaWindow(
+              id: "five_hour",
+              title: "5 Hours",
+              usedPercent: used,
+              resetsAt: reset,
+              durationSeconds: 18_000
+            )
+          ],
+          status: .available,
+          observedAt: now
+        )
+        let source = LocalServiceOverviewSource(
+          sourceID: "local",
+          kind: .local,
+          deviceID: nil,
+          displayName: "This Mac",
+          observedAt: now,
+          isStale: false
+        )
+        return LocalServiceOverviewItem(
+          identity: LocalServiceOverviewIdentity(
+            provider: .codex,
+            fingerprint: fingerprint,
+            scope: .global,
+            sourceID: nil
+          ),
+          snapshot: snapshot,
+          sources: [source],
+          selectedSourceID: source.sourceID,
+          selectedSourceDisplayName: source.displayName,
+          automaticSourceID: source.sourceID,
+          automaticSourceDisplayName: source.displayName,
+          isStale: false
+        )
+      }
+      let first = item(fingerprint: "account_a", used: 20)
+      let second = item(fingerprint: "account_b", used: 80)
+      let firstKey = first.identity.subscriptionSelector
+      let secondKey = second.identity.subscriptionSelector
+      let samples = LocalServiceQuotaHistory(
+        samplesBySubscription: [
+          firstKey: [
+            "five_hour": [
+              QuotaSample(resetsAt: reset, observedAt: now, usedPercent: 20)
+            ]
+          ],
+          secondKey: [
+            "five_hour": [
+              QuotaSample(resetsAt: reset, observedAt: now, usedPercent: 80)
+            ]
+          ],
+        ],
+        utcOffsetSeconds: 0
+      )
+      let model = MenuBarViewModel(
+        client: StubLocalService(
+          state: overviewOnlyState(overview: [first, second]),
+          quotaHistoryValue: samples
+        )
+      )
+      await model.refreshIfNeeded()
+      model.loadQuotaHistory()
+      let deadline = ContinuousClock.now + .seconds(10)
+      while model.quotaHistory.isEmpty, ContinuousClock.now < deadline {
+        await Task.yield()
+        try await Task.sleep(for: .milliseconds(20))
+      }
+
+      let dashboard = DashboardModel(model: model, defaults: defaults.store)
+      dashboard.selection = .codex
+      let cards = dashboard.displayedProviders(now: now)
+      #expect(cards.map(\.provider) == [.codex, .codex])
+      #expect(Set(cards.map(\.id)) == [firstKey, secondKey])
+      #expect(cards.map { $0.series.flatMap(\.points).map(\.usedPercent) } == [[20], [80]])
     }
 
     private func sampleCount(_ providers: [DashboardProvider], provider: ProviderID) -> Int {

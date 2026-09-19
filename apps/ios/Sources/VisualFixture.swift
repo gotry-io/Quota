@@ -955,6 +955,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
           let span = snapshot.observedAt.timeIntervalSince(start)
           guard span > 0 else { continue }
           var entry = LocalQuotaSamples.Entry(
+            subscriptionKey: LocalQuotaSamples.key(for: snapshot),
             provider: snapshot.provider,
             windowID: quotaWindow.id,
             samples: []

@@ -4,11 +4,19 @@ import { QuotaSnapshotSchema, Rfc3339InstantSchema } from "../src/index.ts";
 
 type HistoryPoint = { elapsed_fraction: number; used_percent: number };
 
+type HistoryIdentity = {
+  provider: string;
+  fingerprint: string;
+  fingerprint_scope: string;
+  source_id?: string | null;
+};
+
 type HistoryCase = {
   name: string;
   now: string;
   utc_offset_seconds: number;
   window: unknown;
+  identity?: HistoryIdentity;
   samples: { resets_at: string; observed_at: string; used_percent: number }[];
   expected: {
     points: HistoryPoint[];
@@ -20,6 +28,11 @@ type HistoryCase = {
       is_current: boolean;
     }[];
   } | null;
+  peer?: {
+    identity: HistoryIdentity;
+    samples: { resets_at: string; observed_at: string; used_percent: number }[];
+    expected: HistoryCase["expected"];
+  };
 };
 
 const conformance = conformanceJson as unknown as {
@@ -53,7 +66,8 @@ describe("quota history conformance", () => {
         observed_at: testCase.now,
       });
       expect(snapshot.success, testCase.name).toBe(true);
-      for (const sample of testCase.samples) {
+      const stored = [...testCase.samples, ...(testCase.peer?.samples ?? [])];
+      for (const sample of stored) {
         expect(Rfc3339InstantSchema.safeParse(sample.resets_at).success, testCase.name).toBe(true);
         expect(Rfc3339InstantSchema.safeParse(sample.observed_at).success, testCase.name).toBe(
           true,
@@ -107,5 +121,22 @@ describe("quota history conformance", () => {
         (testCase) => testCase.expected !== null && testCase.expected.windows_today.length >= 3,
       ),
     ).toBe(true);
+  });
+
+  it("keeps two subscriptions of one provider apart at equal times", () => {
+    const testCase = conformance.cases.find((entry) =>
+      entry.name.includes("two subscriptions of one provider"),
+    );
+    expect(testCase).toBeDefined();
+    expect(testCase?.identity?.provider).toBe("codex");
+    expect(testCase?.peer?.identity.provider).toBe("codex");
+    expect(testCase?.identity?.fingerprint).not.toBe(testCase?.peer?.identity.fingerprint);
+    const sample = testCase?.samples[0];
+    const peer = testCase?.peer?.samples[0];
+    expect(sample?.observed_at).toBe(peer?.observed_at);
+    expect(sample?.resets_at).toBe(peer?.resets_at);
+    expect(sample?.used_percent).not.toBe(peer?.used_percent);
+    expect(testCase?.expected?.points[0]?.used_percent).toBe(sample?.used_percent);
+    expect(testCase?.peer?.expected?.points[0]?.used_percent).toBe(peer?.used_percent);
   });
 });
