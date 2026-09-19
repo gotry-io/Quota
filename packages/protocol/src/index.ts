@@ -52,6 +52,23 @@ export const MAXIMUM_USAGE_SUBMISSION_BYTES = 1_048_576;
 export const EARLIEST_USAGE_INSTANT = "2020-01-01T00:00:00Z";
 /** One activity read answers at most this many days. */
 const MAXIMUM_USAGE_ACTIVITY_DAYS = 400;
+/**
+ * The most local days one Account period read can name.
+ *
+ * Mirrors the local `usage_period` IPC bound: a range wider than a year and a leap day is
+ * refused rather than answered slowly.
+ */
+export const MAXIMUM_USAGE_PERIOD_DAYS = 366;
+/**
+ * Hour-grid rule (normative, one sentence every producer/consumer must share):
+ * A local day begins at the first whole UTC hour whose civil date in `timezone`
+ * is that local date. The UTC hour that contains a fractional-offset midnight
+ * is assigned to the previous local day. Counts are never prorated. A DST skip
+ * starts at the first hour the zone reads as that date; a DST repeat counts
+ * both copies.
+ */
+export const USAGE_HOUR_GRID_RULE =
+  "first_whole_hour_of_local_date; fractional_midnight_to_previous_day; no_proration" as const;
 /** One period's agent tree carries at most this many model leaves. */
 export const MAXIMUM_USAGE_PERIOD_LEAVES = 200;
 /** The model that every leaf past {@link MAXIMUM_USAGE_PERIOD_LEAVES} folds into. */
@@ -1270,6 +1287,39 @@ export const UsageActivityRangeSchema = UsageDateRangeSchema.superRefine((range,
   }
 });
 
+/**
+ * Inclusive local calendar dates in a required IANA timezone.
+ *
+ * Unlike the activity read, this range is local days, `timezone` is required, and the bound is
+ * {@link MAXIMUM_USAGE_PERIOD_DAYS}.
+ */
+export const UsagePeriodRangeSchema = z
+  .object({
+    from: UsageDateSchema,
+    to: UsageDateSchema,
+    timezone: IanaTimezoneSchema,
+  })
+  .strict()
+  .superRefine((range, context) => {
+    if (Date.parse(`${range.from}T00:00:00Z`) > Date.parse(`${range.to}T00:00:00Z`)) {
+      context.addIssue({ code: "custom", path: ["to"], message: "to must not precede from." });
+    }
+    const days =
+      (Date.parse(`${range.to}T00:00:00Z`) - Date.parse(`${range.from}T00:00:00Z`)) / 86_400_000 +
+      1;
+    if (days > MAXIMUM_USAGE_PERIOD_DAYS) {
+      context.addIssue({
+        code: "custom",
+        path: ["to"],
+        message: `A range may span at most ${MAXIMUM_USAGE_PERIOD_DAYS} local days.`,
+      });
+    }
+  });
+export type UsagePeriodRange = z.infer<typeof UsagePeriodRangeSchema>;
+
+export const UsageHourGridRuleSchema = z.literal(USAGE_HOUR_GRID_RULE);
+export type UsageHourGridRule = z.infer<typeof UsageHourGridRuleSchema>;
+
 /** How much of what was asked for is here, which a scan answers the same way a price does. */
 const LocalUsageReportStatusSchema = UsageCostStatusSchema;
 export type LocalUsageReportStatus = z.infer<typeof LocalUsageReportStatusSchema>;
@@ -1541,6 +1591,103 @@ function refineActivityRhythm(
 
 export const AccountUsageActivityResponseSchema =
   AccountUsageActivityResponseObjectSchema.superRefine(refineActivityRhythm);
+
+/**
+ * One local calendar date inside an Account period read.
+ *
+ * Gaps are omitted: a local day with no stored hour is not a zero day. The date is the caller's
+ * civil date in the request timezone, not a UTC date.
+ */
+export const UsagePeriodDayBucketSchema = z
+  .object({
+    date: UsageDateSchema,
+    totals: UsageSummaryTotalsSchema,
+    cost: UsageCostOutcomeSchema,
+    partial: z.boolean(),
+  })
+  .strict();
+export type UsagePeriodDayBucket = z.infer<typeof UsagePeriodDayBucketSchema>;
+
+/**
+ * How much of the asked local range is still inside retention, and whether any stored hour was
+ * scanned incompletely.
+ *
+ * Missing hours are omitted, never filled with zeros. `daily_retained_from` / `hourly_retained_from`
+ * are set only when that cutoff actually cuts this range.
+ */
+export const UsagePeriodCoverageSchema = z
+  .object({
+    partial: z.boolean(),
+    daily_retained_from: UsageDateSchema.nullable(),
+    hourly_retained_from: UtcHourSchema.nullable(),
+    truncated_by_retention: z.boolean(),
+  })
+  .strict();
+export type UsagePeriodCoverage = z.infer<typeof UsagePeriodCoverageSchema>;
+
+/** Validator inputs for the period body; also the fields an ETag is keyed on besides path. */
+export const UsagePeriodRevisionSchema = z
+  .object({
+    usage_revision: SafeNonnegativeIntegerSchema,
+    device_generation: SafeNonnegativeIntegerSchema,
+    account_updated_at: Rfc3339InstantSchema.nullable(),
+    pricing_revision: OpaqueIdSchema,
+    model_catalog_revision: OpaqueIdSchema,
+    fold_version: SafeNonnegativeIntegerSchema,
+  })
+  .strict();
+export type UsagePeriodRevision = z.infer<typeof UsagePeriodRevisionSchema>;
+
+const AccountUsagePeriodResponseObjectSchema = z
+  .object({
+    protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
+    request: z
+      .object({
+        from: UsageDateSchema,
+        to: UsageDateSchema,
+        timezone: IanaTimezoneSchema,
+      })
+      .strict(),
+    bounds: z
+      .object({
+        start: UtcHourSchema,
+        end: UtcHourSchema,
+        grid: UsageHourGridRuleSchema,
+      })
+      .strict(),
+    totals: UsageSummaryTotalsSchema,
+    cost: UsageCostOutcomeSchema,
+    cache_saved: UsageCacheSavedSchema,
+    days: z.array(UsagePeriodDayBucketSchema).max(MAXIMUM_USAGE_PERIOD_DAYS),
+    agents: z.array(UsageAgentUsageSchema).max(BillingAgentSchema.options.length).optional(),
+    coverage: UsagePeriodCoverageSchema,
+    revision: UsagePeriodRevisionSchema,
+  })
+  .strict();
+
+export const AccountUsagePeriodResponseSchema = AccountUsagePeriodResponseObjectSchema.superRefine(
+  (response, context) => {
+    if (response.bounds.start >= response.bounds.end) {
+      context.addIssue({
+        code: "custom",
+        path: ["bounds", "end"],
+        message: "end must follow start.",
+      });
+    }
+    for (let index = 1; index < response.days.length; index += 1) {
+      const previous = response.days[index - 1];
+      const current = response.days[index];
+      if (previous !== undefined && current !== undefined && current.date <= previous.date) {
+        context.addIssue({
+          code: "custom",
+          path: ["days", index, "date"],
+          message: "days must be unique local dates in ascending order.",
+        });
+      }
+    }
+  },
+);
+export type AccountUsagePeriodResponse = z.infer<typeof AccountUsagePeriodResponseSchema>;
 
 /**
  * The handle a public profile is published under, which is the whole address of that page.
@@ -1939,6 +2086,19 @@ export const AccountUsageActivityResponseReadSchema =
 export type AccountUsageActivityResponseRead = z.infer<
   typeof AccountUsageActivityResponseReadSchema
 >;
+
+const UsagePeriodDayBucketReadSchema = UsagePeriodDayBucketSchema.extend({
+  totals: UsageSummaryTotalsReadSchema,
+  cost: UsageCostOutcomeReadSchema,
+}).loose();
+
+export const AccountUsagePeriodResponseReadSchema = AccountUsagePeriodResponseObjectSchema.extend({
+  days: z.array(UsagePeriodDayBucketReadSchema).max(MAXIMUM_USAGE_PERIOD_DAYS),
+  agents: z.array(UsageAgentUsageReadSchema).max(MAXIMUM_USAGE_PERIOD_LEAVES).optional(),
+  coverage: UsagePeriodCoverageSchema.loose(),
+  revision: UsagePeriodRevisionSchema.loose(),
+}).loose();
+export type AccountUsagePeriodResponseRead = z.infer<typeof AccountUsagePeriodResponseReadSchema>;
 
 /**
  * What Relay answers a snapshot upload with.

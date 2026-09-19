@@ -96,7 +96,7 @@ struct MenuBarFooterView: View {
 
   var body: some View {
     HStack(spacing: QuotaDesign.Spacing.sectionBody) {
-      if let today = model.todayUsageSummary(source: usageSource) {
+      if let today = model.usage.todayUsageSummary(source: usageSource) {
         Button(action: onOpenUsage) {
           Text(today.text)
             .quotaMetaStyle()

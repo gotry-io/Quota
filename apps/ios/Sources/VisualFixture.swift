@@ -136,6 +136,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
         model.isRefreshing = false
         model.banner = nil
         model.expiredMessage = nil
+        model.usage.accountSummaryAccepted(summary, etag: nil)
       case .connectRefreshFailed:
         model.phase = .pendingRefreshFailed
         model.summary = nil
@@ -156,7 +157,8 @@ enum VisualFixture: String, CaseIterable, Sendable {
         model.isRefreshing = false
         model.banner = nil
         model.expiredMessage = nil
-        model.activityChart = .loaded(VisualFixtureContent.activityDays(ending: now))
+        model.usage.accountSummaryAccepted(model.summary, etag: nil)
+        model.usage.pose(chart: .loaded(VisualFixtureContent.activityDays(ending: now)))
         model.providerStatus = VisualFixtureContent.incidentStatus(at: now)
       case .cachedError:
         model.phase = .signedIn
@@ -170,7 +172,8 @@ enum VisualFixture: String, CaseIterable, Sendable {
           symbolName: "icloud.slash"
         )
         model.expiredMessage = nil
-        model.activityChart = .loaded(VisualFixtureContent.activityDays(ending: now))
+        model.usage.accountSummaryAccepted(model.summary, etag: nil)
+        model.usage.pose(chart: .loaded(VisualFixtureContent.activityDays(ending: now)))
         model.providerStatus = VisualFixtureContent.incidentStatus(at: now)
       case .empty:
         model.phase = .signedIn
@@ -183,7 +186,8 @@ enum VisualFixture: String, CaseIterable, Sendable {
         model.isRefreshing = false
         model.banner = nil
         model.expiredMessage = nil
-        model.activityChart = .loaded([])
+        model.usage.accountSummaryAccepted(model.summary, etag: nil)
+        model.usage.pose(chart: .loaded([]))
       case .noDevices:
         model.phase = .signedIn
         model.summary = VisualFixtureContent.emptySummary(at: now)
@@ -192,7 +196,8 @@ enum VisualFixture: String, CaseIterable, Sendable {
         model.isRefreshing = false
         model.banner = nil
         model.expiredMessage = nil
-        model.activityChart = .loaded([])
+        model.usage.accountSummaryAccepted(model.summary, etag: nil)
+        model.usage.pose(chart: .loaded([]))
       case .providers:
         applySignedInContent(to: model, now: now)
         Self.applyLocal(VisualFixtureContent.refusedCollection(at: now), to: model)
@@ -229,30 +234,34 @@ enum VisualFixture: String, CaseIterable, Sendable {
         model.selectedTab = .usage
         switch self {
         case .activityLoading:
-          model.activityChart = .loading
-          model.activityRhythm = .loading
+          model.usage.pose(chart: .loading, rhythm: .loading)
         case .activityFailed:
-          model.activityChart = .failed
-          model.activityRhythm = .failed
+          model.usage.pose(chart: .failed, rhythm: .failed)
         case .activityDayEmpty:
           let date = UsageActivityCalendar.addDays(
             -3,
             to: UsageActivityCalendar.utcDay(from: now)
           )
-          model.activityDaySheet = ActivityDaySheetState(
-            date: date,
-            headline: UsageActivityChart.emptyDay(date: date),
-            agents: .empty
+          model.usage.pose(
+            chart: model.usage.activityChart,
+            daySheet: ActivityDaySheetState(
+              date: date,
+              headline: UsageActivityChart.emptyDay(date: date),
+              agents: .empty
+            )
           )
         case .activityDayFailed:
           let date = UsageActivityCalendar.utcDay(from: now)
           let headline =
             VisualFixtureContent.activityDays(ending: now).first { $0.date == date }
             ?? UsageActivityChart.emptyDay(date: date)
-          model.activityDaySheet = ActivityDaySheetState(
-            date: date,
-            headline: headline,
-            agents: .failed
+          model.usage.pose(
+            chart: model.usage.activityChart,
+            daySheet: ActivityDaySheetState(
+              date: date,
+              headline: headline,
+              agents: .failed
+            )
           )
         default:
           break
@@ -284,7 +293,8 @@ enum VisualFixture: String, CaseIterable, Sendable {
       model.isRefreshing = false
       model.banner = nil
       model.expiredMessage = nil
-      model.activityChart = .loaded(VisualFixtureContent.activityDays(ending: now))
+      model.usage.accountSummaryAccepted(model.summary, etag: nil)
+      model.usage.pose(chart: .loaded(VisualFixtureContent.activityDays(ending: now)))
     }
   }
 

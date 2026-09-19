@@ -9,6 +9,7 @@ import {
   AccountSummarySchema,
   type AccountUsage,
   AccountUsageActivityResponseSchema,
+  AccountUsagePeriodResponseSchema,
   AccountUsageSchema,
   type AppleNativeSignInRequest,
   AppleNativeSignInRequestSchema,
@@ -47,7 +48,9 @@ import {
   type RelayErrorEnvelope,
   SessionRefreshRequestSchema,
   SessionRefreshResponseSchema,
+  USAGE_HOUR_GRID_RULE,
   UsageActivityRangeSchema,
+  UsagePeriodRangeSchema,
   UsageUploadResponseSchema,
   UsageUploadSchema,
 } from "@gotry-io/quota-protocol";
@@ -100,7 +103,12 @@ import {
   type WebSignInRejection,
 } from "./account/web-session.ts";
 import { managedServiceInfo } from "./config.ts";
-import { type LocalPeriodPlan, planLocalPeriods } from "./local-periods.ts";
+import {
+  type LocalPeriodPlan,
+  planLocalDateRange,
+  planLocalDayWindows,
+  planLocalPeriods,
+} from "./local-periods.ts";
 import { clientAddress } from "./platform/client-address.ts";
 import { type LastReadingCache, MemoryReadingCache } from "./platform/reading-cache.ts";
 import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "./pricing-catalog.ts";
@@ -112,6 +120,8 @@ import {
   buildAccountUsage,
   buildActivityDays,
   buildActivityRhythm,
+  buildLocalPeriodDays,
+  foldUsageRows,
   UsageSummaryLimitError,
 } from "./usage-summary.ts";
 
@@ -214,6 +224,8 @@ export interface RelayAppOptions {
   modelCatalog?: ModelCatalog;
   /** Test override for the Usage fold/representation version in the activity ETag. */
   usageFoldVersion?: number;
+  /** Test override for the period local-day scan cap. Production uses `maximumAccountDailyRows`. */
+  usageLocalDayLimit?: number;
   /** Test override for official status-page fetches. Production uses global `fetch`. */
   providerStatusFetch?: typeof fetch;
   /** Where the last-good status-page readings live. Each entry point supplies its platform's. */
@@ -990,6 +1002,99 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     }
   });
 
+  app.get("/api/v6/account/usage/period", async (context) => {
+    const checkedAt = now();
+    const principal = await accountReader(context, options, checkedAt);
+    if (principal instanceof Response) return principal;
+    if (!hasOnlyQueryKeys(context, ["from", "to", "timezone", "breakdown"])) {
+      return invalidRequest(context);
+    }
+    const range = UsagePeriodRangeSchema.safeParse({
+      from: context.req.query("from"),
+      to: context.req.query("to"),
+      timezone: context.req.query("timezone"),
+    });
+    if (!range.success) return invalidRequest(context);
+    const breakdown = context.req.query("breakdown");
+    if (breakdown !== undefined && breakdown !== "1") return invalidRequest(context);
+    const includeAgents = breakdown === "1";
+    // Explicit {from,to} does not roll over with the wall clock. Retention still can: a range
+    // that reaches a cutoff carries that cutoff, matching the activity read.
+    const stamp = await options.state.accountUsageVersionStamp(principal.account_id);
+    const plan = planLocalDateRange(range.data.timezone, range.data.from, range.data.to);
+    const notModified = await answerIfNoneMatch(context, principal, stamp, {
+      catalogRevision: catalog.revision,
+      modelCatalogRevision: modelCatalog.revision,
+      rolloverKey: periodRolloverKey(plan.start, checkedAt),
+      foldVersion: options.usageFoldVersion ?? USAGE_FOLD_VERSION,
+    });
+    if (notModified) return notModified;
+    const windows = planLocalDayWindows(range.data.timezone, range.data.from, range.data.to);
+    const localDayLimit = options.usageLocalDayLimit ?? maximumAccountDailyRows;
+    const [daily, boundary, localDays] = await Promise.all([
+      plan.days
+        ? options.usageState.queryDailyUsage(principal.account_id, {
+            from: plan.days.from,
+            to: plan.days.to,
+            limit: maximumAccountDailyRows,
+          })
+        : Promise.resolve({ rows: [], truncated: false }),
+      plan.boundaries.length > 0
+        ? options.usageState.queryBoundaryHours(principal.account_id, {
+            ranges: plan.boundaries,
+            limit: maximumAccountDailyRows,
+          })
+        : Promise.resolve({ ranges: [] as const, truncated: false }),
+      options.usageState.queryLocalDayUsage(principal.account_id, {
+        windows,
+        limit: localDayLimit,
+      }),
+    ]);
+    if (daily.truncated || boundary.truncated || localDays.truncated) return resultLimit(context);
+    try {
+      const folded = foldUsageRows({
+        rows: [...daily.rows, ...boundary.ranges.flat()],
+        catalog,
+        modelCatalog,
+        includeAgents,
+      });
+      const days = buildLocalPeriodDays({
+        rows: localDays.rows,
+        catalog,
+      });
+      const storedPartial =
+        folded.partial || localDays.rows.some((row) => (row.partial_hours ?? 0) > 0);
+      return context.json(
+        AccountUsagePeriodResponseSchema.parse({
+          protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
+          request: {
+            from: range.data.from,
+            to: range.data.to,
+            timezone: range.data.timezone,
+          },
+          bounds: { start: plan.start, end: plan.end, grid: USAGE_HOUR_GRID_RULE },
+          totals: folded.totals,
+          cost: folded.cost,
+          cache_saved: folded.cache_saved,
+          days,
+          ...(folded.agents === undefined ? {} : { agents: folded.agents }),
+          coverage: periodCoverage(plan.start, checkedAt, storedPartial),
+          revision: {
+            usage_revision: stamp.usage_revision,
+            device_generation: stamp.device_generation,
+            account_updated_at: stamp.account_updated_at,
+            pricing_revision: catalog.revision,
+            model_catalog_revision: modelCatalog.revision,
+            fold_version: options.usageFoldVersion ?? USAGE_FOLD_VERSION,
+          },
+        }),
+      );
+    } catch (error) {
+      if (error instanceof UsageSummaryLimitError) return resultLimit(context);
+      throw error;
+    }
+  });
+
   app.delete("/api/v2/account", async (context) => {
     const principal = await authorizeAccount(context, options, "account:manage", now());
     if (principal instanceof Response) {
@@ -1693,6 +1798,45 @@ function summaryRolloverKey(localDate: string, checkedAt: Date): string {
 function activityRolloverKey(rangeFrom: string, checkedAt: Date): string | null {
   const cutoff = utcDate(daysBefore(checkedAt, usageDayRetentionDays));
   return cutoff > rangeFrom ? cutoff : null;
+}
+
+/**
+ * Retention cutoffs that rewrite this period without a Usage write.
+ *
+ * Explicit `{from,to}` does not turn over with the caller's wall clock. A range wholly after
+ * both cutoffs therefore keeps its ETag when the calendar advances one UTC day, matching
+ * {@link activityRolloverKey}. A range the cutoff still reaches carries the cutoff so a held
+ * body cannot outlive the rows behind it.
+ */
+function periodRolloverKey(start: string, checkedAt: Date): string | null {
+  const dailyCutoff = utcDate(daysBefore(checkedAt, usageDayRetentionDays));
+  const hourlyCutoff = `${daysBefore(checkedAt, usageHourRetentionDays).toISOString().slice(0, 19)}Z`;
+  const parts: string[] = [];
+  if (start < `${dailyCutoff}T00:00:00Z`) parts.push(`d:${dailyCutoff}`);
+  if (start < hourlyCutoff) parts.push(`h:${hourlyCutoff}`);
+  return parts.length > 0 ? parts.join("|") : null;
+}
+
+function periodCoverage(
+  start: string,
+  checkedAt: Date,
+  storedPartial: boolean,
+): {
+  partial: boolean;
+  daily_retained_from: string | null;
+  hourly_retained_from: string | null;
+  truncated_by_retention: boolean;
+} {
+  const dailyCutoff = utcDate(daysBefore(checkedAt, usageDayRetentionDays));
+  const hourlyCutoff = `${daysBefore(checkedAt, usageHourRetentionDays).toISOString().slice(0, 19)}Z`;
+  const dailyCuts = start < `${dailyCutoff}T00:00:00Z`;
+  const hourlyCuts = start < hourlyCutoff;
+  return {
+    partial: storedPartial || hourlyCuts,
+    daily_retained_from: dailyCuts ? dailyCutoff : null,
+    hourly_retained_from: hourlyCuts ? hourlyCutoff : null,
+    truncated_by_retention: dailyCuts || hourlyCuts,
+  };
 }
 
 /** The `tz` a read was asked for, `UTC` when it named none, or null when it named nonsense. */

@@ -24,7 +24,7 @@ struct ContrastTokenTests {
       on: UIColor.secondarySystemGroupedBackground,
       minimum: Self.bodyText
     )
-    // DESIGN.md allows secondary at subheadline and larger (body text, 4.5:1).
+    // docs/design.md type roles: supporting copy may be secondary at subheadline and larger (body text, 4.5:1).
     env.expect(
       "secondary on systemGroupedBackground",
       UIColor(QuotaTheme.secondary),
