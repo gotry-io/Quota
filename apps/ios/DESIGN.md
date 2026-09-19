@@ -832,11 +832,13 @@ provider and support, and no custom card chrome beyond the system widget contain
   still runs on every fixture screen and gates every type except contrast: the iOS 26
   pixel-sampling contrast pass persistently reports low contrast on system label colour, which
   is not low contrast.
-- Unnamed glass (`issue.element == nil`) is recorded and does not gate. The iOS 26 auditor still
-  reports Dynamic Type "partially unsupported" twice on system list configuration and on inner
-  text of scaling fonts (`section.header.` / `section.footer.`, `overview.today` /
-  `overview.subscription` rows, app-owned identifiers, Form labels, the sheet **Done** button);
-  clipping on `usage.activity.empty` also reproduces. Those stay, counted per exemption rule.
+- Unnamed glass (`issue.element == nil`) is recorded and does not gate. The iOS 26.3 auditor
+  still reports Dynamic Type "partially unsupported" on specific system list headers/footers,
+  Form/Link inner labels, combined-row inner text, identified empty/error copy, wrapping
+  subscription-detail history and readings titles, and the sheet **Done** button. Clipping on
+  `usage.activity.empty` still reproduces after `fixedSize`. Each kept exemption is one audit
+  type, one identifier or exact label, and one screen, counted per rule. A prefix or parent
+  skip is not an exemption.
   Each screen audit attaches `audit-outcome.<screen>` JSON: first- and second-pass findings
   (including nil-element and exempted), and one outcome per type — `passed`, `confirmed` (same
   finding twice), `unconfirmed` (first pass only), or `incomplete` (timed out). Confirmed
@@ -887,7 +889,9 @@ detail, and each Settings destination at one accessibility text size.
 `QuotaUITests.testLargeTypeScreenshots` always launches at `accessibilityExtraLarge` (including
 CI's `verify-ios-ui`) and visits **View day** / the day sheet, Settings › About, hub Log Out after
 pop, and the first connected Providers session, so a below-the-fold regression fails that job
-instead of only a local screenshot run.
+instead of only a local screenshot run. It asserts remaining percent, tokens, and cost on
+Overview, subscription detail, and Usage: each is hittable, carries the full accessibility
+label, and is not clipped by the window.
 
 ### DEBUG visual fixtures
 

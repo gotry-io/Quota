@@ -234,6 +234,7 @@ struct UsageView: View {
         Label("No usage", systemImage: "chart.bar")
       } description: {
         Text("No usage was reported for this period.")
+          .fixedSize(horizontal: false, vertical: true)
       }
       .foregroundStyle(Color.primary)
       .frame(maxWidth: .infinity)
