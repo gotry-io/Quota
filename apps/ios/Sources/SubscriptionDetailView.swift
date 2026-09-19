@@ -334,7 +334,7 @@ struct SubscriptionDetailView: View {
           historyHeader(content)
           if !content.isLocalReading {
             Text(SubscriptionDetailCopy.remoteOnlyHistory)
-              .font(QuotaDesign.Typography.support)
+              .font(.body)
               .foregroundStyle(.primary)
               .fixedSize(horizontal: false, vertical: true)
               .accessibilityIdentifier("subscription.history")
@@ -349,7 +349,7 @@ struct SubscriptionDetailView: View {
             )
           } else {
             Text(SubscriptionDetailCopy.notEnoughHistory)
-              .font(QuotaDesign.Typography.support)
+              .font(.body)
               .foregroundStyle(.primary)
               .fixedSize(horizontal: false, vertical: true)
               .accessibilityIdentifier("subscription.history")
@@ -362,21 +362,7 @@ struct SubscriptionDetailView: View {
 
   private func historyHeader(_ content: SubscriptionDetailContent) -> some View {
     VStack(alignment: .leading, spacing: 8) {
-      ViewThatFits(in: .horizontal) {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-          remainingHistoryTitle
-          Spacer(minLength: 8)
-          if content.isLocalReading {
-            historyScope
-          }
-        }
-        VStack(alignment: .leading, spacing: 4) {
-          remainingHistoryTitle
-          if content.isLocalReading {
-            historyScope
-          }
-        }
-      }
+      historyTitleRow(content)
       if content.showsHistoryWindowPicker {
         Picker("Window", selection: windowSelection(content)) {
           ForEach(content.windows) { window in
@@ -388,6 +374,32 @@ struct SubscriptionDetailView: View {
         .frame(minHeight: QuotaTheme.minimumTouchTarget)
         .accessibilityLabel("History window")
         .accessibilityIdentifier("subscription.history.window")
+      }
+    }
+  }
+
+  /// Title and **This iPhone** share a line while they fit whole; otherwise they stack so the
+  /// title is not clipped and both texts can grow with Dynamic Type.
+  @ViewBuilder
+  private func historyTitleRow(_ content: SubscriptionDetailContent) -> some View {
+    if !content.isLocalReading {
+      remainingHistoryTitle
+    } else if dynamicTypeSize.isAccessibilitySize {
+      VStack(alignment: .leading, spacing: 4) {
+        remainingHistoryTitle.fixedSize(horizontal: false, vertical: true)
+        historyScope.fixedSize(horizontal: false, vertical: true)
+      }
+    } else {
+      ViewThatFits(in: .horizontal) {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+          remainingHistoryTitle.fixedSize()
+          Spacer(minLength: 8)
+          historyScope.fixedSize()
+        }
+        VStack(alignment: .leading, spacing: 4) {
+          remainingHistoryTitle.fixedSize(horizontal: false, vertical: true)
+          historyScope.fixedSize(horizontal: false, vertical: true)
+        }
       }
     }
   }
@@ -404,7 +416,6 @@ struct SubscriptionDetailView: View {
     Text(ThisDevice.displayName)
       .font(QuotaDesign.Typography.support)
       .foregroundStyle(QuotaTheme.secondary)
-      .fixedSize()
       .accessibilityIdentifier("subscription.history.scope")
   }
 
@@ -430,24 +441,33 @@ struct SubscriptionDetailView: View {
   @ViewBuilder
   private func readingsSection(_ content: SubscriptionDetailContent) -> some View {
     Section {
+      readingsTitle(content)
       if content.sources.isEmpty {
         Text("No device readings yet.")
           .foregroundStyle(.primary)
-          .accessibilityIdentifier("subscription.sources")
       } else {
         ForEach(Array(content.sources.enumerated()), id: \.offset) { _, row in
           sourceRow(row)
         }
       }
-    } header: {
-      Text(
-        content.sources.isEmpty
-          ? "Readings"
-          : SubscriptionDetailCopy.readings(content.sources.count)
-      )
-      .accessibilityIdentifier("subscription.sources")
-      .accessibilityAddTraits(.isHeader)
     }
+  }
+
+  /// A wrapping row, not the system section header font the iOS 26.3 auditor flags.
+  private func readingsTitle(_ content: SubscriptionDetailContent) -> some View {
+    Text(
+      content.sources.isEmpty
+        ? "Readings"
+        : SubscriptionDetailCopy.readings(content.sources.count)
+    )
+    .font(.headline)
+    .foregroundStyle(.primary)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .fixedSize(horizontal: false, vertical: true)
+    .accessibilityIdentifier("subscription.sources")
+    .accessibilityAddTraits(.isHeader)
+    .listRowBackground(Color.clear)
+    .listRowSeparator(.hidden)
   }
 
   private func sourceRow(_ row: SubscriptionDetailContent.SourceRow) -> some View {
