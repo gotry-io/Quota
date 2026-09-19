@@ -95,6 +95,7 @@
 		AE9B36FD1367E1ABC5CE028C /* LocalCollector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69505410E87F5AFEF428B61A /* LocalCollector.swift */; };
 		B389BE19436638B7994F44A7 /* UsageActivityLoadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 136F12D15EF930FCFA0D08E5 /* UsageActivityLoadTests.swift */; };
 		B3F133C0994AE8E197DD658A /* WidgetSnapshotProjectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EE25721BF3B868D71E8EA28 /* WidgetSnapshotProjectionTests.swift */; };
+		B53217F4EFD06A97518E1DEF /* UsagePatternsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5700B23F93237B0AF5CCA18E /* UsagePatternsView.swift */; };
 		B5BD28504186F90204E99F21 /* UserNotifications.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 408BE323F9E3CAEB7FCC522E /* UserNotifications.framework */; };
 		B6BE76EE94D0F6D7B88E5187 /* UsageDailyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3886868B824F861451BE4E17 /* UsageDailyView.swift */; };
 		B8882FED9814AFD1725C2695 /* AlertPersistenceConstraintTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D8CCD89060177A07CA110FE /* AlertPersistenceConstraintTests.swift */; };
@@ -108,6 +109,7 @@
 		C73CD7E9655EC6DC4F185ED1 /* MacSetupGuide.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61B3068E31E61E47925EBC63 /* MacSetupGuide.swift */; };
 		C73D21E934BE3DB1C3B3B16C /* SelectionSaltTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D03510598748E5459598E60 /* SelectionSaltTests.swift */; };
 		CA7885249DC0CF79CF774235 /* ProviderLogin.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E41821C03856F5586BFAB75 /* ProviderLogin.swift */; };
+		CB3CA9D9F3056C6F9F2528C7 /* UsageBreakdownDestination.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7322027527E5C169341D9597 /* UsageBreakdownDestination.swift */; };
 		CEE4F98B0CDB88906FB4AAA7 /* OverviewWidgetPreviews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 892EA6F60750341C7F36F515 /* OverviewWidgetPreviews.swift */; };
 		CF0106D41F578E1909080626 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5FCDA22B62B0D142212AA65 /* RootView.swift */; };
 		D3480A0E787B196E8D4CBB69 /* NotificationDeliveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03084513A661F72AC2E24130 /* NotificationDeliveryTests.swift */; };
@@ -201,6 +203,7 @@
 		50438DF74EFAC847E8BA5A01 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		50FC72ECB4FB3463F51A3ADA /* DeviceUploadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceUploadTests.swift; sourceTree = "<group>"; };
 		54FC21498C9A0DB29E404470 /* SubscriptionDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionDetailView.swift; sourceTree = "<group>"; };
+		5700B23F93237B0AF5CCA18E /* UsagePatternsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsagePatternsView.swift; sourceTree = "<group>"; };
 		582B3F4380D3CB47833DC394 /* BrowserAuthenticator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserAuthenticator.swift; sourceTree = "<group>"; };
 		59696600F65C3E5898F3A5D5 /* SettingsModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsModelTests.swift; sourceTree = "<group>"; };
 		599575BE9ED68BA0F8CF1C66 /* UsageDailyBarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageDailyBarTests.swift; sourceTree = "<group>"; };
@@ -217,6 +220,7 @@
 		6E41821C03856F5586BFAB75 /* ProviderLogin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderLogin.swift; sourceTree = "<group>"; };
 		702E2FF470823A83AC8FDBEF /* UsageDisplay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageDisplay.swift; sourceTree = "<group>"; };
 		70DAD0FC0DCFE3F2F7AFA0D8 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		7322027527E5C169341D9597 /* UsageBreakdownDestination.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageBreakdownDestination.swift; sourceTree = "<group>"; };
 		734A8F7955E71190C17C9129 /* UsageModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageModel.swift; sourceTree = "<group>"; };
 		73FAF27FA22BCF5434FE0602 /* SettingsAboutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsAboutView.swift; sourceTree = "<group>"; };
 		74341CA49827F1463DE52FDB /* SubscriptionDetailTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionDetailTests.swift; sourceTree = "<group>"; };
@@ -383,10 +387,12 @@
 				B83FF236D780793577FA7ED1 /* UsageActivityChart.swift */,
 				AA9C52BB5B706B67AAA8EFD9 /* UsageActivityView.swift */,
 				7A3EE34F501C1D08632929D1 /* UsageBreakdown.swift */,
+				7322027527E5C169341D9597 /* UsageBreakdownDestination.swift */,
 				89854405C3C8EECC583A7C96 /* UsageBudgetViews.swift */,
 				DF4689F67D0D0AE64EF6FFAF /* UsageDaily.swift */,
 				3886868B824F861451BE4E17 /* UsageDailyView.swift */,
 				702E2FF470823A83AC8FDBEF /* UsageDisplay.swift */,
+				5700B23F93237B0AF5CCA18E /* UsagePatternsView.swift */,
 				198E1F2E882CC1B708965029 /* UsageRhythmView.swift */,
 				22EA5EC387AF4FF520BED534 /* UsageView.swift */,
 				68BADB08B02924BB2206691D /* VisualFixture.swift */,
@@ -802,11 +808,13 @@
 				47B560DDAD359CE7E6437DF9 /* UsageActivityChart.swift in Sources */,
 				7B8AA7F5381EBA3D6FCC14B3 /* UsageActivityView.swift in Sources */,
 				395D96006A2A6BEEB3ED8811 /* UsageBreakdown.swift in Sources */,
+				CB3CA9D9F3056C6F9F2528C7 /* UsageBreakdownDestination.swift in Sources */,
 				1407AAFD84EA93FF477C6A1D /* UsageBudgetViews.swift in Sources */,
 				78855C6D719FADD23574D812 /* UsageDaily.swift in Sources */,
 				B6BE76EE94D0F6D7B88E5187 /* UsageDailyView.swift in Sources */,
 				26F1FE0BB72DDBE5CB26E07B /* UsageDisplay.swift in Sources */,
 				6AEE14999F033E00CD3892AC /* UsageModel.swift in Sources */,
+				B53217F4EFD06A97518E1DEF /* UsagePatternsView.swift in Sources */,
 				71E0E0965A78AF29493B5473 /* UsageRhythmView.swift in Sources */,
 				4F8AF68FAF8C3318E846BE20 /* UsageView.swift in Sources */,
 				9EF56CA9C20CD677CC734B4D /* VisualFixture.swift in Sources */,

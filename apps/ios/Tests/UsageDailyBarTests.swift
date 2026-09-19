@@ -33,6 +33,84 @@ struct UsageDailyBarTests {
   }
 
   @Test
+  func aMissingDayInTheRangeIsAGapNotAZeroBar() {
+    let reported = [
+      row(date: "2026-09-01", tokens: 10, cost: pricedCost("1000000")),
+      row(date: "2026-09-03", tokens: 20, cost: pricedCost("2000000")),
+    ].map {
+      UsageActivityDay(date: $0.date, totals: $0.totals, cost: $0.cost, partial: false, agents: nil)
+    }
+    // 7-day range; the 4th local date (index 3, Sep 4) is absent from days[] as a genuine gap.
+    let rows = UsageDailyFold.rows(
+      reported: reported,
+      from: "2026-09-01",
+      to: "2026-09-07"
+    )
+    #expect(rows.count == 7)
+    #expect(rows.map(\.date) == [
+      "2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04", "2026-09-05", "2026-09-06",
+      "2026-09-07",
+    ])
+    #expect(UsageDailyFold.barKind(rows[0], metric: .tokens) == .amount(10))
+    #expect(UsageDailyFold.barKind(rows[1], metric: .tokens) == .empty)
+    #expect(UsageDailyFold.barKind(rows[2], metric: .tokens) == .amount(20))
+    #expect(UsageDailyFold.barKind(rows[3], metric: .tokens) == .empty)
+    #expect(UsageDailyFold.barKind(rows[3], metric: .tokens) != .amount(0))
+    #expect(UsageDailyFold.quantitativeMaximum(rows, metric: .tokens) == 20)
+  }
+
+  @Test
+  func valueTicksAreTwoOrThreeAndIncludeZero() {
+    #expect(UsageDailyAxis.valueTicks(maximum: 100) == [0, 50, 100])
+    let millions = UsageDailyAxis.valueTicks(maximum: 11_400_000)
+    #expect(millions.first == 0)
+    #expect(millions.count == 2 || millions.count == 3)
+    #expect(millions.last ?? 0 >= 11_400_000)
+  }
+
+  @Test
+  func theYAxisCeilingIsTheTightNiceStepAtOrAboveTheMax() {
+    #expect(UsageDailyAxis.niceCeiling(240_000) == 250_000)
+    #expect(UsageDailyAxis.valueTicks(maximum: 240_000) == [0, 125_000, 250_000])
+    #expect(UsageDailyAxis.niceCeiling(1_100_000) == 1_200_000)
+    #expect(UsageDailyAxis.valueTicks(maximum: 1_100_000) == [0, 600_000, 1_200_000])
+    let emptyCeiling = UsageDailyAxis.niceCeiling(0)
+    #expect(emptyCeiling > 0)
+    let emptyTicks = UsageDailyAxis.valueTicks(maximum: 0)
+    #expect(emptyTicks.first == 0)
+    #expect(emptyTicks.last == emptyCeiling)
+    #expect(emptyTicks.count == 2 || emptyTicks.count == 3)
+  }
+
+  @Test
+  func dateTicksKeepEndsAndDoNotLabelEveryDay() {
+    let week = (1...7).map { String(format: "2026-09-%02d", $0) }
+    #expect(UsageDailyAxis.dateTicks(dates: week) == ["2026-09-01", "2026-09-04", "2026-09-07"])
+    let month = (1...30).map { String(format: "2026-09-%02d", $0) }
+    let ticks = UsageDailyAxis.dateTicks(dates: month)
+    #expect(ticks.count == 4)
+    #expect(ticks.first == "2026-09-01")
+    #expect(ticks.last == "2026-09-30")
+    #expect(UsageDailyAxis.dateTicks(dates: ["2026-09-19"]) == ["2026-09-19"])
+  }
+
+  @Test
+  func theLastDateTickLabelIsTheFullMonthAndDay() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.locale = Locale(identifier: "en_US")
+    calendar.timeZone = TimeZone(identifier: "UTC")!
+    let month = (1...30).map { String(format: "2026-09-%02d", $0) }
+    let ticks = UsageDailyAxis.dateTicks(dates: month)
+    #expect(ticks.last == "2026-09-30")
+    #expect(UsageDailyAxis.dateLabel(ticks.last!, calendar: calendar) == "Sep 30")
+    #expect(UsageDailyAxis.dateLabel("2026-09-20", calendar: calendar) == "Sep 20")
+    #expect(
+      UsageDailyAxis.dateTickAnchor(index: ticks.count - 1, count: ticks.count) == .trailing
+    )
+    #expect(UsageDailyAxis.dateTickAnchor(index: 0, count: ticks.count) == .leading)
+  }
+
+  @Test
   func chartAccessibilityFollowsTheActiveMode() {
     let priced = row(date: "2026-08-12", tokens: 100, cost: pricedCost("2500000"))
     let unpriced = row(date: "2026-08-13", tokens: 20, cost: unpricedCost())

@@ -90,31 +90,53 @@ final class QuotaUITests: XCTestCase {
       app.descendants(matching: .any)["usage.root"].waitForExistence(timeout: 10),
       "usage.root"
     )
-    let period = app.segmentedControls.firstMatch
-    XCTAssertTrue(period.waitForExistence(timeout: 5), "usage period control")
-    XCTAssertTrue(period.buttons["Today"].exists, "Today segment")
-    XCTAssertTrue(period.buttons["Today"].isSelected, "Overview Today opens the Today period")
-    XCTAssertTrue(period.buttons["Last 7 days"].exists, "Last 7 days segment")
-    XCTAssertTrue(period.buttons["Last 30 days"].exists, "Last 30 days segment")
-    period.buttons["Last 30 days"].tap()
-    XCTAssertTrue(app.staticTexts["Cache hit"].waitForExistence(timeout: 5), "Cache hit row")
-    // The period stepper and the budget section sit above the totals, so Daily starts below the
-    // viewport, and a List builds only the rows near it. Scroll to the chart rather than wait.
+    // Overview's Today row opens Usage on the Today period (B3b); the period chooser is a menu
+    // (B4b), so read its value, then move to Last 30 days for the captures below.
+    let period = app.descendants(matching: .any)["usage.period"].firstMatch
+    XCTAssertTrue(period.waitForExistence(timeout: 5), "usage period menu")
+    XCTAssertTrue(
+      period.label.contains("Today") || ((period.value as? String) ?? "").contains("Today"),
+      "Overview Today opens the Today period, got \(period.label) / \(String(describing: period.value))"
+    )
+    period.tap()
+    let last30 = app.buttons["Last 30 days"].firstMatch
+    XCTAssertTrue(last30.waitForExistence(timeout: 5), "Last 30 days in the period menu")
+    last30.tap()
+    XCTAssertTrue(
+      app.descendants(matching: .any)["usage.headline"].waitForExistence(timeout: 5),
+      "usage.headline"
+    )
     let dailyChart = app.descendants(matching: .any)["usage.daily.chart"]
     for _ in 0..<8 where !dailyChart.exists {
       scrollContent(app, up: true)
     }
     XCTAssertTrue(dailyChart.waitForExistence(timeout: 5), "Daily chart")
     attachScreenshot(app, name: "usage-content")
-    // Daily sits above Activity, so the heatmap and its selected day are a scroll away rather
-    // than on the first screen. Once the heatmap is on screen a middle-of-the-list drag lands on
-    // it and scrolls it sideways, so the drag is anchored on the section header beside it.
-    // Daily, Models, and Rhythm sit above Activity now, so the heatmap can be several screens down.
-    // The header is what says the section was reached; by the time the day action is on screen
-    // the header itself may have scrolled off the top, so it is recorded on the way past.
+
+    openUsageDestination(app, link: "usage.open-breakdown", root: "usage.breakdown")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["usage.headline.cache-hit"].waitForExistence(timeout: 5)
+        || app.staticTexts["Cache hit"].exists,
+      "Cache hit on breakdown"
+    )
+    let showMore = app.descendants(matching: .any)["usage.show-more"]
+    let showMoreLabel = app.buttons["Show 2 more OpenAI models"]
+    let codex = app.staticTexts["Codex"]
+    for _ in 0..<16 {
+      if showMore.exists || showMoreLabel.exists || codex.exists { break }
+      app.swipeUp()
+      RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+    }
+    XCTAssertTrue(
+      showMore.exists || showMoreLabel.exists || codex.exists,
+      "model rows"
+    )
+    attachScreenshot(app, name: "usage-breakdown")
+    try audit(app)
+    popUsageDestination(app)
+
+    openUsageDestination(app, link: "usage.open-patterns", root: "usage.patterns")
     var reachedActivity = app.staticTexts["Activity"].exists
-    // Once the header has gone past, a middle-of-the-list drag would land on the heatmap and
-    // scroll it sideways, so the fallback is a swipe, which the day action below uses too.
     for _ in 0..<24 where !app.buttons["View day"].exists {
       let header = app.staticTexts["Activity"]
       if header.exists {
@@ -134,12 +156,7 @@ final class QuotaUITests: XCTestCase {
       reachedActivity || app.staticTexts["Activity"].exists, "Activity section title")
     XCTAssertTrue(app.buttons["View day"].waitForExistence(timeout: 5), "View day")
     settle(app)
-    attachScreenshot(app, name: "usage-activity")
-    // At accessibility Extra Large the Usage list is several screens long. After the activity
-    // screenshot **View day** is already on screen (the tab bar is minimized). Restoring the
-    // tab bar first scrolled it away, and a dozen swipes were not enough to bring a lazy row
-    // back — the tap landed on nothing and `usage.day` never appeared. Open the sheet while
-    // the control is still here; audit Usage from the top after dismissing.
+    attachScreenshot(app, name: "usage-patterns")
     let viewDay = app.descendants(matching: .any)["usage.activity.view-day"]
     if !viewDay.exists || !viewDay.isHittable {
       revealIdentifier(app, "usage.activity.view-day", attempts: 24)
@@ -165,20 +182,10 @@ final class QuotaUITests: XCTestCase {
     try restoreTabBar(app)
     settle(app)
     try audit(app)
-    let showMore = app.descendants(matching: .any)["usage.show-more"]
-    let showMoreLabel = app.buttons["Show 2 more OpenAI models"]
-    let codex = app.staticTexts["Codex"]
-    // The agent sections are below the heatmap, which is most of a screen on its own, so this
-    // starts at the top of a page that is several screens long.
-    for _ in 0..<40 {
-      if showMore.exists || showMoreLabel.exists || codex.exists { break }
-      app.swipeUp()
-      // A swipe that lands while the list is still decelerating is absorbed by the bounce.
-      RunLoop.current.run(until: Date().addingTimeInterval(0.25))
-    }
+    popUsageDestination(app)
     XCTAssertTrue(
-      showMore.exists || showMoreLabel.exists || codex.exists,
-      "model rows"
+      app.descendants(matching: .any)["usage.root"].waitForExistence(timeout: 5),
+      "usage.root after Activity patterns"
     )
     try assertListScrolls(app)
     try restoreTabBar(app)
@@ -856,6 +863,8 @@ final class QuotaUITests: XCTestCase {
       app.staticTexts["No usage was reported for this period."].exists,
       "empty period description"
     )
+    attachScreenshot(app, name: "usage-empty")
+    openUsageDestination(app, link: "usage.open-patterns", root: "usage.patterns")
     let emptyActivity = app.staticTexts["No activity in the last year."]
     if !emptyActivity.waitForExistence(timeout: 2) {
       scrollToIdentifierOnce(app, "usage.activity.empty")
@@ -865,9 +874,36 @@ final class QuotaUITests: XCTestCase {
         || app.descendants(matching: .any)["usage.activity.empty"].exists,
       "empty activity"
     )
-    attachScreenshot(app, name: "usage-empty")
     settle(app)
     try audit(app)
+    popUsageDestination(app)
+    settle(app)
+    try audit(app)
+  }
+
+  func testUsageOpensActivityPatternsAndReturns() throws {
+    let app = launch(fixture: "content")
+    app.tabBars.buttons["Usage"].tap()
+    XCTAssertTrue(
+      app.descendants(matching: .any)["usage.root"].waitForExistence(timeout: 10),
+      "usage.root"
+    )
+    openUsageDestination(app, link: "usage.open-patterns", root: "usage.patterns")
+    XCTAssertTrue(
+      app.navigationBars["Activity patterns"].waitForExistence(timeout: 5)
+        || app.staticTexts["Activity patterns"].exists
+        || app.descendants(matching: .any)["usage.patterns"].exists,
+      "Activity patterns title"
+    )
+    popUsageDestination(app)
+    XCTAssertTrue(
+      app.descendants(matching: .any)["usage.root"].waitForExistence(timeout: 5),
+      "usage.root after back"
+    )
+    XCTAssertTrue(
+      app.descendants(matching: .any)["usage.open-patterns"].waitForExistence(timeout: 5),
+      "Activity patterns row after back"
+    )
   }
 
   func testEmptyFixtureShowsOverviewEmpty() throws {
@@ -903,6 +939,11 @@ final class QuotaUITests: XCTestCase {
       app.descendants(matching: .any)["usage.root"].waitForExistence(timeout: 10),
       "usage.root"
     )
+    XCTAssertTrue(
+      app.descendants(matching: .any)["usage.headline"].waitForExistence(timeout: 5),
+      "period totals remain visible"
+    )
+    openUsageDestination(app, link: "usage.open-patterns", root: "usage.patterns")
     if !app.descendants(matching: .any)["usage.activity.loading"].waitForExistence(timeout: 2) {
       scrollToIdentifier(app, "usage.activity.loading")
     }
@@ -910,11 +951,6 @@ final class QuotaUITests: XCTestCase {
       app.descendants(matching: .any)["Loading activity"].waitForExistence(timeout: 5)
         || app.descendants(matching: .any)["usage.activity.loading"].exists,
       "usage.activity.loading"
-    )
-    XCTAssertTrue(
-      app.descendants(matching: .any)["usage.headline"].exists
-        || app.descendants(matching: .any)["usage.headline.cache-hit"].exists,
-      "period totals remain visible"
     )
     attachScreenshot(app, name: "usage-activity-loading")
     try audit(app)
@@ -927,10 +963,10 @@ final class QuotaUITests: XCTestCase {
       "usage.root"
     )
     XCTAssertTrue(
-      app.descendants(matching: .any)["usage.headline"].waitForExistence(timeout: 5)
-        || app.descendants(matching: .any)["usage.headline.cache-hit"].exists,
+      app.descendants(matching: .any)["usage.headline"].waitForExistence(timeout: 5),
       "period totals remain visible"
     )
+    openUsageDestination(app, link: "usage.open-patterns", root: "usage.patterns")
     if !app.descendants(matching: .any)["usage.activity.failed"].waitForExistence(timeout: 2) {
       scrollToIdentifier(app, "usage.activity.failed")
     }
@@ -1032,10 +1068,7 @@ final class QuotaUITests: XCTestCase {
     app.tabBars.buttons["Usage"].tap()
     waitRoot(app, "usage.root")
     attachScreenshot(app, name: "usage-content")
-    let period = app.segmentedControls.firstMatch
-    if period.waitForExistence(timeout: 5), period.buttons["Last 30 days"].exists {
-      period.buttons["Last 30 days"].tap()
-    }
+    selectLast30DaysIfNeeded(app)
     settle(app)
     assertUnclippedEssentialValue(
       app,
@@ -1044,9 +1077,14 @@ final class QuotaUITests: XCTestCase {
     )
     assertUnclippedEssentialValue(
       app,
-      identifier: "usage.headline",
+      identifier: "usage.headline.cost",
       expectedLabel: ContentFixtureLargeType.usageCost
     )
+    openUsageDestination(app, link: "usage.open-breakdown", root: "usage.breakdown")
+    attachScreenshot(app, name: "usage-breakdown")
+    popUsageDestination(app)
+    openUsageDestination(app, link: "usage.open-patterns", root: "usage.patterns")
+    attachScreenshot(app, name: "usage-patterns")
     let viewDay = app.descendants(matching: .any)["usage.activity.view-day"]
     var reachedActivity = app.staticTexts["Activity"].exists
     for _ in 0..<32 where !viewDay.exists {
@@ -1075,6 +1113,7 @@ final class QuotaUITests: XCTestCase {
     )
     attachScreenshot(app, name: "usage-day")
     app.buttons["Done"].tap()
+    popUsageDestination(app)
 
     try restoreTabBar(app)
     app.tabBars.buttons["Quota"].tap()
@@ -1323,12 +1362,77 @@ final class QuotaUITests: XCTestCase {
     openSettingsDestination(app, link: "settings.devices", root: "devices.root")
   }
 
+  /// B4b's period chooser is a menu (`usage.period`), not a segmented control.
+  private func selectLast30DaysIfNeeded(_ app: XCUIApplication) {
+    let period = app.descendants(matching: .any)["usage.period"].firstMatch
+    XCTAssertTrue(period.waitForExistence(timeout: 5), "usage period menu")
+    let selected = period.label + " " + ((period.value as? String) ?? "")
+    if selected.contains("Last 30 days") { return }
+    period.tap()
+    let last30 = app.buttons["Last 30 days"].firstMatch
+    XCTAssertTrue(last30.waitForExistence(timeout: 5), "Last 30 days in the period menu")
+    last30.tap()
+  }
+
+  private func openUsageDestination(
+    _ app: XCUIApplication,
+    link: String,
+    root: String
+  ) {
+    let titles: [String: String] = [
+      "usage.open-breakdown": "By provider / By model",
+      "usage.open-patterns": "Activity patterns",
+    ]
+    let title = titles[link]
+    func target() -> XCUIElement {
+      let byId = app.descendants(matching: .any)[link].firstMatch
+      if byId.exists { return byId }
+      if let title {
+        let button = app.buttons[title].firstMatch
+        if button.exists { return button }
+        return app.staticTexts[title].firstMatch
+      }
+      return byId
+    }
+    var control = target()
+    if !control.waitForExistence(timeout: 2) {
+      scrollToTop(app)
+      control = target()
+    }
+    if !control.exists {
+      scrollToIdentifier(app, link, attempts: 16)
+      control = target()
+    }
+    if !control.exists, let title {
+      for _ in 0..<16 where !app.buttons[title].exists && !app.staticTexts[title].exists {
+        scrollContent(app, up: true)
+      }
+      control = target()
+    }
+    XCTAssertTrue(control.waitForExistence(timeout: 5), link)
+    if !control.isHittable {
+      revealIdentifier(app, link, attempts: 8)
+      control = target()
+    }
+    settle(app)
+    XCTAssertTrue(control.waitForExistence(timeout: 5), "\(link) after scroll")
+    control.tap()
+    XCTAssertTrue(
+      app.descendants(matching: .any)[root].waitForExistence(timeout: 8),
+      root
+    )
+  }
+
+  private func popUsageDestination(_ app: XCUIApplication) {
+    popBack(app, to: "usage.root", backTitle: "Usage")
+  }
+
   private func openSettingsDestination(
     _ app: XCUIApplication,
     link: String,
     root: String
   ) {
-    let control = app.descendants(matching: .any)[link]
+    var control = app.descendants(matching: .any)[link]
     if !control.waitForExistence(timeout: 2) {
       // A popped destination restores the hub where it was left, which can be either side of the
       // row being asked for, so the top is where the search starts.
@@ -1346,6 +1450,7 @@ final class QuotaUITests: XCTestCase {
     // A List rebuilds its rows while it settles after a scroll, and a query that resolved a
     // moment ago can resolve to nothing at the instant of the tap. Wait for the row to be back.
     settle(app)
+    control = app.descendants(matching: .any)[link].firstMatch
     XCTAssertTrue(control.waitForExistence(timeout: 5), "\(link) after scroll")
     control.tap()
     XCTAssertTrue(
@@ -1613,6 +1718,9 @@ final class QuotaUITests: XCTestCase {
   private func currentScreenName(_ app: XCUIApplication) -> String {
     let ids = [
       "usage.day",
+      "usage.breakdown",
+      "usage.patterns",
+      "usage.budget.detail",
       "settings.about.root",
       "settings.notifications.root",
       "settings.appearance.root",
@@ -1752,8 +1860,8 @@ private enum ContentFixtureLargeType {
   static let todayTokens = "1.7M tokens"
   static let todayCost = "$1.49 API-equivalent"
   static let todayCombined = "Today, 1,704,620 tokens, $1.49 API-equivalent cost"
-  static let usageTokens = "11,400,000 tokens, 9,500,000 in, 1,900,000 out"
-  static let usageCost = "Cost, $8.50, complete"
+  static let usageTokens = "11,400,000 tokens"
+  static let usageCost = "API-equivalent cost, $8.50, complete"
 }
 
 /// One iOS 26.3 auditor exception: audit type + identifier or exact label + screen.
@@ -1783,9 +1891,6 @@ private let keptAuditorExemptions: [KeptAuditorExemption] = [
   .init(
     type: "dynamic-type", screen: "settings.root", identifier: "section.footer.providers",
     label: "", rule: "dynamic-type-section.footer.providers"),
-  .init(
-    type: "dynamic-type", screen: "usage.root", identifier: "section.header.activity",
-    label: "", rule: "dynamic-type-section.header.activity"),
   // Identified empty/error copy the iOS 26.3 auditor still flags as partial Dynamic Type.
   .init(
     type: "dynamic-type", screen: "settings.root",
@@ -1797,20 +1902,30 @@ private let keptAuditorExemptions: [KeptAuditorExemption] = [
   .init(
     type: "dynamic-type", screen: "usage.day", identifier: "usage.day.retry",
     label: "", rule: "dynamic-type-usage.day.retry"),
+  // Inner StaticText of combined B4b rows. iOS 26.3 still reports partial
+  // Dynamic Type after ViewThatFits, fixedSize, and accessibilityHidden.
   .init(
-    type: "dynamic-type", screen: "usage.root", identifier: "usage.activity.failed",
-    label: "", rule: "dynamic-type-usage.activity.failed"),
+    type: "dynamic-type", screen: "usage.root", identifier: "usage.budget",
+    label: "", rule: "dynamic-type-usage.budget"),
   .init(
-    type: "dynamic-type", screen: "usage.root", identifier: "usage.empty",
-    label: "", rule: "dynamic-type-usage.empty"),
+    type: "dynamic-type", screen: "settings.root", identifier: "settings.budget",
+    label: "", rule: "dynamic-type-settings.budget"),
   .init(
-    type: "dynamic-type", screen: "usage.root", identifier: "usage.activity.empty",
-    label: "", rule: "dynamic-type-usage.activity.empty"),
-  // iOS 26.3 reports clipping on this wrapping empty row even with fixedSize; the
-  // string is fully on-screen.
+    type: "dynamic-type", screen: "settings.root",
+    identifier: "settings.appearance", label: "",
+    rule: "dynamic-type-settings.appearance"),
   .init(
-    type: "clipped", screen: "usage.root", identifier: "usage.activity.empty",
-    label: "", rule: "clipped-usage.activity.empty"),
+    type: "dynamic-type", screen: "usage.breakdown",
+    identifier: "usage.headline.cache-hit", label: "",
+    rule: "dynamic-type-usage.headline.cache-hit"),
+  .init(
+    type: "dynamic-type", screen: "usage.breakdown",
+    identifier: "usage.headline.reasoning", label: "",
+    rule: "dynamic-type-usage.headline.reasoning"),
+  .init(
+    type: "dynamic-type", screen: "usage.breakdown",
+    identifier: "usage.breakdown.messages", label: "",
+    rule: "dynamic-type-usage.breakdown.messages"),
   // System sheet Done control.
   .init(
     type: "dynamic-type", screen: "usage.day", identifier: "", label: "Done",
@@ -1836,9 +1951,6 @@ private let keptAuditorExemptions: [KeptAuditorExemption] = [
     type: "dynamic-type", screen: "settings.root", identifier: "", label: "Support",
     rule: "dynamic-type-label-Support"),
   .init(
-    type: "dynamic-type", screen: "settings.root", identifier: "", label: "About",
-    rule: "dynamic-type-label-About"),
-  .init(
     type: "dynamic-type", screen: "settings.root", identifier: "", label: "Privacy",
     rule: "dynamic-type-label-Privacy"),
   // Inner text of a combined Devices row; VoiceOver uses the row label.
@@ -1851,19 +1963,6 @@ private let keptAuditorExemptions: [KeptAuditorExemption] = [
   .init(
     type: "dynamic-type", screen: "devices.root", identifier: "", label: "This iPhone",
     rule: "dynamic-type-label-This-iPhone"),
-  // Inner Text of combined subscription cards (iOS 26.3 auditor; was a parent skip).
-  .init(
-    type: "dynamic-type", screen: "overview.root", identifier: "overview.remaining",
-    label: "", rule: "dynamic-type-overview.remaining"),
-  .init(
-    type: "dynamic-type", screen: "overview.root", identifier: "", label: "Claude Code",
-    rule: "dynamic-type-label-Claude-Code"),
-  .init(
-    type: "dynamic-type", screen: "overview.root", identifier: "", label: "Max",
-    rule: "dynamic-type-label-Max"),
-  .init(
-    type: "dynamic-type", screen: "overview.root", identifier: "",
-    label: "Team workspace", rule: "dynamic-type-label-Team-workspace"),
   // Wrapping subscription-detail copy. iOS 26.3 still reports partial Dynamic Type
   // after ViewThatFits, .body, and fixedSize; the strings are fully on-screen.
   .init(

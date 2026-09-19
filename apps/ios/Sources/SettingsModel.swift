@@ -39,6 +39,8 @@ enum SettingsCopy {
   static let off = "Off"
   static let emptyAlerts = "No quota alerts are available yet."
   static let appearance = "Appearance"
+  static let monthlyBudget = "Monthly budget"
+  static let setMonthlyBudget = "Set a monthly budget"
   static let about = "About"
   static let productSentence =
     "Quota shows remaining quota this iPhone reads from the providers you connect, and the quota "

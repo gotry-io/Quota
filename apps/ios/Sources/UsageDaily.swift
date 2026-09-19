@@ -82,6 +82,16 @@ enum UsageDailyFold {
     }
   }
 
+  /// The plotted height: tokens as a count, cost as dollars. Gaps and unpriced days are 0.
+  static func plotValue(_ row: Row, metric: UsageDailyMetric) -> Double {
+    switch barKind(row, metric: metric) {
+    case .amount(let amount):
+      return metric == .cost ? Double(amount) / 1_000_000 : Double(amount)
+    case .empty, .unpriced:
+      return 0
+    }
+  }
+
   static func chartAccessibilityValue(_ rows: [Row], metric: UsageDailyMetric) -> String {
     switch metric {
     case .tokens:
@@ -124,4 +134,75 @@ enum UsageDailyFold {
     reasoningTokens: 0,
     messages: 0
   )
+}
+
+/// Y-axis values (2–3, including zero) and the date labels the daily chart marks.
+enum UsageDailyAxis {
+  /// Where a date tick's label sits relative to its tick, so the first and last stay in full.
+  enum DateTickAnchor: Equatable, Sendable {
+    case leading
+    case center
+    case trailing
+  }
+
+  /// Inclusive nice ticks from 0 to a ceiling of `maximum`. An empty plot still gets a
+  /// non-zero ceiling so the axis is readable.
+  static func valueTicks(maximum: Double) -> [Double] {
+    let top = niceCeiling(maximum)
+    let half = top / 2
+    if half == 0 || half == top { return [0, top] }
+    return [0, half, top]
+  }
+
+  /// Dates to label. One to three days stay themselves; a week keeps the ends and the middle;
+  /// a longer range keeps four evenly spaced dates, including both ends.
+  static func dateTicks(dates: [String]) -> [String] {
+    guard !dates.isEmpty else { return [] }
+    if dates.count <= 3 { return dates }
+    if dates.count <= 7 {
+      return uniqued([dates[0], dates[dates.count / 2], dates[dates.count - 1]])
+    }
+    let last = dates.count - 1
+    return uniqued([
+      dates[0],
+      dates[last / 3],
+      dates[(2 * last) / 3],
+      dates[last],
+    ])
+  }
+
+  static func dateTickAnchor(index: Int, count: Int) -> DateTickAnchor {
+    if count <= 1 { return .center }
+    if index == 0 { return .leading }
+    if index == count - 1 { return .trailing }
+    return .center
+  }
+
+  /// `Sep 20` — the full month-and-day, never a clipped first letter.
+  static func dateLabel(_ date: String, calendar: Calendar = .current) -> String {
+    guard let value = UsageDateText.date(from: date, calendar) else { return date }
+    let formatter = DateFormatter()
+    formatter.calendar = calendar
+    formatter.locale = Locale(identifier: "en_US")
+    formatter.timeZone = calendar.timeZone
+    formatter.setLocalizedDateFormatFromTemplate("MMMd")
+    return formatter.string(from: value)
+  }
+
+  /// Smallest of `{1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10} × 10^n` that is ≥ `value`.
+  static func niceCeiling(_ value: Double) -> Double {
+    let steps: [Double] = [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]
+    guard value > 0 else { return 1 }
+    let exponent = floor(log10(value))
+    let magnitude = pow(10, exponent)
+    let fraction = value / magnitude
+    let step = steps.first { fraction <= $0 } ?? 10
+    let raw = step * magnitude
+    return raw >= 1 ? raw.rounded() : raw
+  }
+
+  private static func uniqued(_ dates: [String]) -> [String] {
+    var seen: Set<String> = []
+    return dates.filter { seen.insert($0).inserted }
+  }
 }
