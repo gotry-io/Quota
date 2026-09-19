@@ -2,12 +2,11 @@
 
 QuotaRelay is the account and usage service for `https://quota.gotry.io`. In production it is
 a Node process over SQLite on the dmit VPS ([ADR 0049](../../docs/decisions/0049-one-relay-two-runtimes.md),
-[ADR 0050](../../docs/decisions/0050-the-worker-and-d1-are-retired.md)); the same source runs
-as a Cloudflare Worker over D1 for local development and the `workers` test project. It serves v2 GitHub account, native-client OAuth, Device control, and
+[ADR 0050](../../docs/decisions/0050-the-worker-and-d1-are-retired.md)). Everyday `dev`, `build`,
+and `test` run that Node runtime over local SQLite; the same source still runs as a Cloudflare
+Worker over D1 via `dev:workers`, `build:workers`, and `test:workers`. It serves v2 GitHub account, native-client OAuth, Device control, and
 public catalog APIs alongside the managed-data v6 quota/Usage data APIs. It renders Quota Web documents through SvelteKit
 `Server.respond` as described in [ADR 0011](../../docs/decisions/0011-sveltekit-document-worker.md).
-The same source also runs as a Node process over a local SQLite file — see **Running on Node**
-below and [ADR 0049](../../docs/decisions/0049-one-relay-two-runtimes.md).
 
 QuotaBar and Quota Web speak managed-data v6, the only data contract this Worker serves. A client
 that speaks an older version is refused rather than translated; see
@@ -88,11 +87,24 @@ it asserted about itself. How recently it spoke is derived by the reader from th
 Relay stores no device-reported health. See
 [ADR 0022](../../docs/decisions/0022-minimal-diagnostics.md).
 
-Apply local D1 migrations before starting Wrangler:
+Local development is the Node process. `pnpm dev` (or root `pnpm dev:relay`) builds the website,
+bundles `src/node.ts`, then watches with `esbuild --watch` and `node --watch`. The SQLite file is
+`apps/relay/data/relay.sqlite` (gitignored; override with `RELAY_SQLITE_PATH`). The process applies
+pending migrations on start. Secrets come from the environment or `apps/relay/.env` (gitignored;
+same names as [the self-host example](../../deploy/relay/relay.env.example)).
+
+```bash
+pnpm dev
+pnpm test
+pnpm build
+```
+
+Workers commands stay explicit: `pnpm dev:workers`, `pnpm test:workers`, `pnpm build:workers`
+(website, Workers integration, wrangler dry-run). Apply local D1 migrations before Wrangler:
 
 ```bash
 pnpm d1:migrate:local
-pnpm dev
+pnpm dev:workers
 ```
 
 The Worker requires these secrets:
@@ -185,11 +197,10 @@ The Worker and the Node process are one source tree: everything that differs bet
 [`src/platform/`](./src/platform) and in the two entry points, `src/cloudflare.ts` and
 `src/node.ts` ([ADR 0049](../../docs/decisions/0049-one-relay-two-runtimes.md)).
 
-```bash
-pnpm --filter @gotry-io/quota-web build      # the client files the Node process serves
-pnpm --filter @gotry-io/quota-relay build:node
-pnpm --filter @gotry-io/quota-relay start:node
-```
+`pnpm dev` is the everyday loop (website build, then the Node bundle with watch). A one-shot
+production-shaped run is `pnpm build` (the website, then the same `build:node` the Dockerfile
+runs) and `pnpm start:node`. `test` is the Node + SQLite suite, including `test/platform`;
+`test:node:integration` is the integration files against in-memory SQLite after a website build.
 
 `build:node` bundles `src/node.ts` to `dist/node/server.mjs` with esbuild, leaving
 `better-sqlite3` external because it is a native module; `start:node` runs it. The process applies
@@ -201,7 +212,7 @@ It reads the same secrets the Worker does, from the environment, plus three of i
 
 | Variable | Default | What it is |
 | --- | --- | --- |
-| `RELAY_SQLITE_PATH` | `/data/relay.sqlite` | The SQLite file. WAL, foreign keys on. |
+| `RELAY_SQLITE_PATH` | `/data/relay.sqlite` | The SQLite file. WAL, foreign keys on. Local `pnpm dev` uses `apps/relay/data/relay.sqlite`. |
 | `RELAY_STATIC_DIR` | `apps/web/.svelte-kit/output/client` | The built website's client files. |
 | `PORT` | `8787` | The port to listen on. |
 | `RELAY_TRUSTED_PROXIES` | loopback, RFC1918, unique-local IPv6 | CIDRs/addresses whose chosen client-address header Node will honour. Invalid values refuse to start. |

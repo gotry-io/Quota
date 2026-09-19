@@ -5,11 +5,12 @@ import { configDefaults, defineConfig } from "vitest/config";
 const migrations = await readD1Migrations("./migrations");
 
 /**
- * Both runtimes, in one run.
+ * `pnpm test:workers`: both runtimes, in one run.
  *
  * The Workers project is the deployment Cloudflare runs; the platform project is the SQLite
  * driver and the migration runner, which cannot be exercised inside workerd at all
- * ([ADR 0049](../../docs/decisions/0049-one-relay-two-runtimes.md)).
+ * ([ADR 0049](../../docs/decisions/0049-one-relay-two-runtimes.md)). Everyday `pnpm test` is
+ * `vitest.node.config.ts`.
  */
 export default defineConfig({
   test: {

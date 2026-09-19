@@ -29,7 +29,7 @@ pnpm --filter @gotry-io/quota-web build
 ```
 
 `pnpm dev:web` is fast HMR and is not a real GitHub login. `pnpm dev:relay` is the composed
-Worker. Browser GitHub login on localhost is not available.
+Node Relay (built website, local SQLite). Browser GitHub login on localhost is not available.
 
 `test` keeps the existing `node --test` files and then runs Vitest. `test:unit` is Vitest
 alone. `test:e2e` starts `vite dev` with `QUOTA_DEV_VIEWER=octocat` so `/my` is a signed-in shell;
