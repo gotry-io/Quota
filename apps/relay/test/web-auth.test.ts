@@ -215,9 +215,12 @@ describe("browser sign-in through GitHub", () => {
     );
     expect(noCookie.status).toBe(400);
 
+    // Change the last character for certain: replacing it with a fixed one is a no-op whenever
+    // the signed value already ends in it.
+    const tampered = `${handoff.value.slice(0, -1)}${handoff.value.endsWith("0") ? "1" : "0"}`;
     const tamperedCookie = await relay.app.request(
       `${origin}/api/auth/github/callback?code=first-code&state=${encodeURIComponent(state)}`,
-      { headers: { Cookie: `${handoff.name}=${handoff.value.slice(0, -2)}ff` } },
+      { headers: { Cookie: `${handoff.name}=${tampered}` } },
     );
     expect(tamperedCookie.status).toBe(400);
 
