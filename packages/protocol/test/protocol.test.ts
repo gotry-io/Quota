@@ -9,6 +9,8 @@ import {
   AccountSummarySchema,
   AccountUsageActivityResponseReadSchema,
   AccountUsageActivityResponseSchema,
+  AccountUsagePeriodResponseReadSchema,
+  AccountUsagePeriodResponseSchema,
   AppleNativeSignInRequestSchema,
   BrowserLoginExchangeRequestSchema,
   DeviceProfileUpdateRequestSchema,
@@ -882,6 +884,43 @@ describe("quota protocol", () => {
         extra: true,
       }).success,
     ).toBe(true);
+    const period = accountPeriod();
+    expect(AccountUsagePeriodResponseSchema.safeParse(period).success).toBe(true);
+    expect(AccountUsagePeriodResponseSchema.safeParse({ ...period, extra: true }).success).toBe(
+      false,
+    );
+    expect(AccountUsagePeriodResponseReadSchema.safeParse({ ...period, extra: true }).success).toBe(
+      true,
+    );
+    expect(
+      protocol.UsagePeriodRangeSchema.safeParse({
+        from: "2024-01-01",
+        to: "2024-12-31",
+        timezone: "UTC",
+      }).success,
+    ).toBe(true);
+    expect(
+      protocol.UsagePeriodRangeSchema.safeParse({
+        from: "2024-01-01",
+        to: "2025-01-01",
+        timezone: "UTC",
+      }).success,
+    ).toBe(false);
+    expect(
+      protocol.UsagePeriodRangeSchema.safeParse({
+        from: "2026-08-10",
+        to: "2026-08-10",
+      }).success,
+    ).toBe(false);
+    expect(
+      AccountUsagePeriodResponseSchema.safeParse({
+        ...period,
+        days: [
+          { date: "2026-08-03", totals: emptyTotals(), cost: emptyCost(), partial: false },
+          { date: "2026-08-02", totals: emptyTotals(), cost: emptyCost(), partial: false },
+        ],
+      }).success,
+    ).toBe(false);
     const summary = accountSummary();
     expect(
       AccountSummarySchema.safeParse({
@@ -1376,6 +1415,36 @@ function emptyPeriod() {
     cache_saved: emptySaving(),
     partial: false,
     agents: [],
+  };
+}
+
+function accountPeriod() {
+  return {
+    protocol_version: 6 as const,
+    request: { from: "2026-08-02", to: "2026-08-02", timezone: "UTC" },
+    bounds: {
+      start: "2026-08-02T00:00:00Z",
+      end: "2026-08-03T00:00:00Z",
+      grid: protocol.USAGE_HOUR_GRID_RULE,
+    },
+    totals: emptyTotals(),
+    cost: emptyCost(),
+    cache_saved: emptySaving(),
+    days: [{ date: "2026-08-02", totals: emptyTotals(), cost: emptyCost(), partial: false }],
+    coverage: {
+      partial: false,
+      daily_retained_from: null,
+      hourly_retained_from: null,
+      truncated_by_retention: false,
+    },
+    revision: {
+      usage_revision: 1,
+      device_generation: 1,
+      account_updated_at: "2026-08-02T12:00:00Z",
+      pricing_revision: "pricing_1",
+      model_catalog_revision: "models_1",
+      fold_version: 1,
+    },
   };
 }
 

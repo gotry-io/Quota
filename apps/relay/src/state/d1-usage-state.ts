@@ -4,12 +4,15 @@ import type {
   LeaderboardRow,
   StoredUsageDailyRow,
   StoredUsageHourlyRow,
+  StoredUsageLocalDayRow,
   UsageBoundaryQuery,
   UsageBoundaryResult,
   UsageDailyQuery,
   UsageDailyResult,
   UsageHourlyQuery,
   UsageHourlyResult,
+  UsageLocalDayQuery,
+  UsageLocalDayResult,
   UsageState,
   UsageUpload,
   UsageWriteResult,
@@ -51,6 +54,10 @@ interface StoredDailyRow extends Omit<StoredUsageDailyRow, "source_cost_microusd
 }
 
 interface StoredHourlyRow extends Omit<StoredUsageHourlyRow, "source_cost_microusd"> {
+  source_cost_microusd: string | null;
+}
+
+interface StoredLocalDayRow extends Omit<StoredUsageLocalDayRow, "source_cost_microusd"> {
   source_cost_microusd: string | null;
 }
 
@@ -301,6 +308,58 @@ export class D1UsageState implements UsageState {
     };
   }
 
+  /**
+   * Hours of an Account period, grouped in SQL to one pricing identity per local date.
+   *
+   * The windows are a `json_each` CTE (one bind, not one placeholder per day) so D1 and SQLite
+   * run the same statement. Each hour lands in exactly one window because the hour-grid rule
+   * assigns a fractional-offset midnight to the previous local day. Agent is folded away:
+   * days[] prices channel/model/dimensions, not the agent tree.
+   */
+  async queryLocalDayUsage(
+    accountId: string,
+    query: UsageLocalDayQuery,
+  ): Promise<UsageLocalDayResult> {
+    if (query.windows.length === 0) return { rows: [], truncated: false };
+    const rows = await this.database
+      .prepare(
+        `WITH windows(date, start_utc, end_utc) AS (
+           SELECT json_extract(window.value, '$.date'),
+                  json_extract(window.value, '$.start'),
+                  json_extract(window.value, '$.end')
+           FROM json_each(?2) AS window
+         )
+         SELECT windows.date AS date, MIN(hourly.agent) AS agent,
+                ${identityColumns.map((column) => `hourly.${column}`).join(", ")},
+                ${countColumns.map((column) => `SUM(hourly.${column}) AS ${column}`).join(", ")},
+                CASE
+                  WHEN SUM(hourly.source_cost_covered_requests) > 0
+                    THEN CAST(
+                      SUM(CAST(COALESCE(hourly.source_cost_microusd, '0') AS INTEGER)) AS TEXT
+                    )
+                  ELSE NULL
+                END AS source_cost_microusd,
+                SUM(hourly.source_cost_covered_requests) AS source_cost_covered_requests,
+                SUM(hourly.partial) AS partial_hours
+         FROM devices
+         CROSS JOIN windows
+         INNER JOIN usage_hourly AS hourly
+                 ON hourly.device_id = devices.id
+                AND hourly.bucket_start_utc >= windows.start_utc
+                AND hourly.bucket_start_utc < windows.end_utc
+         WHERE devices.account_id = ?1 AND devices.deleted_at IS NULL
+         GROUP BY windows.date, ${identityColumns.map((column) => `hourly.${column}`).join(", ")}
+         ORDER BY windows.date ASC, ${identityColumns.map((column) => `hourly.${column} ASC`).join(", ")}
+         LIMIT ?3`,
+      )
+      .bind(accountId, JSON.stringify(query.windows), query.limit + 1)
+      .all<StoredLocalDayRow>();
+    return {
+      rows: rows.results.slice(0, query.limit).map(localDayRow),
+      truncated: rows.results.length > query.limit,
+    };
+  }
+
   async readUsageFold(accountId: string, foldKey: string): Promise<string | null> {
     const row = await this.database
       .prepare(
@@ -522,6 +581,10 @@ function dailyRow({ source_cost_microusd, ...row }: StoredDailyRow): StoredUsage
 }
 
 function hourlyRow({ source_cost_microusd, ...row }: StoredHourlyRow): StoredUsageHourlyRow {
+  return { ...row, ...(source_cost_microusd === null ? {} : { source_cost_microusd }) };
+}
+
+function localDayRow({ source_cost_microusd, ...row }: StoredLocalDayRow): StoredUsageLocalDayRow {
   return { ...row, ...(source_cost_microusd === null ? {} : { source_cost_microusd }) };
 }
 

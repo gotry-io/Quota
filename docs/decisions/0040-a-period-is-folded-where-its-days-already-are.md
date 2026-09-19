@@ -4,6 +4,9 @@
 - Date: 2026-09-06
 - Extends [ADR 0024](0024-hour-versioned-usage-and-daily-rollups.md) and
   [ADR 0031](0031-the-usage-fold-is-stored.md)
+- Updated 2026-09-19 by [ADR 0055](0055-an-account-period-is-a-local-date-range.md): Relay now
+  answers an additive local-date period read. Client UTC-day folds remain until those clients
+  switch onto that read.
 
 ## Context
 

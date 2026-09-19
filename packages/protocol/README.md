@@ -58,6 +58,10 @@ shape of a released contract still moves its version.
   and how observations resolve into subscriptions. Relay resolves them once for every reader
   ([ADR 0024](../../docs/decisions/0024-hour-versioned-usage-and-daily-rollups.md)), so the merge
   cases are answered by `packages/quota-model` and by the Rust two-way merge.
+- `fixtures/usage-period-conformance.json` states the Account period read: inclusive local dates
+  in a required IANA timezone, the hour-grid rule, presets as the same read, missing ≠ zero,
+  deletion, and retention coverage. Relay answers it as producer
+  ([ADR 0055](../../docs/decisions/0055-an-account-period-is-a-local-date-range.md)).
 - A Usage upload names whole UTC hours. `UsageRow` carries what it measures and no instant: the hour
   that carries it says when, and its `scan_version` says whether this reading of that hour is newer
   than the stored one. `DatedUsageRow` is the same row projected out of the daily rollup for
