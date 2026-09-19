@@ -63,6 +63,9 @@ shape of a released contract still moves its version.
   in a required IANA timezone, the hour-grid rule, presets as the same read, missing ≠ zero,
   deletion, and retention coverage. Relay answers it as producer
   ([ADR 0055](../../docs/decisions/0055-an-account-period-is-a-local-date-range.md)).
+- `fixtures/usage-export-conformance.json` states the CSV / JSON a Usage period export writes from
+  the period already on screen. The website and QuotaBar both answer it
+  ([ADR 0056](../../docs/decisions/0056-a-period-export-is-the-period-on-screen.md)).
 - A Usage upload names whole UTC hours. `UsageRow` carries what it measures and no instant: the hour
   that carries it says when, and its `scan_version` says whether this reading of that hour is newer
   than the stored one. `DatedUsageRow` is the same row projected out of the daily rollup for

@@ -91,7 +91,7 @@ The process has a regular-app menu bar:
 
 - **QuotaBar:** About QuotaBar, Check for Updates…, Settings… ⌘,, Services, Hide QuotaBar ⌘H,
   Hide Others ⌥⌘H, Show All, Quit QuotaBar ⌘Q, Quit QuotaBar Completely ⌥⌘Q.
-- **File:** Close ⌘W.
+- **File:** Export Usage… (CSV or JSON of the selected period), Close ⌘W.
 - **Edit:** Undo, Redo, Cut, Copy, Paste, Select All.
 - **View:** Quota ⌘1, Usage ⌘2, Settings ⌘3, Refresh ⌘R, Enter Full Screen (⌃⌘F).
 - **Window:** Minimize ⌘M, Zoom, QuotaBar (brings the main window front), Bring All to Front.
@@ -113,7 +113,8 @@ lines). The **Agents** row keeps a `.badge` of
 **· 1 needs sign-in**; the Agents page is a two-column list and provider detail.
 
 The Usage toolbar holds a Usage source picker (**Account** / **This Mac**) when Account data is
-available and Usage sync is on, then a flexible spacer, then **Refresh**. Quota's toolbar is
+available and Usage sync is on, then **Export** for the selected period (CSV or JSON, the same
+file File › Export Usage… writes), then a flexible spacer, then **Refresh**. Quota's toolbar is
 Refresh only: the subscription list replaced the provider menu, and remaining history no longer
 uses a range control. On macOS 26 `ToolbarSpacer` separates those groups into glass capsules;
 on 14/15 the same items appear without spacers. Refresh is on every page.
@@ -131,7 +132,8 @@ lives. It does not collect, and every number the Quota and Usage pages show is a
 this Mac: local samples through `quota_history`, and the current reading Overview already has.
 
 The Usage toolbar holds a Usage source picker (**Account** / **This Mac**) that the Usage page
-honors, and a refresh action that uses the same tooltip as the panel footer: **Refresh all quota.
+honors, **Export** for the selected period, and a refresh action that uses the same tooltip as
+the panel footer: **Refresh all quota.
 Updated 3m ago**, or **Not checked** before any sync. The Usage source picker is hidden when
 Account data is unavailable or Usage sync is disabled; in those states Usage is unambiguously
 This Mac. Changing source preserves the selected period. Refresh is on every page. Quota has no
@@ -214,6 +216,9 @@ because the hours behind them moved. If the selected source has no snapshot yet 
 component is still refreshing, the page says **Preparing Usage…** instead of implying Usage is
 absent. After refresh finishes with no snapshot, it says **No Usage is available for this period.**
 A range retention has cut prints **This range goes past what Quota still keeps.**
+**Export** (toolbar and File › Export Usage…) writes the period already on screen as CSV or JSON —
+the same local dates, zone, and API-equivalent cost — and is off for All unless that period named
+`days[]` ([ADR 0056](../../docs/decisions/0056-a-period-export-is-the-period-on-screen.md)).
 Preparing and empty Usage remain section states below the period tabs because those controls are
 still useful. Cached account refresh failures and partial Usage warnings are inline notices and do
 not replace available content.

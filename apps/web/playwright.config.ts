@@ -6,7 +6,9 @@ const baseURL = `http://127.0.0.1:${port}`;
 export default defineConfig({
   testDir: "./e2e",
   testIgnore:
-    process.env.SCREENSHOTS === "1" ? [] : ["**/screenshots.spec.ts", "**/a4c-shots.spec.ts"],
+    process.env.SCREENSHOTS === "1"
+      ? []
+      : ["**/screenshots.spec.ts", "**/a4c-shots.spec.ts", "**/b8-shots.spec.ts"],
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,

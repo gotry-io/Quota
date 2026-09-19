@@ -1,0 +1,190 @@
+{
+  "$comment": "How a Usage period export is written. The website and QuotaBar both answer this file. CSV is one row per local date in the asked [from, to]; a date absent from days[] is an empty row marked no usage recorded in cost status, and is omitted from JSON days (missing ≠ zero). Unpriced cost is empty / null with status unpriced, never 0. Text cells that start with =, +, -, @, tab, or CR are prefixed with a single quote; numbers stay plain; RFC 4180 quoting. See ADR 0056.",
+  "csv_header": "date,total tokens,input,output,cache read,cache write,reasoning,messages,API-equivalent cost,cost status",
+  "csv_cell_cases": [
+    { "name": "formula_equals", "input": "=1+1", "kind": "text", "expected": "'=1+1" },
+    { "name": "formula_plus", "input": "+SUM(A1)", "kind": "text", "expected": "'+SUM(A1)" },
+    { "name": "formula_minus", "input": "-1", "kind": "text", "expected": "'-1" },
+    { "name": "formula_at", "input": "@cmd", "kind": "text", "expected": "'@cmd" },
+    { "name": "formula_tab", "input": "\tTAB", "kind": "text", "expected": "'\tTAB" },
+    { "name": "formula_cr", "input": "\rCR", "kind": "text", "expected": "\"'\rCR\"" },
+    { "name": "comma", "input": "hello, world", "kind": "text", "expected": "\"hello, world\"" },
+    { "name": "quotes", "input": "say \"hi\"", "kind": "text", "expected": "\"say \"\"hi\"\"\"" },
+    { "name": "plain", "input": "plain", "kind": "text", "expected": "plain" },
+    { "name": "empty", "input": "", "kind": "text", "expected": "" },
+    { "name": "number", "input": "12", "kind": "number", "expected": "12" },
+    { "name": "decimal", "input": "1.49", "kind": "number", "expected": "1.49" },
+    { "name": "negative_number", "input": "-3", "kind": "number", "expected": "-3" }
+  ],
+  "cases": [
+    {
+      "name": "missing_and_unpriced",
+      "input": {
+        "scope": "Account",
+        "from": "2026-08-26",
+        "to": "2026-08-28",
+        "timezone": "Asia/Singapore",
+        "bounds": {
+          "start": "2026-08-25T16:00:00Z",
+          "end": "2026-08-28T16:00:00Z",
+          "grid": "first_whole_hour_of_local_date; fractional_midnight_to_previous_day; no_proration"
+        },
+        "cost_basis": "API-equivalent",
+        "coverage": { "partial": true, "truncated_by_retention": false },
+        "revision": {
+          "usage_revision": 4,
+          "device_generation": 1,
+          "account_updated_at": "2026-08-28T10:00:00Z",
+          "pricing_revision": "pricing_1",
+          "model_catalog_revision": "models_1",
+          "fold_version": 1
+        },
+        "exported_at": "2026-09-20T12:00:00Z",
+        "app_version": "0.0.6",
+        "days": [
+          {
+            "date": "2026-08-26",
+            "totals": {
+              "total_tokens": 100,
+              "input_tokens": 80,
+              "output_tokens": 20,
+              "cache_read_input_tokens": 10,
+              "cache_write_input_tokens": 0,
+              "reasoning_tokens": 5,
+              "messages": 2
+            },
+            "cost": { "amount_microusd": "1490000", "status": "complete" }
+          },
+          {
+            "date": "2026-08-28",
+            "totals": {
+              "total_tokens": 50,
+              "input_tokens": 40,
+              "output_tokens": 10,
+              "cache_read_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "reasoning_tokens": 0,
+              "messages": 1
+            },
+            "cost": { "amount_microusd": null, "status": "unavailable" }
+          }
+        ]
+      },
+      "expected_csv": "date,total tokens,input,output,cache read,cache write,reasoning,messages,API-equivalent cost,cost status\n2026-08-26,100,80,20,10,0,5,2,1.49,complete\n2026-08-27,,,,,,,,,no usage recorded\n2026-08-28,50,40,10,0,0,0,1,,unpriced\n",
+      "expected_json": {
+        "scope": "Account",
+        "from": "2026-08-26",
+        "to": "2026-08-28",
+        "timezone": "Asia/Singapore",
+        "bounds": {
+          "start": "2026-08-25T16:00:00Z",
+          "end": "2026-08-28T16:00:00Z",
+          "grid": "first_whole_hour_of_local_date; fractional_midnight_to_previous_day; no_proration"
+        },
+        "cost_basis": "API-equivalent",
+        "coverage": { "partial": true, "truncated_by_retention": false },
+        "revision": {
+          "usage_revision": 4,
+          "device_generation": 1,
+          "account_updated_at": "2026-08-28T10:00:00Z",
+          "pricing_revision": "pricing_1",
+          "model_catalog_revision": "models_1",
+          "fold_version": 1
+        },
+        "exported_at": "2026-09-20T12:00:00Z",
+        "app_version": "0.0.6",
+        "days": [
+          {
+            "date": "2026-08-26",
+            "total_tokens": 100,
+            "input_tokens": 80,
+            "output_tokens": 20,
+            "cache_read_tokens": 10,
+            "cache_write_tokens": 0,
+            "reasoning_tokens": 5,
+            "messages": 2,
+            "api_equivalent_cost": "1.49",
+            "cost_status": "complete"
+          },
+          {
+            "date": "2026-08-28",
+            "total_tokens": 50,
+            "input_tokens": 40,
+            "output_tokens": 10,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "reasoning_tokens": 0,
+            "messages": 1,
+            "api_equivalent_cost": null,
+            "cost_status": "unpriced"
+          }
+        ]
+      }
+    },
+    {
+      "name": "partial_cost_and_this_mac",
+      "input": {
+        "scope": "This Mac",
+        "from": "2026-08-26",
+        "to": "2026-08-26",
+        "timezone": "America/Los_Angeles",
+        "bounds": {
+          "start": "2026-08-26T07:00:00Z",
+          "end": "2026-08-27T07:00:00Z",
+          "grid": "first_whole_hour_of_local_date; fractional_midnight_to_previous_day; no_proration"
+        },
+        "cost_basis": "API-equivalent",
+        "coverage": { "partial": false, "truncated_by_retention": true },
+        "revision": null,
+        "exported_at": "2026-09-20T12:00:00Z",
+        "app_version": "0.2.6",
+        "days": [
+          {
+            "date": "2026-08-26",
+            "totals": {
+              "total_tokens": 12,
+              "input_tokens": 10,
+              "output_tokens": 2,
+              "cache_read_input_tokens": 0,
+              "cache_write_input_tokens": 0,
+              "reasoning_tokens": 0,
+              "messages": 1
+            },
+            "cost": { "amount_microusd": "3138", "status": "partial" }
+          }
+        ]
+      },
+      "expected_csv": "date,total tokens,input,output,cache read,cache write,reasoning,messages,API-equivalent cost,cost status\n2026-08-26,12,10,2,0,0,0,1,0.003138,partial\n",
+      "expected_json": {
+        "scope": "This Mac",
+        "from": "2026-08-26",
+        "to": "2026-08-26",
+        "timezone": "America/Los_Angeles",
+        "bounds": {
+          "start": "2026-08-26T07:00:00Z",
+          "end": "2026-08-27T07:00:00Z",
+          "grid": "first_whole_hour_of_local_date; fractional_midnight_to_previous_day; no_proration"
+        },
+        "cost_basis": "API-equivalent",
+        "coverage": { "partial": false, "truncated_by_retention": true },
+        "revision": null,
+        "exported_at": "2026-09-20T12:00:00Z",
+        "app_version": "0.2.6",
+        "days": [
+          {
+            "date": "2026-08-26",
+            "total_tokens": 12,
+            "input_tokens": 10,
+            "output_tokens": 2,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "reasoning_tokens": 0,
+            "messages": 1,
+            "api_equivalent_cost": "0.003138",
+            "cost_status": "partial"
+          }
+        ]
+      }
+    }
+  ]
+}
