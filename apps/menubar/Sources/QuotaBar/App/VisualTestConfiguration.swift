@@ -89,14 +89,22 @@
     var mainPage: MainPage? {
       switch self {
       case .mainQuota, .mainQuotaCodex: .quota
-      case .mainToday: .today
-      case .mainUsage, .mainUsageLocal: .usage
+      case .mainToday, .mainUsage, .mainUsageLocal: .usage
       case .mainAccount: .account
       case .mainAgents, .mainAgentsCodex, .mainAgentsLiteLLMKey: .agents
       case .mainNotifications: .notifications
       case .mainMenuBar: .menuBar
       case .mainGeneral: .general
       case .mainSupport: .support
+      default: nil
+      }
+    }
+
+    /// `main-today` is Usage with the Today period so the folded windows table is in frame.
+    var usagePeriod: UsagePeriodSelection? {
+      switch self {
+      case .mainToday: .today
+      case .mainUsage, .mainUsageLocal: .last7Days
       default: nil
       }
     }
@@ -209,14 +217,20 @@
     var agentsProvider: ProviderID? { route.agentsProvider }
     var quotaSelection: ProviderID? { route.quotaSelection }
     var usageSource: UsageSource { route.usageSource }
+    var usagePeriod: UsagePeriodSelection? { route.usagePeriod }
     var hostsTitledWindow: Bool { hostsMainWindow }
 
     @MainActor
     func makeModel() -> MenuBarViewModel {
-      switch dataSource {
-      case .fixture: fixture.makeModel(referenceDate: referenceDate)
-      case .live: MenuBarViewModel()
+      let model: MenuBarViewModel =
+        switch dataSource {
+        case .fixture: fixture.makeModel(referenceDate: referenceDate)
+        case .live: MenuBarViewModel()
+        }
+      if let usagePeriod {
+        model.usage.selectUsagePeriod(usagePeriod)
       }
+      return model
     }
 
     @MainActor

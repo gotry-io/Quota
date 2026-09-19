@@ -2,7 +2,7 @@ import QuotaPresentation
 import QuotaWire
 import SwiftUI
 
-/// Main window root: one sidebar of Quota and Settings groups, detail per `MainPage`.
+/// Main window root: Quota and Usage as top-level rows, then a Settings group.
 struct MainWindowView: View {
   @Bindable var model: MenuBarViewModel
   var pageOverride: MainPage? = nil
@@ -14,8 +14,6 @@ struct MainWindowView: View {
   @State private var dashboard: DashboardModel
   @State private var diagnostics: DiagnosticsPageModel
   @AppStorage(MainPage.storageKey) private var storedPage = MainPage.quota
-  @AppStorage(ResetCopyStylePreference.storageKey) private var resetCopyStyle =
-    ResetCopyStylePreference.fallback
 
   init(
     model: MenuBarViewModel,
@@ -33,6 +31,7 @@ struct MainWindowView: View {
     self.expandsDiagnostics = expandsDiagnostics
     self.initialAgentsProvider = initialAgentsProvider
     nowOverride = now
+    MainPage.migrateLegacyStoredPage(in: defaults)
     _dashboard = State(
       initialValue: DashboardModel(
         model: model,
@@ -60,8 +59,8 @@ struct MainWindowView: View {
     @Bindable var dashboard = dashboard
     NavigationSplitView(columnVisibility: .constant(.all)) {
       List(selection: pageSelection) {
-        Section("Quota") {
-          ForEach(MainPage.quotaGroup) { item in
+        Section {
+          ForEach(MainPage.quotaGroup + MainPage.usageGroup) { item in
             sidebarLabel(item).tag(item)
           }
         }
@@ -224,12 +223,6 @@ struct MainWindowView: View {
     case .quota:
       QuotaWindowScroll {
         DashboardView(dashboard: dashboard, now: now)
-      }
-    case .today:
-      QuotaWindowScroll {
-        DashboardTodayTable(
-          rows: dashboard.todayRows(now: now, resetStyle: resetCopyStyle.style)
-        )
       }
     case .usage:
       QuotaWindowScroll {

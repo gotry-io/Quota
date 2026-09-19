@@ -115,7 +115,8 @@
     )
     #expect(today.route == .mainToday)
     #expect(today.hostsMainWindow)
-    #expect(today.mainPage == .today)
+    #expect(today.mainPage == .usage)
+    #expect(today.usagePeriod == .today)
     #expect(today.initialPath.isEmpty)
 
     let usage = try #require(
@@ -125,6 +126,7 @@
     #expect(usage.hostsMainWindow)
     #expect(usage.mainPage == .usage)
     #expect(usage.usageSource == .account)
+    #expect(usage.usagePeriod == .last7Days)
     #expect(usage.initialPath.isEmpty)
 
     let local = try #require(
@@ -134,6 +136,7 @@
     #expect(local.hostsMainWindow)
     #expect(local.mainPage == .usage)
     #expect(local.usageSource == .local)
+    #expect(local.usagePeriod == .last7Days)
     #expect(local.initialPath.isEmpty)
   }
 

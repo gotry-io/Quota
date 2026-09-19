@@ -123,6 +123,27 @@
     }
 
     @Test
+    func todayWindowsTableBelongsToTheTodayUsagePeriod() throws {
+      let defaults = dashboardDefaults()
+      defer { defaults.tearDown() }
+      let referenceDate = Date(timeIntervalSince1970: 1_785_752_430)
+      let configuration = try #require(
+        VisualTestConfiguration(
+          arguments: ["QuotaBar", "--fixture", "content", "--route", "main-today"],
+          referenceDate: referenceDate
+        )
+      )
+      configuration.prepareEnvironment()
+      let model = configuration.makeModel()
+      let dashboard = DashboardModel(model: model, defaults: defaults.store)
+      #expect(dashboard.usagePeriod == .today)
+      #expect(dashboard.showsTodayWindows)
+      #expect(!dashboard.todayRows(now: referenceDate).isEmpty)
+      dashboard.selectUsagePeriod(.last7Days)
+      #expect(!dashboard.showsTodayWindows)
+    }
+
+    @Test
     func projectsTableIsAbsentForTheAccountSourceAndPresentOnThisMac() throws {
       let defaults = dashboardDefaults()
       defer { defaults.tearDown() }
