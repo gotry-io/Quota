@@ -110,10 +110,12 @@ The site has these routes:
    devices are reporting. Usage's status line is the selected period and whether that period is
    partial. Devices uses the Devices summary line. Settings has no status line. Each route is
    `noindex, nofollow`.
-   - `/my` — overview: remaining quota. A Subscriptions grid (each card a
+   - `/my` — overview: remaining quota. Compact subscription groups (each a
      link to `/my/subscriptions/<sel>`), a Today strip (Tokens, API-equivalent cost, and
      today's top model, linking `/my/usage?period=today`), and a one-line Devices summary
-     linking `/my/devices`. Next to each provider name, a 6 pt circle in `--meter-warn` (minor)
+     linking `/my/devices`. Groups size to their content in a bounded two-column grid
+     (one column below 620 px; max width `--content-width`). Remaining is the 28 px tabular
+     primary numeric; meters do not grow past `--quota-meter-max`. Next to each provider name, a 6 pt circle in `--meter-warn` (minor)
      or `--meter-critical` (major and critical) with `title` set to the official status-page
      description, from public `GET /api/v2/providers/status`, matching QuotaBar: no dot for
      `none` or `unknown`. `/u/<handle>` does not draw it. Overview does not repeat a cost block
@@ -159,12 +161,14 @@ The site has these routes:
    Quota remaining has no "left"/"remaining" suffix; usd/credits remaining of a cap use
    `$12.50 of $40.00` without a meter; other budget windows with an amount use `71% · $3.75`;
    percent-only windows use `71%`; and balance-only windows use **Balance** plus `$12.34`.
-   Quota cards follow the same provider / account / remaining / meter / metadata order
-   as QuotaBar Overview, in a denser web layout. The card head is the provider mark
-   (`/providers/*.svg`, or a first-letter color block), provider name, plan badge, and masked
-   account; each window is a row of name, remaining-percent meter, percent, and `Resets in 45m`;
-   the foot is `Studio Mac · 1m ago`. Quota cards share `.quota-grid`: two columns on
-   desktop and one column below 620 px. Cursor's Other Models percentage and included-usage
+   Overview quota groups follow the same provider / account / remaining / meter / metadata order
+   as QuotaBar Overview, in a denser web layout. The group head is one row: the provider mark
+   (`/providers/*.svg`, or a first-letter color block), provider name, masked account line, and
+   plan capsule. Each window is the title, remaining as the 28 px tabular primary numeric, a
+   remaining-percent meter capped at `--quota-meter-max`, reset copy, and the pace headline when
+   present; the foot is `Studio Mac · 1m ago`. Groups share `.quota-grid`: two columns at wide
+   widths (max `--content-width`) and one column below 620 px, aligned to the start so they do
+   not stretch to equal height. Cursor's Other Models percentage and included-usage
    dollar amount are separate provider meters: compact Quota cards show only the percentage; the
    subscription detail page shows both. Empty quota states span the full row and show the Mac
    setup sentence once. Selecting an Activity day loads that day's Usage under the grid. The
@@ -286,8 +290,9 @@ The landing is six blocks, in this order. It does not use slogan sections.
 ## Account dashboard
 
 The signed-in shell is `/my` with four routes — overview, Usage, Devices, and Settings — and one
-Account nav in the site header. The overview leads with remaining quota: subscription cards
-(a 6 pt incident dot beside the provider name when official status is minor or worse), then a
+Account nav in the site header. The overview leads with remaining quota: compact subscription
+groups (a 6 pt incident dot beside the provider name when official status is minor or worse),
+each sized to its windows rather than stretched to the tallest neighbour, then a
 Today strip (tokens, API-equivalent cost, today's top model), then a Devices summary line
 (`2 devices · all reporting` or `1 of 2 reporting`, plus the worst Device's verdict). It does
 not repeat a cost block or an Installations list. Under Usage, period tabs sit on the same row as
@@ -346,10 +351,11 @@ Relay response uses the same retry notice as the rest of the dashboard. An empty
 reads **No Usage on this day.** A 401 starts GitHub sign-in. The dashboard does not repeat the
 GitHub username in the page heading; the header account menu is the identity.
 
-Quota cards show one subscription, not one upload: an account collected on several Macs is one card
-carrying the reading that still describes it, with the reporting device and age on the foot
-(`Studio Mac · 1m ago`). A reading that aged out names why — **Not current — last reading 2d ago**
-— rather than as a current number, so the card needs no separate status pill. Other reporting
+Quota groups show one subscription, not one upload: an account collected on several Macs is one
+group carrying the reading that still describes it, with the reporting device and age on the foot
+(`Studio Mac · 1m ago`). Remaining is the dominant value; the plan capsule and device line are
+supporting. A reading that aged out names why — **Not current — last reading 2d ago**
+— rather than as a current number, so the group needs no separate status pill. Other reporting
 devices stay on the subscription detail page.
 
 The subscription detail page is `/my/subscriptions/<sel>`. Its header matches an Overview card:
