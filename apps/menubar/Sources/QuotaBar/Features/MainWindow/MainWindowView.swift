@@ -129,10 +129,10 @@ struct MainWindowView: View {
     .background(Color(nsColor: .windowBackgroundColor))
     .sheet(
       item: Binding(
-        get: { model.browserSessionPopup },
+        get: { model.browserConnection.browserSessionPopup },
         set: { newValue in
           if newValue == nil {
-            model.cancelProviderBrowserSessionFlow()
+            model.browserConnection.cancelProviderBrowserSessionFlow()
           }
         }
       )
@@ -162,8 +162,8 @@ struct MainWindowView: View {
           message: BrowserSessionCopy.scanConsentMessage(provider: provider, spec: spec),
           confirmTitle: BrowserSessionCopy.consentConfirmTitle,
           style: .sheet,
-          onCancel: model.cancelProviderBrowserSessionFlow,
-          onConfirm: model.confirmProviderBrowserSessionConsent
+          onCancel: model.browserConnection.cancelProviderBrowserSessionFlow,
+          onConfirm: model.browserConnection.confirmProviderBrowserSessionConsent
         )
       }
     }

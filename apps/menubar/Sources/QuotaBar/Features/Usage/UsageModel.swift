@@ -14,8 +14,9 @@ protocol UsageTransport: Sendable {
   func quotaHistory(since: Date) async throws -> LocalServiceQuotaHistory
 }
 
-/// Usage, history, and the monthly budget. Login, browser consent, and quota projection stay
-/// on ``MenuBarViewModel``, which hands each accepted service state through ``acceptState``.
+/// Usage, history, and the monthly budget. Login and quota projection stay on
+/// ``MenuBarViewModel``, which hands each accepted service state through ``acceptState``.
+/// Browser consent lives on ``BrowserConnectionModel``.
 @Observable
 @MainActor
 final class UsageModel {

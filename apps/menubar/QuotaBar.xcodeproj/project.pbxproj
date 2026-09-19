@@ -51,6 +51,7 @@
 		5C310D1A506DF833326D29DD /* MainWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B11EBD81931C712D07914C8 /* MainWindowController.swift */; };
 		5F8832B68DE906714713F12A /* VisualQuotaHistoryFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4454D98552DF222BB868829F /* VisualQuotaHistoryFixture.swift */; };
 		608B8A91FDDC452648C6B931 /* QuotaCollectionReport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14464EE21ADFF1D37CDE533B /* QuotaCollectionReport.swift */; };
+		63B78B1413F351D877897DDC /* BrowserConnectionModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F194A142DA65D8296C0796D1 /* BrowserConnectionModel.swift */; };
 		64D7D47E30F7FD504C598B35 /* BrowserSessionImporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EC8FC4F1A53DB20C35B26F7 /* BrowserSessionImporter.swift */; };
 		65577EA8A1E06E342D76EE38 /* UsageModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD1A5817AE471128141D72FC /* UsageModel.swift */; };
 		68DB46B27A7694A2EC73194A /* LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = 87A6E2941984FE94D4FFB960 /* LICENSE */; };
@@ -255,6 +256,7 @@
 		EEC82E99182A3D1F5FBF65C0 /* ProviderQuotaView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProviderQuotaView.swift; sourceTree = "<group>"; };
 		EED346DC8085436F3BC4519E /* SettingsSupportView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsSupportView.swift; sourceTree = "<group>"; };
 		F10EEA1E3E1604D46CBABE83 /* DesktopWidgetPublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopWidgetPublisher.swift; sourceTree = "<group>"; };
+		F194A142DA65D8296C0796D1 /* BrowserConnectionModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserConnectionModel.swift; sourceTree = "<group>"; };
 		F453874DB9C6C73240C58F3F /* AppIntents.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppIntents.framework; path = System/Library/Frameworks/AppIntents.framework; sourceTree = SDKROOT; };
 		FC43D30461CC4F7B4D59C33A /* QuotaStateViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaStateViews.swift; sourceTree = "<group>"; };
 		FD1A5817AE471128141D72FC /* UsageModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageModel.swift; sourceTree = "<group>"; };
@@ -391,6 +393,14 @@
 			path = Appearance;
 			sourceTree = "<group>";
 		};
+		4B453FD9AC7F66D30F4CEAF5 /* BrowserConnection */ = {
+			isa = PBXGroup;
+			children = (
+				F194A142DA65D8296C0796D1 /* BrowserConnectionModel.swift */,
+			);
+			path = BrowserConnection;
+			sourceTree = "<group>";
+		};
 		4EE3FBE6E85C3ABDE8DBB755 /* Dashboard */ = {
 			isa = PBXGroup;
 			children = (
@@ -459,6 +469,7 @@
 		6EBA4F1ABFED7229039BB376 /* Features */ = {
 			isa = PBXGroup;
 			children = (
+				4B453FD9AC7F66D30F4CEAF5 /* BrowserConnection */,
 				4EE3FBE6E85C3ABDE8DBB755 /* Dashboard */,
 				8EF9A789DEB8197A15DF5E34 /* MainWindow */,
 				18F13CA0B775301FAA6433F2 /* MenuBar */,
@@ -778,6 +789,7 @@
 				4719146847D949B318579AF5 /* AppMetadata.swift in Sources */,
 				96C6E0889C4135B63E1C5963 /* BrowserAccessProbe.swift in Sources */,
 				B98A4A8A21F13769EF86887D /* BrowserAccessWindowController.swift in Sources */,
+				63B78B1413F351D877897DDC /* BrowserConnectionModel.swift in Sources */,
 				94DCB4577E97CCD7C020F24D /* BrowserSessionCopy.swift in Sources */,
 				64D7D47E30F7FD504C598B35 /* BrowserSessionImporter.swift in Sources */,
 				9FFADA620D6D9C9BEFB0CC6A /* CacheRebuildNotice.swift in Sources */,

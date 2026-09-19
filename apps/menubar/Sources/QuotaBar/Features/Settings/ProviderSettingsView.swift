@@ -301,8 +301,9 @@ struct ProviderSettingsView: View {
 
   @ViewBuilder
   private func browserRow(_ rung: SignInRung) -> some View {
-    let enabled = model.browserScanEnabled.contains(provider)
-    let waiting = model.browserSessionWaitingProvider == provider
+    let connection = model.browserConnection
+    let enabled = connection.browserScanEnabled.contains(provider)
+    let waiting = connection.browserSessionWaitingProvider == provider
     SettingsListRow(
       title: rung.title,
       subtitle: rung.detail,
@@ -313,7 +314,7 @@ struct ProviderSettingsView: View {
         rung.title,
         isOn: Binding(
           get: { enabled },
-          set: { model.setBrowserScanEnabled(provider, enabled: $0) }
+          set: { connection.setBrowserScanEnabled(provider, enabled: $0) }
         )
       )
       .labelsHidden()
@@ -327,16 +328,16 @@ struct ProviderSettingsView: View {
     .accessibilityHint("Use sign-ins from browsers on this Mac")
     .disabled(waiting)
 
-    if waiting, let activity = model.browserSessionActivityText {
+    if waiting, let activity = connection.browserSessionActivityText {
       Text(activity)
         .quotaMetaStyle()
         .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
         .padding(.bottom, QuotaDesign.Spacing.xxs)
     }
 
-    if enabled, let summary = model.browserAccessSummary {
+    if enabled, let summary = connection.browserAccessSummary {
       Button {
-        model.showBrowserAccessGrants()
+        connection.showBrowserAccessGrants()
       } label: {
         SettingsListRow(
           title: BrowserSessionCopy.accessRowTitle,
@@ -354,8 +355,8 @@ struct ProviderSettingsView: View {
       .accessibilityHint("Opens the Browser Access window")
     }
 
-    if let denial = model.browserSessionAccessDenials[provider],
-      !model.coversAccessDenial(denial)
+    if let denial = connection.browserSessionAccessDenials[provider],
+      !connection.coversAccessDenial(denial)
     {
       Label(denial.message, systemImage: "exclamationmark.triangle")
         .quotaMetaStyle()
@@ -364,7 +365,7 @@ struct ProviderSettingsView: View {
         .padding(.bottom, QuotaDesign.Spacing.xs)
         .accessibilityLabel("\(denial.browserName) cookies could not be read")
         .accessibilityValue(denial.message)
-    } else if let message = model.browserSessionErrorMessages[provider] {
+    } else if let message = connection.browserSessionErrorMessages[provider] {
       Label(message, systemImage: "exclamationmark.circle")
         .quotaMetaStyle()
         .fixedSize(horizontal: false, vertical: true)
