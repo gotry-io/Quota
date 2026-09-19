@@ -21,7 +21,12 @@ import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import { applyMigrations } from "../src/platform/migrations.ts";
 import { SqliteDatabase } from "../src/platform/sqlite-database.ts";
-import { planLocalPeriods } from "../src/local-periods.ts";
+import {
+  type LocalDateRangePlan,
+  planLocalDateRange,
+  planLocalDayWindows,
+  planLocalPeriods,
+} from "../src/local-periods.ts";
 import { D1UsageState } from "../src/state/d1-usage-state.ts";
 
 const HOUR = 3_600_000;
@@ -64,13 +69,6 @@ interface DateWindow {
 interface HourRange {
   from: string;
   to: string;
-}
-
-interface PeriodPlan {
-  days: DateWindow | null;
-  boundaries: HourRange[];
-  start: string;
-  end: string;
 }
 
 interface QueryMeasurement {
@@ -122,14 +120,6 @@ function shiftDate(date: string, days: number): string {
   return utcDate(Date.parse(`${date}T00:00:00Z`) + days * DAY);
 }
 
-function ceilDay(instant: number): number {
-  return Math.ceil(instant / DAY) * DAY;
-}
-
-function floorDay(instant: number): number {
-  return Math.floor(instant / DAY) * DAY;
-}
-
 function wallClock(clock: Intl.DateTimeFormat, instant: number): number {
   const parts = clock.formatToParts(instant);
   const field = (type: Intl.DateTimeFormatPartTypes) =>
@@ -148,19 +138,6 @@ function localDateAt(clock: Intl.DateTimeFormat, instant: number): string {
   return utcDate(wallClock(clock, instant));
 }
 
-/**
- * Copied from `local-periods.ts` so this bench does not change production exports.
- * An hour containing a fractional-offset midnight is assigned to the previous local day.
- */
-function startOfLocalHour(clock: Intl.DateTimeFormat, date: string): number {
-  const wall = Date.parse(`${date}T00:00:00Z`);
-  const guess = wall - (wallClock(clock, wall) - wall);
-  let hour = Math.ceil((wall - (wallClock(clock, guess) - guess)) / HOUR) * HOUR;
-  while (localDateAt(clock, hour - HOUR) >= date) hour -= HOUR;
-  while (localDateAt(clock, hour) < date) hour += HOUR;
-  return hour;
-}
-
 function zoneClock(timezone: string): Intl.DateTimeFormat {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: timezone,
@@ -174,34 +151,7 @@ function zoneClock(timezone: string): Intl.DateTimeFormat {
   });
 }
 
-function planLocalDateRange(timezone: string, from: string, to: string): PeriodPlan {
-  const clock = zoneClock(timezone);
-  const start = startOfLocalHour(clock, from);
-  const end = startOfLocalHour(clock, shiftDate(to, 1));
-  const firstWhole = ceilDay(start);
-  const lastWholeEnd = floorDay(end);
-  if (firstWhole < lastWholeEnd) {
-    const boundaries: HourRange[] = [];
-    if (start < firstWhole) boundaries.push({ from: utcHour(start), to: utcHour(firstWhole) });
-    if (lastWholeEnd < end) {
-      boundaries.push({ from: utcHour(lastWholeEnd), to: utcHour(end) });
-    }
-    return {
-      days: { from: utcDate(firstWhole), to: utcDate(lastWholeEnd - DAY) },
-      boundaries,
-      start: utcHour(start),
-      end: utcHour(end),
-    };
-  }
-  return {
-    days: null,
-    boundaries: start < end ? [{ from: utcHour(start), to: utcHour(end) }] : [],
-    start: utcHour(start),
-    end: utcHour(end),
-  };
-}
-
-function hoursIn(plan: PeriodPlan): string[] {
+function hoursIn(plan: LocalDateRangePlan): string[] {
   const hours: string[] = [];
   if (plan.days) {
     for (
@@ -377,7 +327,7 @@ function seedFile(path: string): {
 
 async function queryTotals(
   usage: D1UsageState,
-  plan: PeriodPlan,
+  plan: LocalDateRangePlan,
 ): Promise<{
   tokens: number;
   dailyReturned: number;
@@ -411,19 +361,21 @@ async function queryTotals(
   };
 }
 
-async function queryHourlyFull(
+async function queryLocalDays(
   usage: D1UsageState,
-  plan: PeriodPlan,
+  timezone: string,
+  localFrom: string,
+  localTo: string,
 ): Promise<{ returned: number; tokens: number }> {
-  const hourly = await usage.queryHourlyUsage(ACCOUNT_ID, {
-    from: plan.start,
-    to: plan.end,
+  const windows = planLocalDayWindows(timezone, localFrom, localTo);
+  const localDays = await usage.queryLocalDayUsage(ACCOUNT_ID, {
+    windows,
     limit: QUERY_LIMIT,
   });
-  if (hourly.truncated) throw new Error("hourly full-span query truncated");
+  if (localDays.truncated) throw new Error("local-day query truncated");
   let tokens = 0;
-  for (const row of hourly.rows) tokens += row.input_tokens + row.output_tokens;
-  return { returned: hourly.rows.length, tokens };
+  for (const row of localDays.rows) tokens += row.input_tokens + row.output_tokens;
+  return { returned: localDays.rows.length, tokens };
 }
 
 async function measureRange(input: {
@@ -460,17 +412,22 @@ async function measureRange(input: {
   let hourlyError: string | null = null;
   try {
     const coldHourlyStarted = process.hrtime.bigint();
-    const coldHourly = await queryHourlyFull(handle.usage, plan);
+    const coldHourly = await queryLocalDays(
+      handle.usage,
+      input.timezone,
+      input.localFrom,
+      input.localTo,
+    );
     coldHourlyMs = elapsedMs(coldHourlyStarted);
     localPeak = Math.max(localPeak, rssMb());
     hourlyReturned = coldHourly.returned;
     if (coldHourly.tokens !== coldTotals.tokens) {
       throw new Error(
-        `${input.kind} ${input.timezone}: totals ${coldTotals.tokens} != hourly ${coldHourly.tokens}`,
+        `${input.kind} ${input.timezone}: totals ${coldTotals.tokens} != local-day ${coldHourly.tokens}`,
       );
     }
     const warmHourlyStarted = process.hrtime.bigint();
-    await queryHourlyFull(handle.usage, plan);
+    await queryLocalDays(handle.usage, input.timezone, input.localFrom, input.localTo);
     warmHourlyMs = elapsedMs(warmHourlyStarted);
     localPeak = Math.max(localPeak, rssMb());
   } catch (error) {
@@ -643,7 +600,7 @@ async function main(): Promise<void> {
     `cardinalities: accounts=2 (1 measured + 1 distractor) devices=${DEVICE_COUNT} agents=${AGENTS.length} models=${MODELS.length} seed_days=${SEED_DAYS} query_days=${QUERY_DAYS} hours_per_day=${hoursPerDay} measured_hourly_rows=${measuredHourly} seeded_hourly_rows=${seed.hourly_rows} daily_rows=${seed.daily_rows} utc=${seed.first_utc}..${seed.last_utc} checked_at=${CHECKED_AT.toISOString()} seed_ms=${seedMs.toFixed(0)} process_peak_rss_mb=${peak.value.toFixed(1)}`,
   );
   console.log(
-    "totals = usage_daily interior UTC days + usage_hourly boundary ranges (period totals). hourly = usage_hourly over the whole local span (local-day buckets / rhythm).",
+    "totals = usage_daily interior UTC days + usage_hourly boundary ranges (period totals). hourly = SQL GROUP BY local-day window (days[]).",
   );
 
   printTable(rows, [
@@ -656,10 +613,10 @@ async function main(): Promise<void> {
     { key: "boundary_rows_returned", label: "edge ret" },
     { key: "cold_totals_ms", label: "cold tot ms" },
     { key: "warm_totals_ms", label: "warm tot ms" },
-    { key: "hourly_full_rows_scanned", label: "full hr scan" },
-    { key: "hourly_full_rows_returned", label: "full hr ret" },
-    { key: "cold_hourly_ms", label: "cold hr ms" },
-    { key: "warm_hourly_ms", label: "warm hr ms" },
+    { key: "hourly_full_rows_scanned", label: "span hr rows" },
+    { key: "hourly_full_rows_returned", label: "local-day ret" },
+    { key: "cold_hourly_ms", label: "cold day ms" },
+    { key: "warm_hourly_ms", label: "warm day ms" },
     { key: "peak_rss_mb", label: "peak RSS" },
   ]);
   console.log("BEGIN_JSON");

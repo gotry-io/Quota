@@ -27,10 +27,16 @@ import {
   UsageCostOutcomeSchema,
   type UsagePeriod,
   UsagePeriodSchema,
+  type UsagePeriodDayBucket,
+  UsagePeriodDayBucketSchema,
   type UsageSummaryTotals,
   type UsageUnpricedItem,
 } from "@gotry-io/quota-protocol";
-import type { StoredUsageDailyRow, StoredUsageHourlyRow } from "@gotry-io/relay-core";
+import type {
+  StoredUsageDailyRow,
+  StoredUsageHourlyRow,
+  StoredUsageLocalDayRow,
+} from "@gotry-io/relay-core";
 import {
   LOCAL_PERIOD_KEYS,
   localClockAt,
@@ -162,6 +168,71 @@ export function buildActivityDays(input: {
         }),
       ),
   );
+}
+
+/**
+ * Totals, cost, cache saving, and optional agent tree for one set of stored rows.
+ *
+ * The Account period read folds its interior daily rows plus edge hours through this, the same
+ * pricing path the four summary periods use.
+ */
+export function foldUsageRows(input: {
+  rows: readonly StoredUsageDailyRow[];
+  catalog: PricingCatalog;
+  modelCatalog: ModelCatalog;
+  includeAgents: boolean;
+}): {
+  totals: UsageSummaryTotals;
+  cost: UsageCostOutcome;
+  cache_saved: ReturnType<typeof foldPreparedUsageCacheSaved>;
+  partial: boolean;
+  agents?: unknown[];
+} {
+  const facts = input.rows.map(usageRow);
+  const prepared = prepareUsageCosts(facts, input.catalog, accountCostMode);
+  const saved = prepareUsageCacheSaved(facts, input.catalog);
+  const indexes = input.rows.map((_, index) => index);
+  const folded = buildUsagePeriod(input.rows, facts, prepared, saved, indexes, input.modelCatalog);
+  if (input.includeAgents) return folded;
+  const { agents: _agents, ...rest } = folded;
+  return rest;
+}
+
+/**
+ * One bucket per local date, gaps omitted.
+ *
+ * The SQL already assigned each hour to a local-day window and grouped to a pricing identity,
+ * so this only folds those rows. Missing ≠ zero: a local date nothing landed on is not a $0 day.
+ */
+export function buildLocalPeriodDays(input: {
+  rows: readonly StoredUsageLocalDayRow[];
+  catalog: PricingCatalog;
+}): UsagePeriodDayBucket[] {
+  const facts = input.rows.map(localDayFact);
+  const prepared = prepareUsageCosts(facts, input.catalog, accountCostMode);
+  const byDate = new Map<string, number[]>();
+  for (const [index, row] of input.rows.entries()) {
+    const indexes = byDate.get(row.date);
+    if (indexes) indexes.push(index);
+    else byDate.set(row.date, [index]);
+  }
+  return boundedResult(() =>
+    [...byDate]
+      .sort(([left], [right]) => compareText(left, right))
+      .map(([date, indexes]) =>
+        UsagePeriodDayBucketSchema.parse({
+          date,
+          totals: summaryTotals(facts, indexes),
+          cost: boundedFoldPreparedUsageCosts(prepared, indexes),
+          partial: indexes.some((index) => (input.rows[index]?.partial_hours ?? 0) > 0),
+        }),
+      ),
+  );
+}
+
+function localDayFact(row: StoredUsageLocalDayRow): DatedUsageRow {
+  const { partial_hours: _partial, ...fact } = row;
+  return fact;
 }
 
 /** Which of the folded rows each local period takes, over the rows `buildAccountUsage` laid out. */

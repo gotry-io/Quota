@@ -277,9 +277,11 @@ added up over a different window, so it is asked for one range at a time rather 
 more times on every refresh. `usage_period { from, to }` takes two inclusive local dates spanning
 at most 366 days and answers with the same local report shape, folded against the catalogs this
 device already holds; it collects nothing and reaches no network. A state change discards the
-folds QuotaBar asked for, because the hours behind them moved. The website and Quota iOS have no
-local hours to ask about: they add the same period up from the daily totals the activity read
-already gave them, and the rule all three follow is
+folds QuotaBar asked for, because the hours behind them moved. Relay answers the same local-date
+window for Account as `GET /api/v6/account/usage/period`
+([ADR 0055](decisions/0055-an-account-period-is-a-local-date-range.md)). Until clients switch onto
+that read, the website and Quota iOS still add a custom period up from the UTC daily totals the
+activity read already gave them, and that fold is
 `packages/protocol/fixtures/usage-day-fold-conformance.json`. A day carries no agent tree, so a
 period folded from days carries totals and cost with no model breakdown.
 
@@ -368,14 +370,19 @@ written to the App Group. QuotaBar reads the same shape from its own App Group c
 group — and publishes it after every state update from the Overview rows the private service
 resolved, clearing it when there is nothing to show.
 
-`GET /api/v6/account/summary` and `GET /api/v6/account/usage/activity` are conditional reads. Each
+`GET /api/v6/account/summary`, `GET /api/v6/account/usage/activity`, and
+`GET /api/v6/account/usage/period` are conditional reads. Each
 carries a strong `ETag` over an account version stamp, the request's full query string, the pricing
 and model catalog revisions, and — for the summary — the caller's local date, because that is what
 moves `today` with no write behind it. The summary stamp is a handful of aggregates over the devices
-and observation rows the response projects; the activity stamp is usage-only (device count, usage
-revision, generation, and the Account's `updated_at`) and includes `detail` in the query string it
-keys on, so a matching `If-None-Match` returns 304 before any Usage query runs. `detail=hours`
+and observation rows the response projects; the activity and period stamps are usage-only (device count, usage
+revision, generation, and the Account's `updated_at`). Activity includes `detail` in the query string it
+keys on; the period read includes `from`, `to`, `timezone`, and `breakdown`. A matching `If-None-Match` returns 304 before any Usage query runs. `detail=hours`
 is the same rule: `tz` is in the query string, so a different clock is a different validator.
+The period read is inclusive local dates in a required IANA timezone, at most 366 days, on the hour
+grid ([ADR 0055](decisions/0055-an-account-period-is-a-local-date-range.md)): a local day begins at
+the first whole UTC hour of that civil date, and the hour that contains a fractional-offset midnight
+belongs to the previous local day. Explicit `{from,to}` does not roll over with the wall clock.
 The summary's Usage fold is stored keyed by what it depends on
 ([ADR 0031](decisions/0031-the-usage-fold-is-stored.md)): a matching key serves the stored fold,
 and a miss folds and stores. The Rust service and the iOS client both read conditionally, storing each response with
@@ -519,10 +526,12 @@ QuotaRelay mounts OAuth and Device control at `/oauth/v2` and `/api/v2`, the man
 data contract at `/api/v6`, browser sign-in and sign-out at `/api/auth`, and the health routes. It
 authenticates each route with the minimum account, device, or browser scope and performs
 Device/Account deletion, rotation/revocation, hour replacement with its daily rollup, and the
-Usage-fold sweep in storage transactions. An Account read carries every stored agent and channel with no opt-in query: the only
-thing it asks for is the caller's `tz`, because a local day begins at local midnight and that
-decides where the three trailing periods start and end. Every route that reads a query names the
-keys it accepts, and a key it did not name is a 400. The managed data contract is
+Usage-fold sweep in storage transactions. An Account read carries every stored agent and channel with no opt-in query. The summary asks for
+the caller's `tz`, because a local day begins at local midnight and that decides where the three
+trailing periods start and end. The period read asks for `from`, `to`, and `timezone` — local
+dates, required IANA zone, no implicit UTC
+([ADR 0055](decisions/0055-an-account-period-is-a-local-date-range.md)). Every route that reads a
+query names the keys it accepts, and a key it did not name is a 400. The managed data contract is
 canonical in [ADR 0024](decisions/0024-hour-versioned-usage-and-daily-rollups.md).
 
 Quota Web is a SvelteKit app whose hashed `/_app/immutable/*` CSS and JS stay asset-first. Document

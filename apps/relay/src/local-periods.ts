@@ -1,4 +1,4 @@
-import type { UsageHourRange } from "@gotry-io/relay-core";
+import type { UsageHourRange, UsageLocalDayWindow } from "@gotry-io/relay-core";
 
 /** The three periods an Account read answers against the caller's calendar. */
 export const LOCAL_PERIOD_KEYS = ["today", "last_7_days", "last_30_days"] as const;
@@ -40,8 +40,97 @@ export interface LocalPeriodPlan {
   boundaries: UsageBoundary[];
 }
 
+/**
+ * How to answer one inclusive local-date range without opening the hourly history for its
+ * interior UTC days.
+ *
+ * `start` is the first whole UTC hour whose civil date in `timezone` is `from`. `end` is the
+ * first whole UTC hour of the day after `to`. Whole UTC days strictly inside `[start, end)`
+ * come from `usage_daily`; the hours the two edges cut come from `usage_hourly`.
+ */
+export interface LocalDateRangePlan {
+  start: string;
+  end: string;
+  days: UsageDateWindow | null;
+  boundaries: UsageHourRange[];
+}
+
+export function planLocalDateRange(timezone: string, from: string, to: string): LocalDateRangePlan {
+  const clock = zoneClock(timezone);
+  const start = startOfLocalHour(clock, from);
+  const end = startOfLocalHour(clock, shiftDate(to, 1));
+  const firstWhole = ceilDay(start);
+  const lastWholeEnd = floorDay(end);
+  if (firstWhole < lastWholeEnd) {
+    const boundaries: UsageHourRange[] = [];
+    if (start < firstWhole) boundaries.push({ from: utcHour(start), to: utcHour(firstWhole) });
+    if (lastWholeEnd < end) {
+      boundaries.push({ from: utcHour(lastWholeEnd), to: utcHour(end) });
+    }
+    return {
+      start: utcHour(start),
+      end: utcHour(end),
+      days: { from: utcDate(firstWhole), to: utcDate(lastWholeEnd - DAY) },
+      boundaries,
+    };
+  }
+  return {
+    start: utcHour(start),
+    end: utcHour(end),
+    days: null,
+    boundaries: start < end ? [{ from: utcHour(start), to: utcHour(end) }] : [],
+  };
+}
+
+/**
+ * One hour-grid window per inclusive local date in `[from, to]`.
+ *
+ * Adjacent windows share an endpoint and no hour: `windows[i].end === windows[i + 1].start`.
+ * A 366-day period therefore names 366 spans, at most 367 including a spare the contract
+ * would refuse. The period read JOINs `usage_hourly` onto this table rather than scanning
+ * hour-identity rows into JS.
+ */
+export function planLocalDayWindows(
+  timezone: string,
+  from: string,
+  to: string,
+): UsageLocalDayWindow[] {
+  const clock = zoneClock(timezone);
+  const windows: UsageLocalDayWindow[] = [];
+  let date = from;
+  let start = startOfLocalHour(clock, date);
+  while (date <= to) {
+    const next = shiftDate(date, 1);
+    const end = startOfLocalHour(clock, next);
+    windows.push({ date, start: utcHour(start), end: utcHour(end) });
+    date = next;
+    start = end;
+  }
+  return windows;
+}
+
 export function planLocalPeriods(timezone: string, checkedAt: Date): LocalPeriodPlan {
-  const clock = new Intl.DateTimeFormat("en-CA", {
+  const clock = zoneClock(timezone);
+  const localDate = localDateAt(clock, checkedAt.getTime());
+  const days = {} as Record<LocalPeriodKey, UsageDateWindow | null>;
+  const boundaries: UsageBoundary[] = [];
+
+  for (const key of LOCAL_PERIOD_KEYS) {
+    const range = planLocalDateRange(timezone, shiftDate(localDate, -daysBack[key]), localDate);
+    days[key] = range.days;
+    for (const edge of range.boundaries) {
+      const shared = boundaries.find(
+        (item) => item.range.from === edge.from && item.range.to === edge.to,
+      );
+      if (shared) shared.periods.push(key);
+      else boundaries.push({ range: edge, periods: [key] });
+    }
+  }
+  return { localDate, days, boundaries };
+}
+
+function zoneClock(timezone: string): Intl.DateTimeFormat {
+  return new Intl.DateTimeFormat("en-CA", {
     timeZone: timezone,
     hourCycle: "h23",
     year: "numeric",
@@ -51,44 +140,6 @@ export function planLocalPeriods(timezone: string, checkedAt: Date): LocalPeriod
     minute: "2-digit",
     second: "2-digit",
   });
-  const localDate = localDateAt(clock, checkedAt.getTime());
-  const end = startOfLocalHour(clock, shiftDate(localDate, 1));
-  const days = {} as Record<LocalPeriodKey, UsageDateWindow | null>;
-  const boundaries: UsageBoundary[] = [];
-
-  for (const key of LOCAL_PERIOD_KEYS) {
-    const start = startOfLocalHour(clock, shiftDate(localDate, -daysBack[key]));
-    const firstWhole = ceilDay(start);
-    const lastWholeEnd = floorDay(end);
-    if (firstWhole < lastWholeEnd) {
-      // The rollup answers the days between the two edges; the edges themselves are hours.
-      days[key] = { from: utcDate(firstWhole), to: utcDate(lastWholeEnd - DAY) };
-      cut(boundaries, key, start, firstWhole);
-      cut(boundaries, key, lastWholeEnd, end);
-    } else {
-      // No UTC day lies wholly inside, so this period is read hour by hour end to end.
-      days[key] = null;
-      cut(boundaries, key, start, end);
-    }
-  }
-  return { localDate, days, boundaries };
-}
-
-/**
- * Record that one period folds the hours in `[from, to)`.
- *
- * What a period folds is its own rollup days plus its own cuts, which together are exactly the
- * instants it covers, each once. Two periods asking for the same hours share one read; two
- * asking for overlapping but different ones do not, because neither is counting the other's.
- */
-function cut(boundaries: UsageBoundary[], key: LocalPeriodKey, from: number, to: number): void {
-  if (from >= to) return;
-  const range = { from: utcHour(from), to: utcHour(to) };
-  const shared = boundaries.find(
-    (edge) => edge.range.from === range.from && edge.range.to === range.to,
-  );
-  if (shared) shared.periods.push(key);
-  else boundaries.push({ range, periods: [key] });
 }
 
 /**

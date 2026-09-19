@@ -92,6 +92,39 @@ export interface UsageBoundaryResult {
   truncated: boolean;
 }
 
+/**
+ * One local calendar day as a half-open UTC hour span, after the hour-grid rule.
+ *
+ * `start` is the first whole UTC hour of `date` in the request timezone; `end` is the first
+ * whole UTC hour of the next local date. Adjacent days share no hour.
+ */
+export interface UsageLocalDayWindow {
+  date: string;
+  start: string;
+  end: string;
+}
+
+export interface UsageLocalDayQuery {
+  windows: readonly UsageLocalDayWindow[];
+  limit: number;
+}
+
+/**
+ * One pricing identity over one local date, rolled up across devices, hours, and agents.
+ *
+ * `date` is the local calendar date of the window that claimed these hours, not a UTC date.
+ * `partial_hours` counts stored hours behind the row whose scan came up short.
+ */
+export interface StoredUsageLocalDayRow extends UsageRow {
+  date: string;
+  partial_hours: number;
+}
+
+export interface UsageLocalDayResult {
+  rows: StoredUsageLocalDayRow[];
+  truncated: boolean;
+}
+
 /** What the board asks the rollup for: one bounded window, and at most this many places. */
 export interface LeaderboardQuery {
   /** Inclusive UTC date the window starts on. */
@@ -117,6 +150,14 @@ export interface UsageState {
    */
   queryLeaderboard(query: LeaderboardQuery): Promise<LeaderboardRow[]>;
   queryBoundaryHours(accountId: string, query: UsageBoundaryQuery): Promise<UsageBoundaryResult>;
+  /**
+   * Hours folded to one pricing identity per local date, in SQL.
+   *
+   * The caller supplies one hour-grid window per local date (a VALUES/CTE table). The scan
+   * groups by that date plus the dimensions pricing reads, so a dense year returns hundreds of
+   * rows rather than tens of thousands of hour-identity rows.
+   */
+  queryLocalDayUsage(accountId: string, query: UsageLocalDayQuery): Promise<UsageLocalDayResult>;
   readUsageFold(accountId: string, foldKey: string): Promise<string | null>;
   storeUsageFold(
     accountId: string,
