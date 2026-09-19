@@ -112,7 +112,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
       UserDefaults.standard.set(page.rawValue, forKey: MainPage.storageKey)
     }
     guard let model else { return }
-    model.loadQuotaHistory()
+    model.usage.loadQuotaHistory()
     let window = self.window ?? makeWindow()
     self.window = window
     WindowActivation.shared.register(window)
@@ -132,7 +132,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     guard let model, !model.isRefreshing else { return }
     Task { @MainActor in
       await model.refresh()
-      model.loadQuotaHistory()
+      model.usage.loadQuotaHistory()
     }
   }
 

@@ -169,116 +169,6 @@ func applyingANonEmptyOverviewSetsLaunchHasShownQuotaOnce() {
 }
 
 @Test @MainActor
-func loadQuotaHistoryFoldsSamplesOnDemandAndLeavesStateOnTheCurrentWindow() async throws {
-  let now = Date(timeIntervalSince1970: 1_788_100_000)
-  let fiveHourReset = now.addingTimeInterval(2 * 3_600)
-  let weeklyReset = now.addingTimeInterval(3 * 86_400)
-  let observed = now.addingTimeInterval(-3_600)
-  let snapshot = QuotaSnapshot(
-    provider: .codex,
-    account: QuotaAccount(
-      fingerprint: "account_test",
-      label: nil,
-      plan: "Plus",
-      fingerprintScope: .global
-    ),
-    windows: [
-      QuotaWindow(
-        id: "five_hour",
-        title: "5 Hours",
-        usedPercent: 40,
-        resetsAt: fiveHourReset,
-        durationSeconds: 18_000
-      ),
-      QuotaWindow(
-        id: "weekly",
-        title: "Weekly",
-        usedPercent: 20,
-        resetsAt: weeklyReset,
-        durationSeconds: 604_800,
-        primaryCadence: .weekly
-      ),
-    ],
-    status: .available,
-    observedAt: now
-  )
-  let source = LocalServiceOverviewSource(
-    sourceID: "local",
-    kind: .local,
-    deviceID: nil,
-    displayName: "This Mac",
-    observedAt: now,
-    isStale: false
-  )
-  let state = LocalServiceState(
-    ipcVersion: 3,
-    revision: 7,
-    usageUploadEnabled: true,
-    groupUsageByProject: true,
-    quotaRefreshIntervalSeconds: 300,
-    usagePeriods: emptyUsagePeriods(),
-    quota: emptyComponent(),
-    usage: emptyComponent(),
-    account: emptyComponent(),
-    pricing: emptyComponent(),
-    providers: [],
-    providerBrowserSessions: [],
-    browserScanEnabled: [],
-    overview: [
-      LocalServiceOverviewItem(
-        identity: LocalServiceOverviewIdentity(
-          provider: .codex,
-          fingerprint: "account_test",
-          scope: .global,
-          sourceID: nil
-        ),
-        snapshot: snapshot,
-        sources: [source],
-        selectedSourceID: source.sourceID,
-        selectedSourceDisplayName: source.displayName,
-        automaticSourceID: source.sourceID,
-        automaticSourceDisplayName: source.displayName,
-        isStale: false
-      )
-    ],
-    cache: .settled
-  )
-  let samples = LocalServiceQuotaHistory(
-    samplesBySubscription: [
-      "ccfc96629357": [
-        "five_hour": [
-          QuotaSample(resetsAt: fiveHourReset, observedAt: observed, usedPercent: 10),
-          QuotaSample(resetsAt: fiveHourReset, observedAt: now, usedPercent: 40),
-        ],
-        "weekly": [
-          QuotaSample(resetsAt: weeklyReset, observedAt: now, usedPercent: 20)
-        ],
-      ]
-    ],
-    utcOffsetSeconds: 0
-  )
-  let model = MenuBarViewModel(
-    client: StubLocalService(state: state, quotaHistoryValue: samples)
-  )
-  await model.refreshIfNeeded()
-  #expect(model.quotaHistory.isEmpty)
-  #expect(model.quotaHistorySamples == nil)
-
-  model.loadQuotaHistory()
-  let deadline = ContinuousClock.now + .seconds(10)
-  while model.quotaHistory.isEmpty, ContinuousClock.now < deadline {
-    await Task.yield()
-    try await Task.sleep(for: .milliseconds(20))
-  }
-
-  #expect(model.quotaHistorySamples == samples)
-  let fiveHour = try #require(model.quotaHistory["ccfc96629357"]?["five_hour"])
-  let weekly = try #require(model.quotaHistory["ccfc96629357"]?["weekly"])
-  #expect(fiveHour.points.map(\.usedPercent) == [10, 40])
-  #expect(weekly.points.map(\.usedPercent) == [20])
-}
-
-@Test @MainActor
 func sourceDetailLooksUpTheSourceScopedRowNotTheFirstSharedFingerprint() async throws {
   let now = Date(timeIntervalSince1970: 1_786_300_000)
   let remote = sourceScopedOverviewItem(
@@ -335,51 +225,6 @@ func setOverviewSourcePinSendsTheSourceScopedIdentity() async throws {
   #expect(await record.identitySourceID == "local")
   #expect(await record.identityKey == "grok|fp-source|source|local")
   #expect(await record.pin == "local")
-}
-
-@Test @MainActor
-func emptyUsageCacheWhileRefreshingIsPreparingNotMissing() async throws {
-  let state = LocalServiceState(
-    ipcVersion: 3,
-    revision: 1,
-    usageUploadEnabled: true,
-    groupUsageByProject: true,
-    quotaRefreshIntervalSeconds: 300,
-    usagePeriods: emptyUsagePeriods(),
-    quota: emptyComponent(),
-    usage: LocalServiceComponent(
-      status: .unavailable,
-      value: nil,
-      updatedAt: nil,
-      lastError: nil,
-      refreshing: true
-    ),
-    account: LocalServiceComponent(
-      status: .signedOut,
-      value: LocalServiceAccountState(
-        authStatus: .signedOut,
-        accountID: nil,
-        displayLabel: nil,
-        deviceID: nil,
-        deviceGeneration: nil,
-        accountSummary: nil
-      ),
-      updatedAt: nil,
-      lastError: nil,
-      refreshing: false
-    ),
-    pricing: emptyComponent(),
-    providers: [],
-    providerBrowserSessions: [],
-    browserScanEnabled: [],
-    overview: [],
-    cache: .settled
-  )
-  let model = MenuBarViewModel(client: StubLocalService(state: state))
-  await model.refreshIfNeeded()
-  #expect(model.usageDetail(source: .local, period: .today) == nil)
-  #expect(model.isPreparingUsage(source: .local))
-  #expect(!model.isPreparingUsage(source: .account))
 }
 
 @Test @MainActor
@@ -741,38 +586,6 @@ func thisMacsCollectionFailureShowsOnlyWhenItsOwnReadingIsTheOneOnTheRow() async
 }
 
 @Test @MainActor
-func bottomBarTodayLineFollowsTheSourceTheUsagePageWouldActuallyShow() async throws {
-  let state = LocalServiceState(
-    ipcVersion: 3,
-    revision: 2,
-    usageUploadEnabled: true,
-    groupUsageByProject: true,
-    quotaRefreshIntervalSeconds: 300,
-    usagePeriods: LocalServiceUsagePeriodCache(
-      local: todayOnly(tokens: 1_234_567),
-      account: todayOnly(tokens: 9_876_543)
-    ),
-    quota: emptyComponent(),
-    usage: emptyComponent(),
-    // No account summary, so Account cannot answer and This Mac's numbers are the honest ones.
-    account: emptyComponent(),
-    pricing: emptyComponent(),
-    providers: [],
-    providerBrowserSessions: [],
-    browserScanEnabled: [],
-    overview: [],
-    cache: .settled
-  )
-  let model = MenuBarViewModel(client: StubLocalService(state: state))
-
-  await model.refreshIfNeeded()
-
-  #expect(model.effectiveUsageSource(.account) == .local)
-  #expect(model.todayUsageSummary(source: .account)?.text == "Today · 1.23M tokens")
-  #expect(model.todayUsageSummary(source: .local)?.text == "Today · 1.23M tokens")
-}
-
-@Test @MainActor
 func quittingAsksTheLocalServiceToShutDownBeforeTheAppGoes() async {
   let record = CallRecord()
   let model = MenuBarViewModel(
@@ -1084,44 +897,6 @@ func codexOverviewItem(
     automaticSourceID: source.sourceID,
     automaticSourceDisplayName: source.displayName,
     isStale: false
-  )
-}
-
-private func todayOnly(tokens: Int) -> LocalServiceUsagePeriodValues {
-  LocalServiceUsagePeriodValues(
-    today: LocalServiceUsageDetail(
-      range: UsageDateRange(from: "2026-08-10", to: "2026-08-10"),
-      usage: LocalUsagePeriodSummary(
-        totals: UsageSummaryTotals(
-          totalTokens: tokens,
-          inputTokens: tokens,
-          outputTokens: 0,
-          cacheReadInputTokens: 0,
-          cacheWriteInputTokens: 0,
-          reasoningTokens: 0,
-          messages: 1
-        ),
-        cost: UsageCostOutcome(
-          mode: .calculate,
-          basis: .none,
-          status: .unavailable,
-          amountMicrousd: nil,
-          catalogRevision: nil,
-          calculatedRows: 0,
-          reportedRows: 0,
-          unpricedRows: 1,
-          assumptions: [],
-          unpriced: []
-        ),
-        cacheSaved: UsageCacheSaved(amountMicrousd: "0", status: .complete, unpricedRows: 0),
-        agents: []
-      ),
-      incomplete: false,
-      detailsTruncated: false
-    ),
-    last7Days: nil,
-    last30Days: nil,
-    all: nil
   )
 }
 

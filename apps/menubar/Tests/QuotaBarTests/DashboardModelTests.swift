@@ -164,7 +164,7 @@
       #expect(dashboard.selectedUsagePeriodSegment == .day)
       dashboard.selectUsagePeriod(.custom(from: "2026-08-01", to: "2026-08-03"))
       #expect(dashboard.selectedUsagePeriodSegment == nil)
-      #expect(model.usagePeriod.segment == .custom)
+      #expect(model.usage.usagePeriod.segment == .custom)
       dashboard.selectUsagePeriod(.last7Days)
       #expect(dashboard.selectedUsagePeriodSegment == .last7Days)
     }
@@ -250,9 +250,9 @@
         client: StubLocalService(state: state, quotaHistoryValue: samples)
       )
       await model.refreshIfNeeded()
-      model.loadQuotaHistory()
+      model.usage.loadQuotaHistory()
       let deadline = ContinuousClock.now + .seconds(10)
-      while model.quotaHistory.isEmpty, ContinuousClock.now < deadline {
+      while model.usage.quotaHistory.isEmpty, ContinuousClock.now < deadline {
         await Task.yield()
         try await Task.sleep(for: .milliseconds(20))
       }
@@ -346,9 +346,9 @@
         )
       )
       await model.refreshIfNeeded()
-      model.loadQuotaHistory()
+      model.usage.loadQuotaHistory()
       let deadline = ContinuousClock.now + .seconds(10)
-      while model.quotaHistory.isEmpty, ContinuousClock.now < deadline {
+      while model.usage.quotaHistory.isEmpty, ContinuousClock.now < deadline {
         await Task.yield()
         try await Task.sleep(for: .milliseconds(20))
       }
