@@ -1,0 +1,147 @@
+[
+  {
+    "screen": "overview.root",
+    "test": "testContentFixtureShowsOverview",
+    "audit_types": ["clipped", "contrast", "dynamic-type", "hit-region", "other"],
+    "outcomes": {
+      "clipped": "passed",
+      "contrast": "unconfirmed",
+      "dynamic-type": "passed",
+      "hit-region": "passed",
+      "other": "passed"
+    },
+    "exempted": {
+      "nil-element": 1,
+      "section-header-footer": 2,
+      "overview-today": 1,
+      "clipped-usage-activity-empty": 0,
+      "dynamic-type-done": 0,
+      "dynamic-type-identifier-prefix": 4,
+      "dynamic-type-parent": 0,
+      "dynamic-type-couldnt-load": 0,
+      "dynamic-type-form-label": 0,
+      "dynamic-type-subscription-card": 1
+    },
+    "first_pass": [
+      {
+        "type": "contrast",
+        "description": "Element has low contrast",
+        "element": "StaticText",
+        "label": "Today",
+        "identifier": "overview.today.tokens",
+        "frame": "{{16, 120}, {120, 20}}",
+        "parent": "",
+        "disposition": "recorded"
+      },
+      {
+        "type": "dynamic-type",
+        "description": "Dynamic Type is partially unsupported",
+        "element": "no element",
+        "label": "",
+        "identifier": "",
+        "frame": "",
+        "parent": "",
+        "disposition": "nil-element",
+        "exemption_rule": "nil-element"
+      },
+      {
+        "type": "dynamic-type",
+        "description": "Dynamic Type is partially unsupported",
+        "element": "StaticText",
+        "label": "Tokens",
+        "identifier": "overview.subscription",
+        "frame": "{{16, 220}, {80, 16}}",
+        "parent": "overview.subscription",
+        "disposition": "exempted",
+        "exemption_rule": "dynamic-type-subscription-card"
+      }
+    ],
+    "second_pass": null
+  },
+  {
+    "screen": "usage.root",
+    "test": "testContentFixtureShowsOverview",
+    "audit_types": ["clipped", "contrast", "dynamic-type", "hit-region", "other"],
+    "outcomes": {
+      "clipped": "incomplete",
+      "contrast": "incomplete",
+      "dynamic-type": "incomplete",
+      "hit-region": "incomplete",
+      "other": "incomplete"
+    },
+    "exempted": {
+      "nil-element": 0,
+      "section-header-footer": 0,
+      "overview-today": 0,
+      "clipped-usage-activity-empty": 0,
+      "dynamic-type-done": 0,
+      "dynamic-type-identifier-prefix": 0,
+      "dynamic-type-parent": 0,
+      "dynamic-type-couldnt-load": 0,
+      "dynamic-type-form-label": 0,
+      "dynamic-type-subscription-card": 0
+    },
+    "first_pass": [],
+    "second_pass": null
+  },
+  {
+    "screen": "settings.root",
+    "test": "testContentFixtureShowsSettingsDestinations",
+    "audit_types": ["clipped", "contrast", "dynamic-type", "hit-region", "other"],
+    "outcomes": {
+      "clipped": "confirmed",
+      "contrast": "passed",
+      "dynamic-type": "unconfirmed",
+      "hit-region": "passed",
+      "other": "passed"
+    },
+    "exempted": {
+      "nil-element": 0,
+      "section-header-footer": 0,
+      "overview-today": 0,
+      "clipped-usage-activity-empty": 0,
+      "dynamic-type-done": 1,
+      "dynamic-type-identifier-prefix": 0,
+      "dynamic-type-parent": 0,
+      "dynamic-type-couldnt-load": 0,
+      "dynamic-type-form-label": 3,
+      "dynamic-type-subscription-card": 0
+    },
+    "first_pass": [
+      {
+        "key": "clipped|settings.logout|settings.root",
+        "type": "clipped",
+        "description": "Text is clipped",
+        "element": "Button",
+        "label": "Log Out",
+        "identifier": "settings.logout",
+        "frame": "{{16, 640}, {120, 44}}",
+        "parent": "",
+        "disposition": "recorded"
+      },
+      {
+        "type": "dynamic-type",
+        "description": "Dynamic Type is partially unsupported",
+        "element": "StaticText",
+        "label": "About",
+        "identifier": "",
+        "frame": "{{16, 80}, {60, 20}}",
+        "parent": "",
+        "disposition": "recorded"
+      }
+    ],
+    "second_pass": [
+      {
+        "key": "clipped|settings.logout|settings.root",
+        "type": "clipped",
+        "description": "Text is clipped",
+        "element": "Button",
+        "label": "Log Out",
+        "identifier": "settings.logout",
+        "frame": "{{16, 640}, {120, 44}}",
+        "parent": "",
+        "disposition": "recorded"
+      }
+    ]
+  }
+]

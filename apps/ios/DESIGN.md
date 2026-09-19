@@ -827,14 +827,19 @@ provider and support, and no custom card chrome beyond the system widget contain
   still runs on every fixture screen and gates every type except contrast: the iOS 26
   pixel-sampling contrast pass persistently reports low contrast on system label colour, which
   is not low contrast.
-- Unnamed glass (`issue.element == nil`) is ignored. The iOS 26 auditor still reports Dynamic Type
-  "partially unsupported" twice on system list configuration and on inner text of scaling fonts
-  (`section.header.` / `section.footer.`, `overview.today` / `overview.subscription` tiles,
-  app-owned identifiers, Form labels, the sheet **Done** button); clipping on
-  `usage.activity.empty` also reproduces. Those stay. Unconfirmed (once-only) findings and
-  contrast findings attach as `audit-unconfirmed-<screen>.txt` (contrast tagged `[contrast]`).
-  A contrast pass that exceeds the auditor deadline on the 365-day heatmap may retry without
-  contrast; that is a deadline, not a type skip.
+- Unnamed glass (`issue.element == nil`) is recorded and does not gate. The iOS 26 auditor still
+  reports Dynamic Type "partially unsupported" twice on system list configuration and on inner
+  text of scaling fonts (`section.header.` / `section.footer.`, `overview.today` /
+  `overview.subscription` tiles, app-owned identifiers, Form labels, the sheet **Done** button);
+  clipping on `usage.activity.empty` also reproduces. Those stay, counted per exemption rule.
+  Each screen audit attaches `audit-outcome.<screen>` JSON: first- and second-pass findings
+  (including nil-element and exempted), and one outcome per type — `passed`, `confirmed` (same
+  finding twice), `unconfirmed` (first pass only), or `incomplete` (timed out). Confirmed
+  non-contrast findings still fail the test; contrast never gates and is summarised as advisory;
+  incomplete does not fail. Read the outcomes in the xcresult or via
+  `scripts/ios-ui-audit-summary.mjs` (CI `verify-ios-ui` job summary). A contrast pass that
+  exceeds the auditor deadline on the 365-day heatmap may retry without contrast; that is a
+  deadline, not a type skip.
 - The Connect footnote sits 24 pt below the prominent button so the button's glass bloom does not
   reach it.
 - `scripts/ios-ui-screenshots.sh` removes its `/tmp/quota-ios-uitest-*` override files on exit; a
