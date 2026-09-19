@@ -75,7 +75,8 @@ struct WidgetScreenshotTests {
   }
 
   private func screenshotDirectory() -> URL {
-    if let override = ProcessInfo.processInfo.environment["WP_D8_SCREENSHOT_DIR"],
+    if let override = ProcessInfo.processInfo.environment["QUOTA_WIDGET_SCREENSHOT_DIR"]
+      ?? ProcessInfo.processInfo.environment["WP_D8_SCREENSHOT_DIR"],
       !override.isEmpty
     {
       return URL(fileURLWithPath: override, isDirectory: true)

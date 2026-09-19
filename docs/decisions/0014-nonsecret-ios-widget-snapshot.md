@@ -11,6 +11,8 @@
   app may only join a team-prefixed group — and the views, selection rules, and publishing
   projection are shared packages
   ([ADR 0043](./0043-one-widget-view-package-for-both-platforms.md))
+- Updated 2026-09-19: Lock Screen accessory families show remaining quota, the same primary
+  value Home Screen families show. They no longer print used percent.
 
 ## Context
 
@@ -35,9 +37,9 @@ Relay. QuotaBar publishes the same file format into its own App Group on macOS,
   fields, a locally salted `selection_id` per item, and an optional derived `pace` when a
   publisher has one. It never includes account ids, device ids, fingerprints, tokens, sequences,
   raw sources, account display labels, or the unsalted subscription selector. Widget Intent
-  configuration is not stored in the snapshot. The snapshot stores remaining quota; Lock Screen
-  families may show the complement as used percent. Pace is carried, never computed, inside the
-  extension.
+  configuration is not stored in the snapshot. The snapshot stores remaining quota. Home Screen
+  and Lock Screen families both show remaining; Lock Screen families do not show the complement as
+  used percent. Pace is carried, never computed, inside the extension.
 - The extension targets `QuotaWidgets` (`io.gotry.quota.widgets`, in Quota) and `QuotaBarWidgets`
   (`io.gotry.quotabar.widgets`, in QuotaBar) embed in their app, use its App Group, and depend only
   on `QuotaWidgetData`, `QuotaWidgetViews`, and `QuotaPresentation`. They must not import or link

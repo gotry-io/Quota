@@ -208,8 +208,12 @@ struct OverviewWidgetContentTests {
       OverviewWidgetContent.remainingAccessibility(for: percentItem)
         == "Weekly, 71% · $3.75 remaining"
     )
-    #expect(OverviewWidgetContent.inlineLabel(for: percentItem) == "Weekly 29%")
-    #expect(OverviewWidgetContent.usedPercentLabel(for: percentItem) == "29%")
+    #expect(OverviewWidgetContent.inlineLabel(for: percentItem) == "Weekly 71%")
+    #expect(OverviewWidgetContent.percentLabel(for: percentItem) == "71%")
+    #expect(
+      lockScreenAccessibility(item: percentItem).contains("remaining")
+    )
+    #expect(!lockScreenAccessibility(item: percentItem).contains(" used"))
 
     let balanceItem = WidgetQuotaItem(
       selectionID: "fedcba987654",
@@ -223,7 +227,7 @@ struct OverviewWidgetContentTests {
     )
     #expect(OverviewWidgetContent.remainingLabel(for: balanceItem) == "$12.50")
     #expect(OverviewWidgetContent.isBalanceOnly(balanceItem))
-    #expect(OverviewWidgetContent.inlineLabel(for: balanceItem) == "Balance 0%")
+    #expect(OverviewWidgetContent.inlineLabel(for: balanceItem) == "Balance 100%")
 
     let extraUsage = WidgetQuotaItem(
       selectionID: "abcdef012345",

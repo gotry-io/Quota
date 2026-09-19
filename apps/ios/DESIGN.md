@@ -334,8 +334,8 @@ pushed view; it renders the selected last-good subscription.
 
 Widgets use the information hierarchy inspired by Nowdex: strongest remaining label first, then
 provider and window, then reset and updated age. Do not copy Nowdex assets or layout chrome.
-Home Screen families show remaining quota. Lock Screen accessory families show the Weekly
-window's used percent (`100 − remaining`) plus **Resets in …**.
+Home Screen and Lock Screen families show remaining quota. Lock Screen accessory families show
+the Weekly window's remaining percent plus **Resets in …**.
 
 Families:
 
@@ -344,12 +344,12 @@ Families:
 | systemSmall | One subscription (most constrained, or the configured one): provider, two windows shortest-cadence first, remaining, reset, **Updated** age |
 | systemMedium | Up to three providers, one row each (most constrained window, remaining, meter, reset). A configured subscription shows that subscription's windows instead. Compact Today tokens and cost, and **Updated** age |
 | systemLarge | Up to three providers × two windows: remaining, meter, countdown, then Today tokens/cost and **Updated** age |
-| accessoryCircular | Weekly used percent in an `accessoryCircularCapacity` Gauge ring; balance-only shows the amount |
-| accessoryRectangular | Three stacked lines: Weekly used percent, its **Resets in …**, then the subscription's second window with its own reset |
-| accessoryInline | `Weekly <used>% · Resets in …` |
+| accessoryCircular | Weekly remaining percent in an `accessoryCircularCapacity` Gauge ring; balance-only shows the amount |
+| accessoryRectangular | Three stacked lines: Weekly remaining percent, its **Resets in …**, then the subscription's second window with its own remaining and reset |
+| accessoryInline | `Weekly <remaining>% · Resets in …` |
 
 A window whose snapshot carries `pace` `runs_out` uses the system orange warning color for its
-remaining or used figure. No pace means no extra color. The extension never derives pace.
+remaining figure. No pace means no extra color. The extension never derives pace.
 
 Widgets are configurable through `AppIntentConfiguration`. The parameter is an optional
 subscription (`nil` is **Automatic**: the most constrained subscription in the snapshot). Each
@@ -442,9 +442,9 @@ Body, in order:
    bar stacks cached input, fresh input, and output, which add up to the day's total, and in Cost it
    is one emerald fill. Tokens bars use the brand ramp: cached input
    `QuotaTheme.cachedFill`, fresh input `QuotaTheme.emerald`, output
-   `Color.primary.opacity(0.85)`. A day with nothing in it is `tertiarySystemFill`, drawn at 12%
-   rather than left out. A caption legend of three 8pt squares (Cached, Fresh, Output) sits above
-   the chart. A **Daily breakdown** `DisclosureGroup` under them lists the days newest first, each
+   `Color.primary.opacity(0.85)`. Empty and unpriced days follow **An empty day is a tick, not a
+   bar** in Shared product vocabulary. A caption legend of three 8pt squares (Cached, Fresh, Output)
+   sits above the chart. A **Daily breakdown** `DisclosureGroup` under them lists the days newest first, each
    as `date` / `tokens · cost` with `in · out · cached · reasoning · messages` beneath. The
    section footer names the calendar: **UTC days.** The All period has no Daily section.
 6b. Rhythm section, headed **Rhythm**, after Daily and before Top models, for any period but All

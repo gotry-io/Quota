@@ -221,13 +221,9 @@ public enum OverviewWidgetContent {
     RemainingQuotaFormat.percent(item.remainingPercent)
   }
 
-  public static func usedPercentLabel(for item: WidgetQuotaItem) -> String {
-    RemainingQuotaFormat.percent(item.usedPercent)
-  }
-
-  /// Lock Screen inline: `Weekly 29%` plus a static reset when the refill is a day or more away.
+  /// Lock Screen inline: `Weekly 71%` plus a static reset when the refill is a day or more away.
   public static func inlineLabel(for item: WidgetQuotaItem, now: Date = Date()) -> String {
-    var parts = ["\(item.windowTitle) \(usedPercentLabel(for: item))"]
+    var parts = ["\(item.windowTitle) \(percentLabel(for: item))"]
     if let resetsAt = item.resetsAt,
       !usesLiveResetCountdown(resetsAt: resetsAt, now: now),
       let reset = FreshnessCopy.resetCopy(resetsAt: resetsAt, now: now)
@@ -235,10 +231,6 @@ public enum OverviewWidgetContent {
       parts.append(reset)
     }
     return parts.joined(separator: " · ")
-  }
-
-  public static func usedAccessibility(for item: WidgetQuotaItem) -> String {
-    "\(item.windowTitle), \(usedPercentLabel(for: item)) used"
   }
 
   public static func paceRunsOut(_ item: WidgetQuotaItem) -> Bool {

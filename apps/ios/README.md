@@ -11,7 +11,7 @@ the rule in [ADR 0003](../../docs/decisions/0003-observation-preserving-subscrip
 an account both a Mac and this phone read is one row with both sources. The app also publishes a
 non-secret App Group snapshot for Home Screen and Lock Screen widgets. Home Screen families show
 remaining quota (small: one subscription, two windows; medium: up to three providers; large: three
-providers × two windows plus Today). Lock Screen families show Weekly used percent and
+providers × two windows plus Today). Lock Screen families show Weekly remaining percent and
 **Resets in …**; rectangular adds the second window. Widgets are configurable.
 
 ## Signing in
