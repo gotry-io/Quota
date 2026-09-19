@@ -1,3 +1,6 @@
+# The same topology as portainer-stack.yml for a host run with `docker compose`
+# and an env_file: Relay, the Cloudflare Tunnel connector and the backup job on one
+# private network, nothing published (ADR 0055).
 name: quota-relay
 
 services:
@@ -9,15 +12,13 @@ services:
       PORT: "8787"
       RELAY_SQLITE_PATH: /data/relay.sqlite
       RELAY_STATIC_DIR: apps/web/.svelte-kit/output/client
-      # Unset/empty in relay.env: loopback + RFC1918 + unique-local IPv6.
-      RELAY_TRUSTED_PROXIES: ${RELAY_TRUSTED_PROXIES:-}
-      # x-forwarded-for (default if unset) or cf-connecting-ip. This Tunnel
-      # layout sets CF-Connecting-IP, so the example uses cf-connecting-ip.
-      RELAY_CLIENT_ADDRESS_HEADER: ${RELAY_CLIENT_ADDRESS_HEADER:-cf-connecting-ip}
+      # cloudflared is the only peer on the network and names the client in
+      # CF-Connecting-IP, which Cloudflare sets and a client cannot.
+      RELAY_CLIENT_ADDRESS_HEADER: cf-connecting-ip
     volumes:
       - relay-data:/data
-    ports:
-      - "127.0.0.1:8787:8787"
+    networks:
+      - quota
     healthcheck:
       test:
         [
@@ -31,10 +32,14 @@ services:
       retries: 3
       start_period: 20s
 
-  cloudflared:
-    image: cloudflare/cloudflared
+  tunnel:
+    image: cloudflare/cloudflared:2026.9.1
     restart: unless-stopped
-    command: tunnel run --token ${TUNNEL_TOKEN}
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN}
+    networks:
+      - quota
     depends_on:
       relay:
         condition: service_healthy
@@ -51,12 +56,18 @@ services:
       - relay-data:/data
       - relay-backups:/backups
       - ../../scripts/relay-sqlite-backup.sh:/usr/local/bin/relay-sqlite-backup.sh:ro
+    networks:
+      - quota
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         set -eu
         apk add --no-cache sqlite tzdata
         exec /usr/local/bin/relay-sqlite-backup.sh --loop
+
+networks:
+  quota:
+    name: quota-relay
 
 volumes:
   relay-data:

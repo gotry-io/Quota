@@ -1,8 +1,11 @@
 # quota-relay on dmit. Secrets are Portainer stack Env vars (env_file is not
-# usable in Portainer stacks). Public traffic: Caddy (stack 87) -> relay:8787.
+# usable in Portainer stacks). Public traffic reaches Relay only through the
+# Cloudflare Tunnel: Cloudflare edge -> cloudflared (an outbound connection from
+# this host) -> relay:8787 on the stack's private network. Nothing is published on
+# the host and Caddy does not serve quota.gotry.io (ADR 0055).
 services:
   relay:
-    image: ghcr.io/gotry-io/quota-relay:0.0.4
+    image: ghcr.io/gotry-io/quota-relay:0.0.5
     container_name: quota-relay
     restart: unless-stopped
     environment:
@@ -10,6 +13,11 @@ services:
       RELAY_SQLITE_PATH: /data/relay.sqlite
       RELAY_STATIC_DIR: apps/web/.svelte-kit/output/client
       NODE_OPTIONS: --max-old-space-size=64
+      # cloudflared is the only peer that can reach Relay, and it names the client
+      # in CF-Connecting-IP, which Cloudflare's edge sets and a client cannot. The
+      # default RELAY_TRUSTED_PROXIES (private ranges) is enough: membership of the
+      # `quota-relay` network is the boundary, not an address list.
+      RELAY_CLIENT_ADDRESS_HEADER: cf-connecting-ip
       GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID}
       GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET}
       APPLE_SIGNIN_TEAM_ID: ${APPLE_SIGNIN_TEAM_ID}
@@ -23,7 +31,7 @@ services:
     volumes:
       - relay-data:/data
     networks:
-      - web
+      - quota
     mem_limit: 192m
     logging:
       driver: json-file
@@ -36,6 +44,28 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+
+  tunnel:
+    # Pinned; move it deliberately (https://github.com/cloudflare/cloudflared/releases).
+    image: cloudflare/cloudflared:2026.9.1
+    container_name: quota-relay-tunnel
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      # Remotely managed tunnel `quota-relay`; its public hostname
+      # quota.gotry.io -> http://quota-relay:8787 lives in Cloudflare.
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN}
+    networks:
+      - quota
+    depends_on:
+      relay:
+        condition: service_healthy
+    mem_limit: 64m
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "2"
 
   backup:
     image: alpine:3.21
@@ -50,6 +80,8 @@ services:
       - relay-data:/data
       - relay-backups:/backups
       - /opt/quota-relay/relay-sqlite-backup.sh:/usr/local/bin/relay-sqlite-backup.sh:ro
+    networks:
+      - quota
     mem_limit: 32m
     logging:
       driver: json-file
@@ -64,8 +96,10 @@ services:
         exec /usr/local/bin/relay-sqlite-backup.sh --loop
 
 networks:
-  web:
-    external: true
+  # A plain bridge: Relay still dials out (GitHub, Apple, Resend, status pages),
+  # but no container outside this stack can reach it.
+  quota:
+    name: quota-relay
 
 volumes:
   relay-data:

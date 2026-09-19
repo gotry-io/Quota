@@ -420,7 +420,11 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   default, or `cf-connecting-ip`) and only when the socket peer is listed in
   `RELAY_TRUSTED_PROXIES` (loopback, RFC1918, and unique-local IPv6 when unset), taking
   `CF-Connecting-IP` or the right-most `X-Forwarded-For` hop that is not itself a trusted
-  proxy, and the socket peer otherwise. IPv4-mapped IPv6 peers match IPv4 CIDRs. Readiness probes
+  proxy, and the socket peer otherwise. IPv4-mapped IPv6 peers match IPv4 CIDRs. Production is
+  reachable only through a Cloudflare Tunnel: Relay has no public address and shares its network
+  only with the tunnel connector and the backup job, so the `CF-Connecting-IP` it honours is
+  Cloudflare's statement, not a client's
+  ([ADR 0055](decisions/0055-relay-is-reachable-only-through-a-tunnel.md)). Readiness probes
   and the hourly schedule delete at most 100 expired rows per credential and observation table per
   run, and consuming a limit collects at most 100 expired counters inline; each delete addresses
   whole rows, so expiring one window never resets a live one. Expired grants and counters are
