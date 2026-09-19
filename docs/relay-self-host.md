@@ -115,7 +115,8 @@ taken before the database was deleted and is kept by the owner off the repositor
 The `backup` container runs `relay-sqlite-backup.sh --loop`: at 03:00 in its `TZ`
 (`Asia/Shanghai`) it writes `sqlite3 /data/relay.sqlite ".backup /backups/relay-YYYYMMDD.sqlite"`
 and keeps 14 dated files. A second run on the same calendar day overwrites that
-day's file.
+day's file. SQLite `-wal` / `-shm` files beside a snapshot are not used; `.backup`
+writes a single consistent file.
 
 Manual snapshot from the host:
 
@@ -123,10 +124,53 @@ Manual snapshot from the host:
 docker exec quota-relay-backup /usr/local/bin/relay-sqlite-backup.sh
 ```
 
-Restore: stop `relay`, replace `/data/relay.sqlite` on the `relay-data` volume with
-the snapshot (a dated file on the `relay-backups` volume, or the owner's off-host copy) (same `docker run --rm -v ... alpine cp` pattern as the cutover, then
-`chown 1000:1000`), start `relay`. SQLite `-wal` / `-shm` files beside a snapshot
-are not used; `.backup` writes a single consistent file.
+Restore uses [`scripts/relay-sqlite-restore.sh`](../scripts/relay-sqlite-restore.sh)
+from a checkout of the Relay version you will boot. The script has no docker in
+it: it refuses a snapshot that fails `PRAGMA integrity_check` or that names a
+`d1_migrations` row the checkout does not have (fewer rows are fine — the
+process applies the rest on start), refuses to overwrite a non-empty target
+unless `--force`, and writes via a temp file + rename.
+
+On the host, against files already on disk:
+
+```bash
+scripts/relay-sqlite-restore.sh /backups/relay-YYYYMMDD.sqlite /data/relay.sqlite
+```
+
+On dmit, stop `relay` first, then wrap the stack volumes (the Portainer project
+prefixes them; `docker volume ls` names `quota-relay_relay-data` and
+`quota-relay_relay-backups`) and the checkout's migrations:
+
+```bash
+docker stop quota-relay
+docker run --rm \
+  -v quota-relay_relay-data:/data \
+  -v quota-relay_relay-backups:/backups \
+  -v /path/to/quota/scripts/relay-sqlite-restore.sh:/usr/local/bin/relay-sqlite-restore.sh:ro \
+  -v /path/to/quota/apps/relay/migrations:/migrations:ro \
+  -e RELAY_MIGRATIONS_DIR=/migrations \
+  alpine:3.21 \
+  sh -c 'apk add --no-cache sqlite &&
+    /usr/local/bin/relay-sqlite-restore.sh --force /backups/relay-YYYYMMDD.sqlite /data/relay.sqlite &&
+    chown 1000:1000 /data/relay.sqlite'
+docker start quota-relay
+```
+
+The script drops leftover `-wal` / `-shm` beside the target so an old WAL cannot
+replay onto the restored file. Check `docker logs quota-relay` for
+`relay_migrations_applied` after start.
+
+The recovery drill is `restore-drill` in the Node integration suite
+(`pnpm --filter @gotry-io/quota-relay test:node:integration`, or
+`pnpm --filter @gotry-io/quota-relay test:restore-drill`). It builds the Node
+bundle, starts Relay on a temp SQLite and a random port, creates an Account and
+a session and uploads Usage through the HTTP API, snapshots with
+`relay-sqlite-backup.sh`, restores with `relay-sqlite-restore.sh` into a fresh
+file, starts a second process on that file, and checks that the Account summary
+for that session is identical. It also refuses a tampered snapshot. The website
+must already be built (`build:node` aliases the SvelteKit server output).
+
+Off-host copies of these snapshots are deferred (K8).
 
 ## Logs and health
 

@@ -204,8 +204,8 @@ Always shown behind the tab bar. Its content is one merged list, whichever sides
 | Sources | What Overview shows |
 | --- | --- |
 | Only this iPhone | Title **Quota**. Quota rows from what this phone read. No Today section, because Today is the Account's fold and this phone uploads nothing. |
-| Only the Account | Title is the account label. Quota rows from `subscriptions[]`, plus Today. Unchanged from before. |
-| Both | One row per subscription, merged by [ADR 0003](../../docs/decisions/0003-observation-preserving-subscription-merge.md) — an account both a Mac and this phone read is one row, and a tie goes to this phone because it is the authority for the device in front of you. Today is still the Account's. |
+| Only the Account | Title **Quota**. Quota rows from `subscriptions[]`, plus Today. Account identity lives in Settings. |
+| Both | Title **Quota**. One row per subscription, merged by [ADR 0003](../../docs/decisions/0003-observation-preserving-subscription-merge.md) — an account both a Mac and this phone read is one row, and a tie goes to this phone because it is the authority for the device in front of you. Today is still the Account's. |
 
 Content comes from the last complete Account summary and the last local collection, then from a
 refresh of both. An inset-grouped `List`. Pull to refresh runs the local pass and, with an account,
@@ -213,8 +213,8 @@ one Today fetch. A refresh in flight ignores additional refresh requests.
 
 Header:
 
-- Title is the account display label, or **Account** when the label is absent. The body does not
-  repeat that label. The navigation title stays large; `.navigationSubtitle` is not used.
+- Title is **Quota** in every phase. Account identity lives in Settings; the body does not
+  repeat it. The navigation title stays large; `.navigationSubtitle` is not used.
 
 Body, in order:
 
@@ -246,19 +246,24 @@ Body, in order:
    balance-only windows use **Balance** plus the unit amount. Empty windows: **No quota windows
    yet.** The canonical **Updated** age is the quota Section footer in `meta` under the last
    card; it wraps and is spoken in full.
-3. If there are no subscriptions: `ContentUnavailableView` titled **No quota yet**, system image
-   `gauge.with.dots.needle.33percent`, and the two ways to change that as full-width buttons.
-   **Connect a provider** is `.borderedProminent` (switches to Settings, where the Providers group
-   is). **Sign in to Quota** is `.bordered`. Without an account the description is **Connect a
-   provider to read your quota on this iPhone, or sign in to Quota to see what your Macs report.**
-   with both buttons. With one it is **Set up QuotaBar on a Mac to start reporting, or connect a
-   provider to read it on this iPhone.** and only **Connect a provider**.
-4. Today, only when an account answered, before setup or device support: one
-   `QuotaCard(title: "Today")` holding a `QuotaStatGrid` of four `QuotaStatTile`s — Tokens,
-   API-equivalent cost, Input, and Output. Identifiers `overview.today.*` sit on the tiles; the
-   card carries `overview.today`; the header text keeps `section.header.today`. Complete cost is
-   `$X.XX`, partial is `≥ $X.XX`, unavailable is **— unpriced**. Empty: the card with **No usage
-   today.**
+3. If there are no subscriptions: two outcomes as a wrapping `VStack` (not a
+   `ContentUnavailableView` title), so each path stays a clear choice at accessibility sizes.
+   **See quota on this iPhone**, then a full-width `.borderedProminent` **Connect a provider**
+   (`overview.connect-provider`; switches to Settings, where the Providers group is), then
+   **Credentials stay on this phone.** Without an account, a second group: **Already use
+   QuotaBar?**, `.bordered` **Sign in to Quota** (`overview.signin`), then **See readings from
+   your other devices.** With an account, only Connect, and **Set up QuotaBar on a Mac to start
+   reporting, or connect a provider to read it on this iPhone.** The container keeps
+   `overview.empty`.
+4. Today, only when an account answered, before setup or device support: one compact List row —
+   **Today** leading (`section.header.today`), tokens and API-equivalent cost trailing in
+   `support` (not hero type). The row carries `overview.today` and opens the Usage tab with
+   `UsagePeriodSelection.today` selected (`.day(offset: 0)`). Identifiers `overview.today.tokens`
+   and `overview.today.cost` sit on the values. Complete cost is `$X.XX API-equivalent`, partial
+   is `≥ $X.XX API-equivalent`, unavailable is **— unpriced** (never `$0`). Empty: the same row
+   with **No usage today.** (`overview.today.empty`). One VoiceOver label names Today, the
+   accessible token count, and the API-equivalent cost together. At accessibility sizes the
+   values wrap under the label rather than truncating. Input and Output tiles are gone.
 5. When `summary.devices` is empty, the compact Mac setup Section after Today. When devices exist,
    Overview does not repeat the Devices list; the Devices tab is the one full device list.
 
@@ -738,8 +743,8 @@ Rules:
 | State | Presentation |
 | --- | --- |
 | Loading, no cache | Centered progress and **Loading account…**. No surface. |
-| Empty quota, with an account | **No quota yet** with **Set up QuotaBar on a Mac to start reporting, or connect a provider to read it on this iPhone.** and a full-width `.borderedProminent` **Connect a provider** |
-| Empty Today | The Today `QuotaCard` with **No usage today.** |
+| Empty quota, with an account | **See quota on this iPhone** with **Set up QuotaBar on a Mac to start reporting, or connect a provider to read it on this iPhone.** and a full-width `.borderedProminent` **Connect a provider** |
+| Empty Today | The compact Today row with **No usage today.** |
 | Empty Usage period | `ContentUnavailableView` **No usage** / **No usage was reported for this period.** |
 | Usage with no account | `ContentUnavailableView` **Sign in to see your usage** / **Usage is what QuotaBar reports from your Macs. This iPhone reads quota here, and measures no usage of its own.** with **Sign in to Quota** |
 | Loading activity | Skeleton in the Activity section. Accessibility value **Loading activity** |
@@ -752,7 +757,7 @@ Rules:
 | Offline or failed refresh, cache present | Last-good content plus **Showing saved data. Couldn't refresh.** |
 | Offline or failed refresh, no cache | Empty Overview plus **Couldn't refresh. Pull to try again.** |
 | Expired session | Overview status **Session expired. Connect again.** above whatever this phone still reads |
-| Signed out, nothing read | **No quota yet** with full-width `.borderedProminent` **Connect a provider** and `.bordered` **Sign in to Quota** |
+| Signed out, nothing read | **See quota on this iPhone** with full-width `.borderedProminent` **Connect a provider** and **Credentials stay on this phone.**; then **Already use QuotaBar?** with `.bordered` **Sign in to Quota** and **See readings from your other devices.** |
 | Provider refused a stored session | That Providers row reads **Sign in again to keep reading this account.** with a **Sign in again** control |
 | Connect running | One disabled **Connecting…** button with visible progress. No status line. |
 | Connect failure | Overview status Label. Default **Couldn't connect. Try again.** |
@@ -830,7 +835,7 @@ provider and support, and no custom card chrome beyond the system widget contain
 - Unnamed glass (`issue.element == nil`) is recorded and does not gate. The iOS 26 auditor still
   reports Dynamic Type "partially unsupported" twice on system list configuration and on inner
   text of scaling fonts (`section.header.` / `section.footer.`, `overview.today` /
-  `overview.subscription` tiles, app-owned identifiers, Form labels, the sheet **Done** button);
+  `overview.subscription` rows, app-owned identifiers, Form labels, the sheet **Done** button);
   clipping on `usage.activity.empty` also reproduces. Those stay, counted per exemption rule.
   Each screen audit attaches `audit-outcome.<screen>` JSON: first- and second-pass findings
   (including nil-element and exempted), and one outcome per type — `passed`, `confirmed` (same
@@ -913,7 +918,7 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 
 | Fixture | UI state |
 | --- | --- |
-| `signed-out` | Signed-in tabs with nothing read: **No quota yet** and both invitations. No session restore |
+| `signed-out` | Signed-in tabs with nothing read: **See quota on this iPhone** and both invitations. No session restore |
 | `sign-in` | The sign-in sheet over a phone that read its own providers: welcome mark and title, three feature lines, **Continue with Apple**, **Continue with GitHub**, **Continue with Email** |
 | `connecting` | Disabled **Connecting…** button with visible progress on neutral glass |
 | `connect-error` | Empty Overview plus the **Couldn't connect. Try again.** status |
