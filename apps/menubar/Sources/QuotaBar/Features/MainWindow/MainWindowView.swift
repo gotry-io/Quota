@@ -97,6 +97,19 @@ struct MainWindowView: View {
           .accessibilityValue(dashboard.usageSource == .account ? "Account" : "This Mac")
         }
       }
+      if page == .usage {
+        ToolbarItem {
+          Button {
+            MainWindowController.shared.exportUsage()
+          } label: {
+            Label("Export", systemImage: "square.and.arrow.up")
+          }
+          .disabled(!model.usage.canExportUsage)
+          .accessibilityIdentifier("usage.export")
+          .accessibilityLabel("Export")
+          .help("Export this period")
+        }
+      }
       QuotaToolbarSpacer.Flexible()
       ToolbarItem(placement: .primaryAction) {
         Button {

@@ -155,6 +155,19 @@ final class MainWindowController: NSObject, NSWindowDelegate {
 
   var canRefresh: Bool { model?.isRefreshing != true }
 
+  var canExportUsage: Bool {
+    guard let model else { return true }
+    return model.usage.canExportUsage
+  }
+
+  func exportUsage() {
+    guard let model,
+      let input = model.usage.usageExportInput(now: Date(), appVersion: AppMetadata.version)
+    else { return }
+    show(page: .usage)
+    UsageExportPanel.present(input: input, on: window)
+  }
+
   private func makeWindow() -> NSWindow {
     guard let model else {
       preconditionFailure("MainWindowController.attach(model:) must run before show().")

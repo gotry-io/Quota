@@ -18,6 +18,7 @@ import UsageActivity from "$lib/components/UsageActivity.svelte";
 import UsageBreakdown from "$lib/components/UsageBreakdown.svelte";
 import UsageBudgetBar from "$lib/components/UsageBudgetBar.svelte";
 import UsageDaily from "$lib/components/UsageDaily.svelte";
+import UsageExportMenu from "$lib/components/UsageExportMenu.svelte";
 import UsagePeriodBar from "$lib/components/UsagePeriodBar.svelte";
 import UsageRhythm from "$lib/components/UsageRhythm.svelte";
 import { costBasisLabel, formatCost, formatCount, formatUtcDateRange } from "$lib/format";
@@ -33,6 +34,11 @@ import {
   writeBudget,
   writeFiredBudgetAlerts,
 } from "$lib/usage-budget";
+import {
+  accountPeriodExportInput,
+  type UsageExportInput,
+  WEB_APP_VERSION,
+} from "$lib/usage-export";
 import {
   cacheHitLabel,
   cacheSavedLabel,
@@ -136,6 +142,13 @@ const detailLoading = $derived(
       detailEntry.status === "idle" ||
       detailEntry.status === "loading"),
 );
+const exportInput = $derived.by((): UsageExportInput | null => {
+  if (fromSummary || !selectedPeriodRead) return null;
+  return accountPeriodExportInput(selectedPeriodRead, {
+    exportedAt: store.now.toISOString(),
+    appVersion: WEB_APP_VERSION,
+  });
+});
 
 $effect(() => {
   void store.ensureActivity(activityRange);
@@ -206,12 +219,15 @@ function acknowledgeBudgetAlerts(keys: readonly string[]): void {
       <p class="dashboard-status">{status}</p>
     {/if}
   </div>
-  <UsagePeriodBar
-    {selection}
-    today={store.now}
-    earliest={activityRange.from}
-    onSelect={selectPeriod}
-  />
+  <div class="usage-heading-tools">
+    <UsageExportMenu input={exportInput} />
+    <UsagePeriodBar
+      {selection}
+      today={store.now}
+      earliest={activityRange.from}
+      onSelect={selectPeriod}
+    />
+  </div>
 </header>
 
 <UsageBudgetBar

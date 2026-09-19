@@ -2067,12 +2067,21 @@ impl NativeBackend {
         let (from, to) = span
             .map(|span| span.dates.clone())
             .unwrap_or_else(|| usage_date_range(&rows, today));
-        Ok(json!({
+        let mut detail = json!({
             "range": {"from": from, "to": to},
             "usage": summary,
             "incomplete": incomplete || partial,
-            "details_truncated": details_truncated
-        }))
+            "details_truncated": details_truncated,
+            "timezone": timezone
+        });
+        if let Some(span) = span {
+            detail["bounds"] = json!({
+                "start": span.start,
+                "end": span.end,
+                "grid": "first_whole_hour_of_local_date; fractional_midnight_to_previous_day; no_proration"
+            });
+        }
+        Ok(detail)
     }
 
     /// This period's facts, each placed on the local clock the period is bounded by.
@@ -4263,6 +4272,15 @@ fn account_period_detail(value: &Value) -> Result<Value, BackendError> {
         }
     }
     detail["coverage"] = coverage;
+    if let Some(timezone) = request.get("timezone") {
+        detail["timezone"] = timezone.clone();
+    }
+    if let Some(bounds) = object.get("bounds") {
+        detail["bounds"] = bounds.clone();
+    }
+    if let Some(revision) = object.get("revision") {
+        detail["revision"] = revision.clone();
+    }
     Ok(detail)
 }
 
@@ -6072,6 +6090,11 @@ mod tests {
                 "to": "2026-08-03",
                 "timezone": "Asia/Singapore"
             },
+            "bounds": {
+                "start": "2026-07-31T16:00:00Z",
+                "end": "2026-08-03T16:00:00Z",
+                "grid": "first_whole_hour_of_local_date; fractional_midnight_to_previous_day; no_proration"
+            },
             "totals": totals,
             "cost": cost,
             "cache_saved": {
@@ -6091,11 +6114,22 @@ mod tests {
                 "daily_retained_from": "2026-07-01",
                 "hourly_retained_from": null,
                 "truncated_by_retention": true
+            },
+            "revision": {
+                "usage_revision": 4,
+                "device_generation": 1,
+                "account_updated_at": "2026-08-03T10:00:00Z",
+                "pricing_revision": "pricing_1",
+                "model_catalog_revision": "models_1",
+                "fold_version": 1
             }
         });
         let detail = account_period_detail(&body).expect("mapped");
         assert_eq!(detail["range"]["from"], "2026-08-01");
         assert_eq!(detail["range"]["to"], "2026-08-03");
+        assert_eq!(detail["timezone"], "Asia/Singapore");
+        assert_eq!(detail["bounds"]["start"], "2026-07-31T16:00:00Z");
+        assert_eq!(detail["revision"]["usage_revision"], 4);
         assert_eq!(detail["incomplete"], json!(true));
         assert_eq!(detail["coverage"]["truncated_by_retention"], json!(true));
         assert_eq!(detail["coverage"]["partial"], json!(true));

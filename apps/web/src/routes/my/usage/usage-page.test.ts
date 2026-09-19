@@ -403,3 +403,27 @@ it("parses a period response and renders totals, cost, and coverage", async () =
     "Some hours in this period were scanned incompletely.",
   );
 });
+
+it("offers Export for a loaded period that has days", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-08-12T12:00:00Z"));
+  mockFetch((url) => {
+    if (url.includes("/account/summary")) return jsonResponse(acceptedSummary());
+    if (url.includes("/account/usage/period")) {
+      return jsonResponse(periodFromSummary(url, acceptedSummary()));
+    }
+    const to = new URL(url, "https://quota.test").searchParams.get("to") ?? "2026-08-12";
+    return jsonResponse(activityBody(to));
+  });
+
+  const store = createAccountStore();
+  await store.ensureSummary();
+  const view = render(UsagePageHarness, { store });
+  await waitFor(() => {
+    expect(view.container.querySelector("#token-total")).not.toBeNull();
+  });
+  const exportTrigger = view.container.querySelector("#usage-export");
+  expect(exportTrigger).not.toBeNull();
+  expect(exportTrigger?.getAttribute("aria-disabled")).toBeNull();
+  expect(exportTrigger?.textContent?.trim()).toBe("Export");
+});

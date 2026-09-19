@@ -79,6 +79,8 @@ enum QuotaBarMainMenu {
   @MainActor
   private static func fileMenu() -> NSMenu {
     let menu = NSMenu(title: "File")
+    menu.addItem(targetedItem("Export Usage…", #selector(Actions.exportUsage(_:))))
+    menu.addItem(.separator())
     menu.addItem(
       withTitle: "Close",
       action: #selector(NSWindow.performClose(_:)),
@@ -205,6 +207,10 @@ enum QuotaBarMainMenu {
       MainWindowController.shared.show(page: .usage)
     }
 
+    @objc func exportUsage(_ sender: Any?) {
+      MainWindowController.shared.exportUsage()
+    }
+
     @objc func refresh(_ sender: Any?) {
       MainWindowController.shared.refresh()
     }
@@ -224,6 +230,9 @@ enum QuotaBarMainMenu {
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
       if menuItem.action == #selector(refresh(_:)) {
         return MainWindowController.shared.canRefresh
+      }
+      if menuItem.action == #selector(exportUsage(_:)) {
+        return MainWindowController.shared.canExportUsage
       }
       return true
     }

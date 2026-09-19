@@ -320,6 +320,20 @@ func decodesAccountPeriodCoverageOnAUsageDetail() throws {
         "daily_retained_from": "2026-07-01",
         "hourly_retained_from": null,
         "truncated_by_retention": true
+      },
+      "timezone": "Asia/Singapore",
+      "bounds": {
+        "start": "2026-07-31T16:00:00Z",
+        "end": "2026-08-03T16:00:00Z",
+        "grid": "first_whole_hour_of_local_date; fractional_midnight_to_previous_day; no_proration"
+      },
+      "revision": {
+        "usage_revision": 4,
+        "device_generation": 1,
+        "account_updated_at": "2026-08-03T10:00:00Z",
+        "pricing_revision": "pricing_1",
+        "model_catalog_revision": "models_1",
+        "fold_version": 1
       }
     }
     """#.utf8
@@ -329,6 +343,9 @@ func decodesAccountPeriodCoverageOnAUsageDetail() throws {
   #expect(detail.coverage?.partial == true)
   #expect(detail.coverage?.truncatedByRetention == true)
   #expect(detail.coverage?.dailyRetainedFrom == "2026-07-01")
+  #expect(detail.timezone == "Asia/Singapore")
+  #expect(detail.bounds?.start == "2026-07-31T16:00:00Z")
+  #expect(detail.revision?.usageRevision == 4)
   #expect(detail.usage.days?.count == 1)
   #expect(detail.usage.days?.first?.date == "2026-08-01")
 }

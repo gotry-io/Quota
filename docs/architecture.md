@@ -386,7 +386,9 @@ is the same rule: `tz` is in the query string, so a different clock is a differe
 The period read is inclusive local dates in a required IANA timezone, at most 366 days, on the hour
 grid ([ADR 0055](decisions/0055-an-account-period-is-a-local-date-range.md)): a local day begins at
 the first whole UTC hour of that civil date, and the hour that contains a fractional-offset midnight
-belongs to the previous local day. Explicit `{from,to}` does not roll over with the wall clock.
+belongs to the previous local day. The website and QuotaBar can export that same period as CSV or
+JSON from the body already on screen
+([ADR 0056](decisions/0056-a-period-export-is-the-period-on-screen.md)). Explicit `{from,to}` does not roll over with the wall clock.
 The summary's Usage fold is stored keyed by what it depends on
 ([ADR 0031](decisions/0031-the-usage-fold-is-stored.md)): a matching key serves the stored fold,
 and a miss folds and stores. The Rust service and the iOS client both read conditionally, storing each response with

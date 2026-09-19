@@ -48,7 +48,8 @@ Quota Web publishes no account data anonymously. `/app` shipped in 0.0.4, so it 
 it stay a redirect to `/my`; new links and OAuth callbacks name `/my` directly. Overview is remaining
 quota: subscription cards (each a link to `/my/subscriptions/<sel>`), a Today strip to
 `/my/usage?period=today`, and a Devices summary line to `/my/devices`. Usage puts period tabs on the
-same row as the page name, totals Tokens / API-equivalent cost / Messages, and a two-column tree +
+same row as the page name, an Export menu (CSV / JSON) for the selected period, totals Tokens /
+API-equivalent cost / Messages, and a two-column tree +
 Activity layout at 1024 px. Devices is a last-seen table with platform icons, or two-column cards
 below 620 px. Settings groups Appearance, Sign-in methods, Account, Public profile, and Legal.
 The header **Sign in** is a link to `/sign-in`. That page offers **Continue with Apple**, **Continue

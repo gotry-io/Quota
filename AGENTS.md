@@ -31,6 +31,7 @@ Read the relevant source before changing that area:
 | The panel glances; quota history stays local samples | `docs/decisions/0051-the-panel-glances-and-the-windows-explain.md` |
 | QuotaBar is the app, and the menu bar is part of it | `docs/decisions/0052-quotabar-is-the-app-and-the-menu-bar-is-part-of-it.md` |
 | QuotaBar is resident in the menu bar | `docs/decisions/0054-quotabar-is-resident-in-the-menu-bar.md` |
+| A period export is the period on screen | `docs/decisions/0056-a-period-export-is-the-period-on-screen.md` |
 | One statement per contract, and where it is written | `docs/decisions/0019-one-statement-per-contract.md` |
 | Invalid provider/agent input isolation | `docs/decisions/0026-isolate-invalid-input-at-the-smallest-scope.md` |
 | Managed account, device, authentication, and deletion lifecycle | `docs/decisions/0006-managed-account-device-usage.md` |
