@@ -3,7 +3,7 @@ import QuotaPresentation
 
 /// Title and body for a local remaining-quota alert.
 ///
-/// The phrases live in `apps/menubar/DESIGN.md` Shared product vocabulary.
+/// The phrases live in `docs/design.md` Shared product vocabulary.
 public enum AlertCopy {
   public static func title(providerDisplayName: String, windowTitle: String) -> String {
     "\(providerDisplayName) · \(windowTitle)"

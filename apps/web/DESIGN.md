@@ -1,35 +1,28 @@
 # Quota Web Design
 
-This file is the canonical visual and interaction contract for `apps/web`. Product boundaries and
-data ownership belong in [`docs/architecture.md`](../../docs/architecture.md); authentication,
-credentials, CSRF, and deletion safety belong in
-[`docs/security.md`](../../docs/security.md).
+This file lists only Quota Web platform deltas and links [`docs/design.md`](../../docs/design.md).
+
+Product boundaries and data ownership belong in
+[`docs/architecture.md`](../../docs/architecture.md); authentication, credentials, CSRF, and
+deletion safety belong in [`docs/security.md`](../../docs/security.md). QuotaBar belongs in
+[`apps/menubar/DESIGN.md`](../menubar/DESIGN.md). Quota iOS belongs in
+[`apps/ios/DESIGN.md`](../ios/DESIGN.md).
 
 ## Character
 
 Quota Web is an editorial account surface: quiet, direct, and precise. It should feel like a useful
 open-source tool, not a hosting console or a promotional SaaS dashboard.
 
-- Lead with remaining quota, normalized Usage, and the privacy boundary.
 - Use black type, white space, thin neutral rules, and mint only for brand or healthy state.
 - Support light and dark appearance. Follow the system until the user chooses one in the footer.
 - Prefer clear labels and real values over decoration.
 - Do not use gradients, drop shadows, glass effects, fake browser chrome, or ornamental charts.
-- Product names are Quota, QuotaBar, and QuotaRelay.
 
-## Shared product vocabulary
-
-Freshness copy, reset copy, the one no-reset phrase, the pace line, provider display names, quota window titles, period names, and Devices copy follow
-**Shared product vocabulary** in [`../menubar/DESIGN.md`](../menubar/DESIGN.md); the exact strings
-and thresholds are `packages/protocol/fixtures/freshness-copy-conformance.json` and
-`packages/protocol/fixtures/quota-pace-conformance.json`, reset copy is
-`packages/protocol/fixtures/reset-copy-conformance.json`, and remaining copy is
-`packages/protocol/fixtures/remaining-copy-conformance.json`, which `src/lib/format.ts`
-answers in its tests. A window's pace prints under its reset line, in `--meter-warn` when the rate
-runs the window out before it resets and in the meta color otherwise: **Expected to last until
-reset** or **May run out about 2h before reset**, with the even-pace explanation only on
-subscription detail. The site does not restate those rules and does not keep a provider or agent
-name table of its own.
+Copy, remaining, reset, pace, freshness, periods, and Devices vocabulary:
+[Shared product vocabulary](../../docs/design.md#shared-product-vocabulary). `src/lib/format.ts`
+answers the freshness, reset, remaining, and pace fixtures. A window's pace prints under its reset
+line; glance cards print the headline, subscription detail adds the even-pace explanation. The
+site keeps no provider or agent name table of its own.
 
 ## Information architecture
 
@@ -193,34 +186,25 @@ in the Web UI.
 
 ## Tokens
 
-Colour roles, remaining-quota bands, spacing, and radii come from
+Colour, remaining-quota bands, spacing, and radii:
+[`docs/design.md`](../../docs/design.md#colour) and
 [`packages/design-tokens/tokens.json`](../../packages/design-tokens/tokens.json).
 `src/app.css` imports the generated CSS custom properties; do not hand-copy those values.
-Web card radius is 16. The table below is this surface's mapping, not a second palette.
+Web card radius is 16.
 
-### Color
+Web-only surfaces that are not in the shared token file: brand surface for quiet highlighted
+regions, inverted surface for a bounded opposite-tone section, and deep ink for primary-action
+hover. Marketing supporting prose may use a quieter body colour than account-shell secondary.
 
-| Role | Light | Dark | Use |
-| --- | --- | --- | --- |
-| Ink | `#000000` | `#f4f4f4` | Primary type and primary actions |
-| Deep ink | `#090909` | `#ffffff` | Primary-action hover |
-| Charcoal | `#525252` | `#c4c4c4` | Secondary labels and navigation |
-| Body | `#737373` | `#a3a3a3` | Supporting prose |
-| Muted | `#6b6b6b` | `#8f8f8f` | Tertiary metadata; 4.5:1 or better on the canvas in both themes |
-| Emerald / mint | `#087456` / `#82ddb8` | `#82ddb8` | Brand and healthy/complete meaning |
-| Brand surface | `#f2f8f5` | `#10231c` | Quiet highlighted regions |
-| Canvas | `#ffffff` | `#111111` | Page and cards |
-| Soft surface | `#fafafa` | `#1b1b1b` | Hover and low-contrast grouping |
-| Inverted surface | `#171717` | `#f4f4f4` | Bounded opposite-tone section |
-| Hairline | `#e5e5e5` | `#2a2a2a` | Dividers and card outlines |
-
-Color never carries status alone. Every state also has a text label. The footer has one conventional
-appearance control with **System**, **Light**, and **Dark** options. System is the default, leaves no
-`data-theme` override, and follows the browser's `color-scheme` immediately when the operating-system
-appearance changes. Light or Dark writes the explicit `quota-theme` override to local storage;
-choosing System removes it. Do not render three permanent footer buttons.
+The footer has one conventional appearance control with **System**, **Light**, and **Dark**
+options. System is the default, leaves no `data-theme` override, and follows the browser's
+`color-scheme` immediately when the operating-system appearance changes. Light or Dark writes the
+explicit `quota-theme` override to local storage; choosing System removes it. Do not render three
+permanent footer buttons.
 
 ### Type
+
+Type roles are in [`docs/design.md`](../../docs/design.md#type). Web deltas:
 
 - Body and controls: `Inter`, then the native sans-serif stack.
 - Display headings: `ui-rounded`, `SF Pro Rounded`, then the system stack.
@@ -230,13 +214,6 @@ choosing System removes it. Do not render three permanent footer buttons.
   `--fs-body` (15 px), and `--fs-caption` (13 px) from `src/app.css`.
 - Monospace is reserved for values whose literal representation matters, such as authorization
   codes. Do not use it as a decorative product motif.
-
-### Meter thresholds
-
-Remaining-percent meters use `--meter-good` at 40 and above, `--meter-warn` from 15 through 39,
-and `--meter-critical` below 15, in both appearances — the same bands as
-`QuotaTone`. Color never carries status alone: the percent
-label stays next to the bar.
 
 ### Shape and spacing
 
@@ -297,8 +274,9 @@ Cost always says how it was arrived at; unavailable cost renders as an em dash p
 partial cost uses a lower bound marker. Under the totals headline, one line `Priced N of M rows`
 from that period's cost row counts, or `Cost covers every row` / `Cost skips N rows this catalog
 can't price` when those counts are absent. The Usage page period tabs are **Day**, **Week**, **Month**,
-**7D**, **30D**, **All**, and **Custom** — the abbreviations of the names in Shared product
-vocabulary, which are also their accessible names; **Last 30 days** is the default. Under the tabs
+**7D**, **30D**, **All**, and **Custom** — the abbreviations of the names in
+[Shared product vocabulary](../../docs/design.md#shared-product-vocabulary), which are also their
+accessible names; **Last 30 days** is the default. Under the tabs
 sit **Previous period**, the range title, and **Next period**; the arrows apply to Day, Week, and
 Month only, and **Next period** is disabled on the current unit. **Custom** opens two native date
 inputs bounded by the activity range and an **Apply**. The selection is
@@ -384,7 +362,8 @@ period, a **Tokens** / **Cost** pair of `aria-pressed` text buttons deciding wha
 a **Show daily breakdown** disclosure over a semantic table with Date / Total / In / Out / Cached /
 Reasoning / Messages / Cost. In Tokens the bar stacks cached input, fresh input, and output, which
 add up to the day's total, using the three darkest activity steps. Empty and unpriced days follow
-**An empty day is a tick, not a bar** in Shared product vocabulary. The panel is labelled **UTC**,
+**An empty day is a tick, not a bar** in
+[Shared product vocabulary](../../docs/design.md#shared-product-vocabulary). The panel is labelled **UTC**,
 the calendar the activity read answers. **Up to 2 years** has no Daily panel: its per-day shape is
 the Activity graph beside it.
 

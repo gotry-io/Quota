@@ -30,7 +30,8 @@ attempt it is still holding before ending the sheet.
 device with `intent: link`. Every other bind, and every unbind, opens
 `https://quota.gotry.io/sign-in?return_to=%2Fmy%2Fsettings` in the browser: binding writes to an
 Account, and unbinding is a destructive change the website asks for a recent sign-in before
-allowing. UI behaviour is canonical in [`DESIGN.md`](DESIGN.md).
+allowing. Shared visual language is in [`docs/design.md`](../../docs/design.md); iOS platform
+deltas are in [`DESIGN.md`](DESIGN.md).
 
 ## Runtime boundary
 
@@ -86,7 +87,8 @@ leaves no mark. A successful read moves that session's `lastValidatedAt`, which 
 [ADR 0034](../../docs/decisions/0034-ios-collects-for-itself.md).
 
 The detailed system boundary is in [`docs/architecture.md`](../../docs/architecture.md), security
-requirements are in [`docs/security.md`](../../docs/security.md), and UI behavior is canonical in
+requirements are in [`docs/security.md`](../../docs/security.md), shared visual language is in
+[`docs/design.md`](../../docs/design.md), and iOS platform deltas are in
 [`DESIGN.md`](DESIGN.md).
 
 ## App Group and signing
