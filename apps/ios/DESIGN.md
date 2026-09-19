@@ -286,14 +286,19 @@ An inset-grouped `List` after the header:
 - Remaining history: a `QuotaCard` titled **Remaining history** with **This iPhone** beside the
   title (DECISIONS K2; this phone has history only for readings it took itself). A menu picks
   the window when there is more than one and this phone has readings for at least one of them;
-  remote-only detail has no picker. The chart plots remaining 0–100 with y-axis labels
+  remote-only detail has no picker. The chart plots remaining 0–100 over the last visible
+  span — `min` of sample retention and `max(24 hours, 4 × the window)`: 5 Hours is last 24
+  hours, Weekly last 4 weeks, monthly the 30-day retention — with y-axis labels
   **0 / 50 / 100 %** and time ticks: solid segments for observed readings, a dashed segment
-  for the estimate to reset (the same ADR 0035 projection the pace headline uses). A small
+  for the estimate to reset (the same ADR 0035 projection the pace headline uses). Segments
+  wholly before the span are dropped; a segment that crosses the start is clipped there. The
+  estimate is unchanged. A small
   legend under the chart names **Observed** (solid) and **Estimate** (dashed) in secondary
   text; it is hidden from VoiceOver because the audio graph and list already carry that.
   A reset starts a new segment; a missing window stays a gap. VoiceOver
-  names it **Remaining history** (identifier `subscription.history`), speaks a summary, and
-  exposes an audio graph plus an **Observed remaining** list. A reading Relay resolved has no
+  names it **Remaining history** (identifier `subscription.history`), speaks a summary that
+  includes the span (**last 24 hours**, and so on), and exposes an audio graph plus an
+  **Observed remaining** list of that span. A reading Relay resolved has no
   samples here, so the card prints **This iPhone has no readings of its own for this
   subscription.** instead of an empty chart. Local with nothing to plot: **This iPhone has not
   collected enough readings to draw remaining history yet.**

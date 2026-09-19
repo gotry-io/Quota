@@ -94,7 +94,7 @@ extension View {
     }
   }
 
-  /// One centred reading column for Quota and Usage.
+  /// One centred reading column for Usage.
   func quotaWindowColumn() -> some View {
     frame(maxWidth: QuotaDesign.Layout.contentMaxWidth, alignment: .topLeading)
       .frame(maxWidth: .infinity)
@@ -109,7 +109,7 @@ extension View {
   }
 }
 
-/// ScrollView that applies `quotaScrollEdge()` and the 1040pt reading column.
+/// ScrollView that applies `quotaScrollEdge()` and the 1040pt Usage reading column.
 struct QuotaWindowScroll<Content: View>: View {
   @ViewBuilder var content: Content
 

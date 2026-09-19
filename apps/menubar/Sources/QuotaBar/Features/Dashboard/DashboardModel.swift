@@ -3,10 +3,11 @@ import Observation
 import QuotaPresentation
 import QuotaWire
 
-/// How far back Dashboard plots this Mac's quota samples.
+/// How far back Dashboard used to plot used-percent charts.
 ///
-/// Persisted as `dashboard.range`. Default is seven days: a week is enough to see a cadence
-/// without drawing the whole retention horizon.
+/// Persisted as `dashboard.range`. The Quota page no longer filters remaining history by
+/// range (ADR 0042 keeps thirty days of samples). The key is left unread so a shipped value
+/// is not rewritten.
 enum DashboardRange: String, CaseIterable, Identifiable, Sendable {
   case today
   case sevenDays = "seven_days"
@@ -16,67 +17,82 @@ enum DashboardRange: String, CaseIterable, Identifiable, Sendable {
   static let fallback = DashboardRange.sevenDays
 
   var id: Self { self }
+}
 
-  var label: String {
-    switch self {
-    case .today: "Today"
-    case .sevenDays: "7D"
-    case .thirtyDays: "30D"
-    }
-  }
+/// Copy the Quota workspace prints for remaining history and source provenance.
+enum DashboardQuotaCopy {
+  static let remainingHistory = "Remaining history"
+  static let thisMac = "This Mac"
+  static let remoteOnlyHistory =
+    "This Mac has no readings of its own for this subscription."
+  static let notEnoughHistory =
+    "This Mac has not collected enough readings to draw remaining history yet."
 
-  func start(now: Date, calendar: Calendar = .current) -> Date {
-    switch self {
-    case .today:
-      calendar.startOfDay(for: now)
-    case .sevenDays:
-      now.addingTimeInterval(-7 * 86_400)
-    case .thirtyDays:
-      now.addingTimeInterval(-Double(QuotaHistory.retentionDays) * 86_400)
-    }
+  static func readings(_ count: Int) -> String {
+    count == 1 ? "Readings from 1 device" : "Readings from \(count) devices"
   }
 }
 
-/// One subscription as Dashboard's Quota section draws it.
+/// One subscription as the Quota workspace draws it: a list row and the selected detail.
 struct DashboardProvider: Equatable, Identifiable {
   let id: String
   let provider: ProviderID
   /// Distinguishes several accounts of one provider. Omitted when the reading has no label.
   let accountLabel: String?
-  /// Windows the last `quota_history` fold named for this subscription.
-  let windows: [QuotaHistoryWindow]
+  let plan: String?
+  /// Canonical freshness of the reading on screen (`Updated 3m ago`, or why it is not current).
+  let freshness: String
+  /// Current-reading windows, shortest-cadence first as the snapshot already ordered them.
+  let quotaWindows: [QuotaWindow]
   let currentReading: QuotaSnapshot?
   /// The glance headline the panel prints for this reading (ADR 0035).
   let paceHeadline: String?
   /// The even-pace explanation, shown under the headline on this Quota page.
   let paceDetail: String?
   let resetsAt: Date?
-  /// `QuotaHistoryCopy.peak` of the current window, or of the highest window the fold named.
-  let peak: String?
-  /// Remaining percent of the primary cadence window, when this Mac has a reading.
+  /// Remaining percent of the tightest (primary cadence) window, when this Mac has a reading.
   let remainingPercent: Double?
-  let series: [DashboardQuotaSeries]
-  let empty: DashboardEmptyState?
+  /// Remaining history per window id. Empty unless the reading on screen is the one this Mac
+  /// took: nothing else has samples behind it (ADR 0042).
+  let remainingHistories: [String: QuotaRemainingHistory]
+  let sources: [DashboardSourceRow]
+  /// Whether the reading on screen is the one this Mac took for itself.
+  let isLocalReading: Bool
+  let isStale: Bool
+
+  /// VoiceOver for a list row: provider, account, remaining — once.
+  var rowAccessibilityLabel: String {
+    var parts = [provider.displayName]
+    if let accountLabel {
+      parts.append(accountLabel)
+    }
+    if let remainingPercent {
+      parts.append(RemainingQuotaFormat.percent(remainingPercent))
+    }
+    return parts.joined(separator: ", ")
+  }
+
+  /// A window menu is only useful when this Mac has readings to plot for at least one window.
+  var showsHistoryWindowPicker: Bool {
+    quotaWindows.count > 1
+      && remainingHistories.values.contains { !$0.observedPoints.isEmpty }
+  }
+}
+
+/// One device that contributed a reading of this subscription.
+struct DashboardSourceRow: Equatable, Identifiable, Sendable {
+  let id: String
+  let displayName: String
+  let remaining: String?
+  let freshness: String
+  let isReporting: Bool
+  let isLocal: Bool
 }
 
 enum DashboardEmptyState: Equatable, Sendable {
   /// Cache is filling in and this Mac has no samples yet. Copy matches `CacheRebuildNotice`.
   case rebuilding
-  /// `SignInRungPresentation.statusLine` for a provider with no working credential here.
-  case notSignedIn(String)
-  case noHistory
-}
-
-/// One window id's samples in the selected range, plus the running window's projection.
-struct DashboardQuotaSeries: Equatable, Identifiable, Sendable {
-  let id: String
-  let title: String
-  let rank: Int
-  let remainingPercent: Double
-  let points: [DashboardQuotaPoint]
-  let projection: DashboardQuotaPoint?
-  let resetAt: Date?
-  let startedAt: Date?
+  case noSubscriptions
 }
 
 /// One provider × window that had samples on the reader's local day.
@@ -100,15 +116,6 @@ struct DashboardTodayRow: Equatable, Identifiable, Sendable {
   }
 }
 
-struct DashboardQuotaPoint: Equatable, Identifiable, Sendable {
-  var id: Date { date }
-  let date: Date
-  let usedPercent: Double
-  /// Which instance of the window this reading belongs to, so the chart draws one line per
-  /// instance instead of joining a reset's drop to zero with the reading before it.
-  var resetsAt: Date? = nil
-}
-
 /// Read-only Dashboard projection over `MenuBarViewModel` and its ``UsageModel``. Refresh is
 /// the only action it forwards; it never writes preferences, credentials, or Usage.
 @Observable
@@ -116,29 +123,23 @@ struct DashboardQuotaPoint: Equatable, Identifiable, Sendable {
 final class DashboardModel {
   let model: MenuBarViewModel
   private var usage: UsageModel { model.usage }
-  var range: DashboardRange = .fallback {
-    didSet { persistRange() }
-  }
-  /// `nil` is **All providers**.
-  var selection: ProviderID?
+  /// Selected subscription id for this window session. Not persisted.
+  var selectedSubscriptionID: String?
+  /// Visual QA / deep-link hint: pick this provider's first subscription until the user
+  /// chooses otherwise.
+  private let preferredProvider: ProviderID?
   /// Account when an account summary is available and Usage sync is on; otherwise This Mac.
   var usageSource: UsageSource = .account
 
-  @ObservationIgnored
-  private let defaults: UserDefaults
-
   init(
     model: MenuBarViewModel,
-    defaults: UserDefaults = .standard,
+    defaults _: UserDefaults = .standard,
     selection: ProviderID? = nil,
     usageSource: UsageSource = .account
   ) {
     self.model = model
-    self.defaults = defaults
-    self.selection = selection
+    self.preferredProvider = selection
     self.usageSource = usageSource
-    let raw = defaults.string(forKey: DashboardRange.storageKey) ?? ""
-    range = DashboardRange(rawValue: raw) ?? .fallback
   }
 
   var sidebarProviders: [ProviderID] {
@@ -179,29 +180,45 @@ final class DashboardModel {
     usage.usagePeriodTitle(now: now)
   }
 
-  func providers(now: Date) -> [DashboardProvider] {
+  func selectSubscription(_ id: String) {
+    selectedSubscriptionID = id
+  }
+
+  /// Subscriptions with a current reading, in Overview provider order.
+  func subscriptions(now: Date) -> [DashboardProvider] {
     sidebarProviders.flatMap { provider in
-      let accounts = model.displaySnapshots(for: provider)
-      if accounts.isEmpty {
-        return [makeEmptyProvider(provider, now: now)]
-      }
-      return accounts.map { makeProvider(account: $0, now: now) }
+      model.displaySnapshots(for: provider).map { makeProvider(account: $0, now: now) }
     }
   }
 
-  func displayedProviders(now: Date) -> [DashboardProvider] {
-    let all = providers(now: now)
-    if let selection {
-      return all.filter { $0.provider == selection }
+  func resolvedSubscriptionID(now: Date) -> String? {
+    let items = subscriptions(now: now)
+    if let selectedSubscriptionID, items.contains(where: { $0.id == selectedSubscriptionID }) {
+      return selectedSubscriptionID
     }
-    return all
+    if let preferredProvider, let match = items.first(where: { $0.provider == preferredProvider })
+    {
+      return match.id
+    }
+    return items.first?.id
+  }
+
+  func selectedSubscription(now: Date) -> DashboardProvider? {
+    let id = resolvedSubscriptionID(now: now)
+    return subscriptions(now: now).first { $0.id == id }
+  }
+
+  func pageEmptyState(now: Date) -> DashboardEmptyState? {
+    if !subscriptions(now: now).isEmpty { return nil }
+    if model.showsCacheRebuildNotice { return .rebuilding }
+    return .noSubscriptions
   }
 
   /// One row per provider × window that had samples on the reader's local day.
   func todayRows(now: Date, resetStyle: ResetCopyStyle = .relative) -> [DashboardTodayRow] {
     let utcOffset = usage.quotaHistorySamples?.utcOffsetSeconds ?? 0
     let startOfDay = Self.localDayStart(now, utcOffsetSeconds: utcOffset)
-    return displayedProviders(now: now).flatMap { provider in
+    return subscriptions(now: now).flatMap { provider in
       todayRows(
         for: provider,
         now: now,
@@ -243,47 +260,21 @@ final class DashboardModel {
     usage.loadQuotaHistory()
   }
 
-  private func persistRange() {
-    defaults.set(range.rawValue, forKey: DashboardRange.storageKey)
-  }
-
-  private func makeEmptyProvider(_ provider: ProviderID, now: Date) -> DashboardProvider {
-    makeProvider(
-      id: "empty:\(provider.rawValue)",
-      provider: provider,
-      accountLabel: nil,
-      snapshot: nil,
-      subscriptionKey: nil,
-      accounts: [],
-      now: now
-    )
-  }
-
   private func makeProvider(account: AccountQuotaPresentation, now: Date) -> DashboardProvider {
     let key = Self.subscriptionSelector(for: account.identity)
-    return makeProvider(
-      id: key,
-      provider: account.identity.provider,
-      accountLabel: PlanDisplay.accountLabel(account.snapshot.account.label),
-      snapshot: account.snapshot,
-      subscriptionKey: key,
-      accounts: [account],
-      now: now
-    )
-  }
-
-  private func makeProvider(
-    id: String,
-    provider: ProviderID,
-    accountLabel: String?,
-    snapshot: QuotaSnapshot?,
-    subscriptionKey: String?,
-    accounts: [AccountQuotaPresentation],
-    now: Date
-  ) -> DashboardProvider {
-    let histories = subscriptionKey.flatMap { usage.quotaHistory[$0] } ?? [:]
-    let windows = histories.values.flatMap(\.windowsToday).sorted { $0.startedAt < $1.startedAt }
-    let paceWindow = snapshot.flatMap { $0.primaryCadenceWindows.first ?? $0.windows.first }
+    let snapshot = account.snapshot
+    let overviewItem = model.overviewItems(for: account.identity.provider).first {
+      $0.identity.subscriptionSelector == key
+    }
+    let isLocalReading: Bool
+    if let overviewItem {
+      isLocalReading = overviewItem.sources.contains {
+        $0.sourceID == overviewItem.selectedSourceID && $0.kind == .local
+      }
+    } else {
+      isLocalReading = false
+    }
+    let paceWindow = snapshot.primaryCadenceWindows.first ?? snapshot.windows.first
     let paceHeadline: String?
     let paceDetail: String?
     if let paceWindow, let pace = paceWindow.pace,
@@ -295,75 +286,77 @@ final class DashboardModel {
       paceHeadline = nil
       paceDetail = nil
     }
-    let peakPercent =
-      windows.first(where: \.isCurrent)?.peakUsedPercent
-      ?? windows.map(\.peakUsedPercent).max()
-      ?? paceWindow?.usedPercent
-    let series = makeSeries(
-      subscriptionKey: subscriptionKey, snapshot: snapshot, now: now)
     return DashboardProvider(
-      id: id,
-      provider: provider,
-      accountLabel: accountLabel,
-      windows: windows,
+      id: key,
+      provider: account.identity.provider,
+      accountLabel: PlanDisplay.accountLabel(snapshot.account.label),
+      plan: PlanDisplay.planBadge(snapshot.account.plan),
+      freshness: FreshnessCopy.observation(
+        state: account.state, observedAt: snapshot.observedAt, now: now),
+      quotaWindows: snapshot.windows,
       currentReading: snapshot,
       paceHeadline: paceHeadline,
       paceDetail: paceDetail,
       resetsAt: paceWindow?.resetsAt,
-      peak: peakPercent.map(QuotaHistoryCopy.peak),
       remainingPercent: paceWindow?.remainingPercent,
-      series: series,
-      empty: emptyState(provider: provider, accounts: accounts, series: series)
+      remainingHistories: isLocalReading
+        ? remainingHistories(subscriptionKey: key, snapshot: snapshot, now: now) : [:],
+      sources: sourceRows(overviewItem, snapshot: snapshot, now: now),
+      isLocalReading: isLocalReading,
+      isStale: account.state != .available
     )
   }
 
-  private func makeSeries(
-    subscriptionKey: String?,
-    snapshot: QuotaSnapshot?,
+  private func remainingHistories(
+    subscriptionKey: String,
+    snapshot: QuotaSnapshot,
     now: Date
-  ) -> [DashboardQuotaSeries] {
-    guard let snapshot, let subscriptionKey else { return [] }
-    let start = range.start(now: now)
+  ) -> [String: QuotaRemainingHistory] {
     let byWindow = usage.quotaHistorySamples?.samplesBySubscription[subscriptionKey] ?? [:]
-    var rank = 0
-    var result: [DashboardQuotaSeries] = []
+    var result: [String: QuotaRemainingHistory] = [:]
     for window in snapshot.windows {
-      guard window.resetsAt != nil, window.durationSeconds != nil else { continue }
-      let points = (byWindow[window.id] ?? [])
-        .filter { $0.observedAt >= start && $0.observedAt <= now }
-        .sorted { $0.observedAt < $1.observedAt }
-        .map {
-          DashboardQuotaPoint(
-            date: $0.observedAt, usedPercent: $0.usedPercent, resetsAt: $0.resetsAt)
-        }
-      guard !points.isEmpty else { continue }
-      let projection: DashboardQuotaPoint?
-      if let projected = usage.quotaHistory[subscriptionKey]?[window.id]?.projection,
-        let resetsAt = window.resetsAt, let last = points.last
-      {
-        projection = Self.projectionPoint(
-          from: last, toReset: resetsAt, projectedUsedPercent: projected.usedPercent)
-      } else {
-        projection = nil
+      if let history = QuotaRemainingHistory.fold(
+        window: QuotaHistoryReading(
+          resetsAt: window.resetsAt, cadenceSeconds: window.durationSeconds),
+        samples: byWindow[window.id] ?? [],
+        usedPercent: window.usedPercent,
+        now: now,
+        isBalanceOnly: window.isBalanceOnly
+      ) {
+        result[window.id] = history
       }
-      let startedAt = window.resetsAt.flatMap { reset in
-        window.durationSeconds.map { reset.addingTimeInterval(-TimeInterval($0)) }
-      }
-      result.append(
-        DashboardQuotaSeries(
-          id: window.id,
-          title: window.displayTitle,
-          rank: rank,
-          remainingPercent: window.remainingPercent,
-          points: points,
-          projection: projection,
-          resetAt: window.resetsAt,
-          startedAt: startedAt
-        )
-      )
-      rank += 1
     }
     return result
+  }
+
+  private func sourceRows(
+    _ item: LocalServiceOverviewItem?,
+    snapshot: QuotaSnapshot,
+    now: Date
+  ) -> [DashboardSourceRow] {
+    guard let item else { return [] }
+    return item.sources.map { source in
+      DashboardSourceRow(
+        id: source.sourceID,
+        displayName: source.displayName,
+        remaining: Self.primaryRemaining(source.snapshot ?? snapshot),
+        freshness: FreshnessCopy.observation(
+          state: source.isStale ? .stale : .available,
+          observedAt: source.observedAt,
+          now: now
+        ),
+        isReporting: source.sourceID == item.selectedSourceID,
+        isLocal: source.kind == .local
+      )
+    }
+  }
+
+  static func primaryRemaining(_ snapshot: QuotaSnapshot?) -> String? {
+    guard let snapshot else { return nil }
+    guard let window = snapshot.primaryCadenceWindows.first ?? snapshot.windows.first else {
+      return nil
+    }
+    return window.remainingDisplayLabel
   }
 
   static func subscriptionSelector(for identity: QuotaSubscriptionIdentity) -> String {
@@ -386,43 +379,6 @@ final class DashboardModel {
       fingerprintScope: scope,
       sourceID: sourceID
     )
-  }
-
-  /// The projection ends at the reset, or at the moment the line would cross 100%: a window
-  /// that runs out runs out, it does not keep climbing off the chart.
-  static func projectionPoint(
-    from last: DashboardQuotaPoint,
-    toReset resetsAt: Date,
-    projectedUsedPercent: Double
-  ) -> DashboardQuotaPoint {
-    guard projectedUsedPercent > 100, projectedUsedPercent > last.usedPercent,
-      resetsAt > last.date
-    else {
-      return DashboardQuotaPoint(
-        date: resetsAt, usedPercent: min(projectedUsedPercent, 100), resetsAt: last.resetsAt)
-    }
-    let fraction = (100 - last.usedPercent) / (projectedUsedPercent - last.usedPercent)
-    let runsOutAt = last.date.addingTimeInterval(
-      resetsAt.timeIntervalSince(last.date) * max(0, min(1, fraction)))
-    return DashboardQuotaPoint(date: runsOutAt, usedPercent: 100, resetsAt: last.resetsAt)
-  }
-
-  private func emptyState(
-    provider: ProviderID,
-    accounts: [AccountQuotaPresentation],
-    series: [DashboardQuotaSeries]
-  ) -> DashboardEmptyState? {
-    if !series.isEmpty { return nil }
-    let rungs = model.signInRungs(for: provider)
-    let reportedByDevices = model.accountReportingProviders().contains(provider)
-    if accounts.isEmpty, SignInRungPresentation.needsSignIn(rungs: rungs), !reportedByDevices {
-      return .notSignedIn(
-        SignInRungPresentation.statusLine(
-          rungs: rungs, accountCount: 0, reportedByDevices: false)
-      )
-    }
-    if model.showsCacheRebuildNotice { return .rebuilding }
-    return .noHistory
   }
 
   private func todayRows(

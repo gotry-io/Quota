@@ -16,6 +16,12 @@ enum QuotaDesign {
     static let windowSidebarMaxWidth: CGFloat = 280
     /// Provider list inside the Agents page.
     static let agentsListWidth: CGFloat = 220
+    /// Subscription list inside the Quota page (not the window sidebar).
+    static let quotaListWidth: CGFloat = 220
+    /// Provider mark beside the selected subscription's name.
+    static let quotaDetailMarkSize: CGFloat = 22
+    /// Wide layout: list + a readable detail column. Narrower than this uses a picker.
+    static let quotaWorkspaceMinWidth: CGFloat = 640
     /// Minimum main window content size.
     static let mainWindowMinSize = CGSize(width: 960, height: 640)
     /// Wide Visual QA capture for the Quota page.
@@ -24,7 +30,7 @@ enum QuotaDesign {
     static let cardCornerRadius: CGFloat = DesignTokens.Radius.card
     /// Inner padding of Quota / Usage cards.
     static let cardPadding: CGFloat = 16
-    /// Centred reading column on Quota and Usage.
+    /// Centred reading column on Usage.
     static let contentMaxWidth: CGFloat = 1040
     /// Horizontal gutter around that column.
     static let contentGutter: CGFloat = 24

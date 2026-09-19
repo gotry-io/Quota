@@ -24,7 +24,7 @@
       let dashboard = DashboardModel(model: model, defaults: defaults.store)
       #expect(dashboard.sidebarProviders == [.codex, .claude, .grok])
       #expect(
-        dashboard.providers(now: referenceDate).map(\.provider) == [.codex, .claude, .grok]
+        dashboard.subscriptions(now: referenceDate).map(\.provider) == [.codex, .claude, .grok]
       )
     }
 
@@ -42,7 +42,7 @@
       configuration.prepareEnvironment()
       let model = configuration.makeModel()
       let dashboard = DashboardModel(model: model, defaults: defaults.store)
-      for provider in dashboard.providers(now: referenceDate) {
+      for provider in dashboard.subscriptions(now: referenceDate) {
         let snapshot = try #require(model.displaySnapshots(for: provider.provider).first?.snapshot)
         let window = try #require(snapshot.primaryCadenceWindows.first ?? snapshot.windows.first)
         let expectedHeadline = window.pace.flatMap {
@@ -67,7 +67,7 @@
       configuration.prepareEnvironment()
       let model = configuration.makeModel()
       let dashboard = DashboardModel(model: model, defaults: defaults.store)
-      for provider in dashboard.providers(now: referenceDate) {
+      for provider in dashboard.subscriptions(now: referenceDate) {
         let snapshot = try #require(model.displaySnapshots(for: provider.provider).first?.snapshot)
         let window = try #require(snapshot.primaryCadenceWindows.first ?? snapshot.windows.first)
         #expect(provider.remainingPercent == window.remainingPercent)
@@ -75,7 +75,7 @@
     }
 
     @Test
-    func selectionNarrowsToOneProvider() throws {
+    func listRowSpeaksProviderAccountAndRemainingOnce() throws {
       let defaults = dashboardDefaults()
       defer { defaults.tearDown() }
       let referenceDate = Date(timeIntervalSince1970: 1_785_752_430)
@@ -88,10 +88,66 @@
       configuration.prepareEnvironment()
       let model = configuration.makeModel()
       let dashboard = DashboardModel(model: model, defaults: defaults.store)
-      #expect(dashboard.displayedProviders(now: referenceDate).count == 3)
-      dashboard.selection = .codex
-      let displayed = dashboard.displayedProviders(now: referenceDate)
-      #expect(displayed.map(\.provider) == [.codex])
+      let codex = try #require(
+        dashboard.subscriptions(now: referenceDate).first { $0.provider == .codex }
+      )
+      let label = codex.rowAccessibilityLabel
+      #expect(label.contains(ProviderID.codex.displayName))
+      if let account = codex.accountLabel {
+        #expect(label.contains(account))
+      }
+      if let remaining = codex.remainingPercent {
+        #expect(label.contains(RemainingQuotaFormat.percent(remaining)))
+      }
+      #expect(!label.contains("remaining remaining"))
+      let providerCount = label.components(separatedBy: ProviderID.codex.displayName).count - 1
+      #expect(providerCount == 1)
+    }
+
+    @Test
+    func selectionPersistsForTheSessionAndFallsBackWhenGone() throws {
+      let defaults = dashboardDefaults()
+      defer { defaults.tearDown() }
+      let referenceDate = Date(timeIntervalSince1970: 1_785_752_430)
+      let configuration = try #require(
+        VisualTestConfiguration(
+          arguments: ["QuotaBar", "--fixture", "content", "--route", "main-quota"],
+          referenceDate: referenceDate
+        )
+      )
+      configuration.prepareEnvironment()
+      let model = configuration.makeModel()
+      let dashboard = DashboardModel(model: model, defaults: defaults.store)
+      let items = dashboard.subscriptions(now: referenceDate)
+      #expect(items.count == 3)
+      let first = try #require(items.first)
+      let second = try #require(items.dropFirst().first)
+      #expect(dashboard.resolvedSubscriptionID(now: referenceDate) == first.id)
+      dashboard.selectSubscription(second.id)
+      #expect(dashboard.resolvedSubscriptionID(now: referenceDate) == second.id)
+      #expect(dashboard.selectedSubscription(now: referenceDate)?.id == second.id)
+      dashboard.selectSubscription("missing-subscription")
+      #expect(dashboard.resolvedSubscriptionID(now: referenceDate) == first.id)
+    }
+
+    @Test
+    func preferredProviderSelectsThatProvidersFirstSubscription() throws {
+      let defaults = dashboardDefaults()
+      defer { defaults.tearDown() }
+      let referenceDate = Date(timeIntervalSince1970: 1_785_752_430)
+      let configuration = try #require(
+        VisualTestConfiguration(
+          arguments: ["QuotaBar", "--fixture", "content", "--route", "main-quota-codex"],
+          referenceDate: referenceDate
+        )
+      )
+      configuration.prepareEnvironment()
+      let model = configuration.makeModel()
+      let dashboard = DashboardModel(
+        model: model, defaults: defaults.store, selection: configuration.quotaSelection)
+      let selected = try #require(dashboard.selectedSubscription(now: referenceDate))
+      #expect(selected.provider == .codex)
+      #expect(dashboard.subscriptions(now: referenceDate).count == 3)
     }
 
     @Test
@@ -116,10 +172,11 @@
         #expect(!row.windowName.isEmpty)
         #expect(!row.resetText.isEmpty)
       }
-      dashboard.selection = .codex
-      let codexRows = dashboard.todayRows(now: referenceDate)
-      #expect(!codexRows.isEmpty)
-      #expect(codexRows.allSatisfy { $0.provider == .codex })
+      dashboard.selectSubscription(
+        try #require(dashboard.subscriptions(now: referenceDate).first { $0.provider == .codex }?.id)
+      )
+      let afterSelection = dashboard.todayRows(now: referenceDate)
+      #expect(Set(afterSelection.map(\.provider)).isSuperset(of: [.codex, .claude, .grok]))
     }
 
     @Test
@@ -194,7 +251,45 @@
     }
 
     @Test
-    func rangeFilterCutsSamples() async throws {
+    func localCodexReadingCarriesRemainingHistoryWhoseEstimateMatchesPace() throws {
+      let defaults = dashboardDefaults()
+      defer { defaults.tearDown() }
+      let referenceDate = Date(timeIntervalSince1970: 1_785_752_430)
+      let configuration = try #require(
+        VisualTestConfiguration(
+          arguments: ["QuotaBar", "--fixture", "content", "--route", "main-quota"],
+          referenceDate: referenceDate
+        )
+      )
+      configuration.prepareEnvironment()
+      let model = configuration.makeModel()
+      let dashboard = DashboardModel(model: model, defaults: defaults.store)
+      let codex = try #require(
+        dashboard.subscriptions(now: referenceDate).first { $0.provider == .codex }
+      )
+      #expect(codex.isLocalReading)
+      #expect(codex.plan != nil)
+      let window = try #require(codex.quotaWindows.first)
+      let samples =
+        model.usage.quotaHistorySamples?.samplesBySubscription[codex.id]?[window.id] ?? []
+      let folded = try #require(
+        QuotaRemainingHistory.fold(
+          window: QuotaHistoryReading(
+            resetsAt: window.resetsAt, cadenceSeconds: window.durationSeconds),
+          samples: samples,
+          usedPercent: window.usedPercent,
+          now: referenceDate,
+          isBalanceOnly: window.isBalanceOnly
+        )
+      )
+      #expect(codex.remainingHistories[window.id] == folded)
+      #expect(!folded.observedPoints.isEmpty)
+      #expect(!codex.sources.isEmpty)
+      #expect(codex.sources.contains { $0.isLocal && $0.isReporting })
+    }
+
+    @Test
+    func remoteOnlySubscriptionHasNoRemainingHistory() throws {
       let defaults = dashboardDefaults()
       defer { defaults.tearDown() }
       let now = Date(timeIntervalSince1970: 1_788_100_000)
@@ -202,8 +297,8 @@
       let snapshot = QuotaSnapshot(
         provider: .codex,
         account: QuotaAccount(
-          fingerprint: "account_test",
-          label: nil,
+          fingerprint: "account_remote",
+          label: "remote-user",
           plan: "Plus",
           fingerprintScope: .global
         ),
@@ -213,88 +308,49 @@
             title: "5 Hours",
             usedPercent: 40,
             resetsAt: reset,
-            durationSeconds: 18_000,
-            pace: QuotaPace.evaluate(
-              QuotaPaceReading(
-                usedPercent: 40,
-                resetsAt: reset,
-                cadenceSeconds: 18_000,
-                isBalanceOnly: false
-              ),
-              now: now
-            )
+            durationSeconds: 18_000
           )
         ],
         status: .available,
         observedAt: now
       )
       let source = LocalServiceOverviewSource(
-        sourceID: "local",
-        kind: .local,
-        deviceID: nil,
-        displayName: "This Mac",
+        sourceID: "device:other",
+        kind: .device,
+        deviceID: "other",
+        displayName: "Studio Mac",
         observedAt: now,
+        isStale: false,
+        snapshot: snapshot
+      )
+      let item = LocalServiceOverviewItem(
+        identity: LocalServiceOverviewIdentity(
+          provider: .codex,
+          fingerprint: "account_remote",
+          scope: .global,
+          sourceID: nil
+        ),
+        snapshot: snapshot,
+        sources: [source],
+        selectedSourceID: source.sourceID,
+        selectedSourceDisplayName: source.displayName,
+        automaticSourceID: source.sourceID,
+        automaticSourceDisplayName: source.displayName,
         isStale: false
       )
-      let state = overviewOnlyState(
-        overview: [
-          LocalServiceOverviewItem(
-            identity: LocalServiceOverviewIdentity(
-              provider: .codex,
-              fingerprint: "account_test",
-              scope: .global,
-              sourceID: nil
-            ),
-            snapshot: snapshot,
-            sources: [source],
-            selectedSourceID: source.sourceID,
-            selectedSourceDisplayName: source.displayName,
-            automaticSourceID: source.sourceID,
-            automaticSourceDisplayName: source.displayName,
-            isStale: false
-          )
-        ]
-      )
-      let samples = LocalServiceQuotaHistory(
-        samplesBySubscription: [
-          "ccfc96629357": [
-            "five_hour": [
-              QuotaSample(
-                resetsAt: reset, observedAt: now.addingTimeInterval(-10 * 86_400), usedPercent: 10),
-              QuotaSample(
-                resetsAt: reset, observedAt: now.addingTimeInterval(-3 * 86_400), usedPercent: 20),
-              QuotaSample(
-                resetsAt: reset, observedAt: now.addingTimeInterval(-60), usedPercent: 40),
-            ]
-          ]
-        ],
-        utcOffsetSeconds: 0
-      )
-      let model = MenuBarViewModel(
-        client: StubLocalService(state: state, quotaHistoryValue: samples)
-      )
-      await model.refreshIfNeeded()
-      model.usage.loadQuotaHistory()
-      let deadline = ContinuousClock.now + .seconds(10)
-      while model.usage.quotaHistory.isEmpty, ContinuousClock.now < deadline {
-        await Task.yield()
-        try await Task.sleep(for: .milliseconds(20))
-      }
-
+      let state = overviewOnlyState(overview: [item])
+      let model = MenuBarViewModel(client: StubLocalService(state: state))
+      model.apply(state)
       let dashboard = DashboardModel(model: model, defaults: defaults.store)
-      dashboard.range = .today
-      let todayCount = sampleCount(dashboard.providers(now: now), provider: .codex)
-      dashboard.range = .sevenDays
-      let weekCount = sampleCount(dashboard.providers(now: now), provider: .codex)
-      dashboard.range = .thirtyDays
-      let monthCount = sampleCount(dashboard.providers(now: now), provider: .codex)
-      #expect(todayCount == 1)
-      #expect(weekCount == 2)
-      #expect(monthCount == 3)
+      let subscription = try #require(dashboard.subscriptions(now: now).first)
+      #expect(!subscription.isLocalReading)
+      #expect(subscription.remainingHistories.isEmpty)
+      #expect(subscription.sources.map(\.displayName) == ["Studio Mac"])
+      #expect(subscription.rowAccessibilityLabel.contains(ProviderID.codex.displayName))
     }
 
     @Test
-    func twoAccountsOfOneProviderEachHaveTheirOwnChart() async throws {
+    func twoAccountsOfOneProviderEachHaveTheirOwnRow() async throws {
       let defaults = dashboardDefaults()
       defer { defaults.tearDown() }
       let now = Date(timeIntervalSince1970: 1_788_100_000)
@@ -326,7 +382,8 @@
           deviceID: nil,
           displayName: "This Mac",
           observedAt: now,
-          isStale: false
+          isStale: false,
+          snapshot: snapshot
         )
         return LocalServiceOverviewItem(
           identity: LocalServiceOverviewIdentity(
@@ -363,13 +420,11 @@
         ],
         utcOffsetSeconds: 0
       )
+      let state = overviewOnlyState(overview: [first, second])
       let model = MenuBarViewModel(
-        client: StubLocalService(
-          state: overviewOnlyState(overview: [first, second]),
-          quotaHistoryValue: samples
-        )
+        client: StubLocalService(state: state, quotaHistoryValue: samples)
       )
-      await model.refreshIfNeeded()
+      model.apply(state)
       model.usage.loadQuotaHistory()
       let deadline = ContinuousClock.now + .seconds(10)
       while model.usage.quotaHistory.isEmpty, ContinuousClock.now < deadline {
@@ -378,15 +433,15 @@
       }
 
       let dashboard = DashboardModel(model: model, defaults: defaults.store)
-      dashboard.selection = .codex
-      let cards = dashboard.displayedProviders(now: now)
-      #expect(cards.map(\.provider) == [.codex, .codex])
-      #expect(Set(cards.map(\.id)) == [firstKey, secondKey])
-      #expect(cards.map { $0.series.flatMap(\.points).map(\.usedPercent) } == [[20], [80]])
-    }
-
-    private func sampleCount(_ providers: [DashboardProvider], provider: ProviderID) -> Int {
-      providers.first { $0.provider == provider }?.series.flatMap(\.points).count ?? 0
+      let rows = dashboard.subscriptions(now: now)
+      #expect(rows.map(\.provider) == [.codex, .codex])
+      #expect(Set(rows.map(\.id)) == [firstKey, secondKey])
+      #expect(Set(rows.map(\.accountLabel)) == ["account_a", "account_b"])
+      #expect(rows.allSatisfy { $0.isLocalReading })
+      #expect(
+        rows.map { $0.remainingHistories["five_hour"]?.observedPoints.last?.remainingPercent }
+          == [80, 20]
+      )
     }
   }
 
@@ -406,29 +461,3 @@
     return DashboardDefaultsSuite(name: name, store: store)
   }
 #endif
-
-@Suite
-@MainActor
-struct DashboardProjectionTests {
-  @Test
-  func aProjectionPastFullEndsWhereTheLineCrossesFull() {
-    let last = DashboardQuotaPoint(
-      date: Date(timeIntervalSince1970: 0), usedPercent: 50, resetsAt: nil)
-    let reset = Date(timeIntervalSince1970: 1_000)
-    let point = DashboardModel.projectionPoint(
-      from: last, toReset: reset, projectedUsedPercent: 150)
-    #expect(point.usedPercent == 100)
-    #expect(point.date == Date(timeIntervalSince1970: 500))
-  }
-
-  @Test
-  func aProjectionWithinFullEndsAtTheReset() {
-    let last = DashboardQuotaPoint(
-      date: Date(timeIntervalSince1970: 0), usedPercent: 50, resetsAt: nil)
-    let reset = Date(timeIntervalSince1970: 1_000)
-    let point = DashboardModel.projectionPoint(
-      from: last, toReset: reset, projectedUsedPercent: 80)
-    #expect(point.usedPercent == 80)
-    #expect(point.date == reset)
-  }
-}

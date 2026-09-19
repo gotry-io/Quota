@@ -51,6 +51,8 @@ time** is the only surface that switches reset copy between relative and absolut
 | `windowSidebarWidth` | 220pt | Main window sidebar min/ideal |
 | `windowSidebarMaxWidth` | 280pt | Main window sidebar maximum |
 | `agentsListWidth` | 220pt | Provider list inside the Agents page |
+| `quotaListWidth` | 220pt | Subscription list inside the Quota page |
+| `quotaDetailMarkSize` | 22pt | Provider mark in the selected subscription header |
 | `mainWindowMinSize` | 960×640 | Main window minimum content size |
 | `cardCornerRadius` | 20pt | Quota / Usage cards |
 | `cardPadding` | 16pt | Inner padding of those cards |
@@ -101,23 +103,26 @@ top-level rows in a header-less first section; **Settings** is the one named sec
 Quota uses `gauge.with.dots.needle.33percent` and Usage uses `chart.bar`, the same SF Symbols as
 the iOS tabs. Rows are `Label`s. On macOS 26 the system draws the floating glass sidebar; on 14/15 it is the
 standard sidebar. The selected page persists in `main.page`; the first open lands on Quota. A
-shipped `main.page` of `today` is rewritten to `usage`. Provider
-selection for Quota is a toolbar menu (**All providers** and each shown provider with its brand
-icon), not sidebar rows. The closed menu shows the selected provider's brand icon, or Quota's mark
-when **All providers** is selected. The selection is not persisted. Account, Notifications,
+shipped `main.page` of `today` is rewritten to `usage`. Quota's subscription list lives
+inside the page, not as extra window-sidebar rows. The selected subscription lasts for the
+session and is not persisted. Account, Notifications,
 General, Support, and **Menu Bar** are grouped Forms in the detail column, content at most 720pt
 and centred. **Menu Bar** is one form (preview strip, Style, Provider, Reset time, Show pace
 lines). The **Agents** row keeps a `.badge` of
 **3 shown** and, when any shown agent has no working credential and no device reporting it,
 **· 1 needs sign-in**; the Agents page is a two-column list and provider detail.
 
-The Quota-group toolbar groups **Provider**, **Range**, and **Usage source**, then a flexible
-spacer, then **Refresh**. On macOS 26 `ToolbarSpacer` separates those groups into glass capsules;
+The Usage toolbar holds a Usage source picker (**Account** / **This Mac**) when Account data is
+available and Usage sync is on, then a flexible spacer, then **Refresh**. Quota's toolbar is
+Refresh only: the subscription list replaced the provider menu, and remaining history no longer
+uses a range control. On macOS 26 `ToolbarSpacer` separates those groups into glass capsules;
 on 14/15 the same items appear without spacers. Refresh is on every page.
 
-Quota and Usage scroll under the toolbar and sidebar (`quotaScrollEdge()`, a soft
-scroll-edge effect on macOS 26). Their content is one column, max width 1040pt, centred, with 24pt
-gutters and 16pt between cards.
+Usage scrolls under the toolbar and sidebar (`quotaScrollEdge()`, a soft scroll-edge effect on
+macOS 26). Its content is one column, max width 1040pt, centred, with 24pt gutters and 16pt
+between cards. Quota fills the detail column: a 220pt subscription list beside the selected
+detail (max 720pt, 24pt gutters). When the remaining width is under 640pt, the list collapses
+to a subscription picker above the detail so one reading stays readable at the 960pt minimum.
 
 ## Main window
 
@@ -125,49 +130,64 @@ The main window is where this Mac's quota history is read at width, and where ev
 lives. It does not collect, and every number the Quota and Usage pages show is already on
 this Mac: local samples through `quota_history`, and the current reading Overview already has.
 
-The Quota-group toolbar holds a provider menu — **All providers**, then each provider shown in
-Overview, in Overview order, each with its catalog brand mark; the closed control is that
-provider's brand icon — the history range — **Today**,
-**7D**, **30D**, persisted as `dashboard.range`, default 7D — a Usage source picker (**Account** /
-**This Mac**) that the Usage page honors, and a refresh action that uses the same tooltip as the
-panel footer: **Refresh all quota. Updated 3m ago**, or **Not checked** before any sync. The Usage
-source picker is hidden when Account data is unavailable or Usage sync is disabled; in those states
-Usage is unambiguously This Mac. Changing source preserves the selected period. Refresh is on
-every page. **All providers** shows every shown provider's card; selecting a provider shows that
-provider only.
+The Usage toolbar holds a Usage source picker (**Account** / **This Mac**) that the Usage page
+honors, and a refresh action that uses the same tooltip as the panel footer: **Refresh all quota.
+Updated 3m ago**, or **Not checked** before any sync. The Usage source picker is hidden when
+Account data is unavailable or Usage sync is disabled; in those states Usage is unambiguously
+This Mac. Changing source preserves the selected period. Refresh is on every page. Quota has no
+provider menu and no history-range control: the in-page list selects a subscription, and remaining
+history is the thirty days of samples this Mac kept (ADR 0042).
 
 ### Quota
 
-One card per subscription in the detail column. Several accounts of one provider each have their
-own card; the provider filter still narrows to that provider. Each card uses `quotaCardSurface()` (glass on macOS 26,
-`settingsGroupFill` otherwise), 20pt continuous corners, and 16pt inner padding. The header is two lines:
-the catalog brand icon and provider name as the title, with the remaining percent of the primary
-window trailing as a 28pt semibold rounded numeral and a small **remaining** caption; then the
-pace phrase ADR 0035 already prints for the current reading, the reset copy for that reading under
-the Menu Bar **Reset time** preference, and `QuotaHistoryCopy.peak` of the current window, in
-secondary style, joined by ` · `. Parts the reading does not have are omitted.
+A native sidebar-style `List` of subscriptions (one row each: catalog mark, provider name, account,
+plan capsule, and the tightest window's remaining percent with a small meter — the panel's glance
+vocabulary) beside one selected subscription's detail. Several accounts of one provider are several
+rows. The list is inside the page, not the window sidebar. The selection lasts for the session
+and is not written to `main.page` or `dashboard.range`. A leftover `dashboard.range` from an
+earlier build is left unread.
 
-Each card draws one Swift Charts `LineMark` per window of used percent over time, from this Mac's
-samples in the selected range, 180pt tall, with tertiary axis labels. The running window continues
-to its reset as a dashed `LineMark` at ADR 0035's projection, and a `RuleMark` marks the reset.
-Line colour is the remaining-quota tone (healthy / warning / critical) of that window; windows of
-the same provider are told apart by opacity in rank order, the first cadence window at full
-strength. No second palette.
+The selected detail uses the same vocabulary as Quota iOS subscription detail. Header: 22pt
+provider mark, name, plan capsule, then `account · Updated` as supporting text. Then one
+`quotaCardSurface()` card per window (glass on macOS 26, `settingsGroupFill` otherwise, 20pt
+continuous corners, 16pt inner padding): window title, remaining as a 28pt semibold rounded
+numeral, meter, reset copy under the Menu Bar **Reset time** preference, pace headline and
+even-pace detail. Remaining is the strongest text. Empty: **No quota windows yet.**
 
-Every chart has an `accessibilityChartDescriptor` that names each window, its start, now, and the
-projected end.
+Then **Remaining history** labelled **This Mac**. A menu picks the window when there is more than
+one and this Mac has readings for at least one of them. The chart plots remaining 0–100 over the
+last visible span — `min` of sample retention and `max(24 hours, 4 × the window)`: 5 Hours is
+last 24 hours, Weekly last 4 weeks, monthly the 30-day retention — with y-axis labels
+**0 / 50 / 100 %** and time ticks: solid segments for observed readings, a dashed
+segment for the estimate to reset (the same ADR 0035 projection the pace headline uses). Segments
+wholly before the span are dropped; a segment that crosses the start is clipped there. The
+estimate is unchanged. A small
+legend under the chart names **Observed** (solid) and **Estimate** (dashed) in secondary text;
+it is hidden from VoiceOver because the audio graph and list already carry that. A reset starts
+a new segment; a missing window stays a gap. VoiceOver names it **Remaining history**, speaks a
+summary that includes the span (**last 24 hours**, and so on), and exposes an audio graph plus
+an **Observed remaining** list of that span. The fold is shared
+`QuotaRemainingHistory` in `packages/apple-shared`. A reading Relay resolved has no samples here,
+so the card prints **This Mac has no readings of its own for this subscription.** instead of an
+empty chart. Local with nothing to plot: **This Mac has not collected enough readings to draw
+remaining history yet.**
 
-Empty states: while the cache is rebuilding and this Mac has no samples yet, the card reuses
-**Usage history is catching up** / **Quota and Account stay available.** A provider that is not
-signed in reuses `SignInRungPresentation.statusLine`. A signed-in provider with no samples yet
-reads **No history yet**.
+Then the sources this Mac already shows for the reading, as **Readings from N devices**: device
+symbol (`laptopcomputer` for **This Mac**, `desktopcomputer` otherwise), name, remaining,
+freshness, and a trailing **Reporting** capsule on the selected source.
+
+List rows speak provider, account, and remaining once. At the 960pt minimum there is no
+horizontal scrolling; if the list and detail cannot sit side by side, the list becomes a
+subscription picker above the detail.
+
+Empty page: while the cache is rebuilding and this Mac has no subscriptions yet, the page reuses
+**Usage history is catching up** / **Quota and Account stay available.** Otherwise **No quota yet**.
 
 ### Usage
 
 Usage defaults to Account when an account summary is available and Usage sync is enabled; otherwise
-it uses This Mac. The source menu is the main-window toolbar on Quota and Usage; omit it
-when Account data is unavailable or Usage sync is disabled. Changing source preserves the selected
-period. The panel footer **Today · $x** line, and a stored `main.page` of `today`, open Usage with
+it uses This Mac. The source menu is the Usage toolbar; omit it when Account data is unavailable
+or Usage sync is disabled. Changing source preserves the selected period. The panel footer **Today · $x** line, and a stored `main.page` of `today`, open Usage with
 the Today period selected.
 
 A six-item 28pt tab control selects Day, Week, Month, 7D, 30D, or All; Today is the default. Its
@@ -206,9 +226,8 @@ percent at the start of the local day → now (`12% → 47%`, the same whole per
 attribute it to that provider, and the reset time — the same reset copy the Quota header uses, or
 the local clock time when that reset has already passed. The panel's
 `Today: 3 windows · 82% / 40% / 12%` sentence stays on Overview; Usage lays those facts in columns
-for the Today period. A provider or window with no sample today is omitted. Toolbar provider
-selection narrows the rows the same way it narrows Quota cards. The Rhythm card is the hourly strip
-for the same period.
+for the Today period. A provider or window with no sample today is omitted. The Rhythm card is the
+hourly strip for the same period.
 
 When this Mac has a monthly budget, a **Monthly budget** card sits above the summary with a
 progress bar and one line of `spent / budget · percent`. The bar measures this month's local spend,

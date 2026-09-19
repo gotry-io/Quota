@@ -33,8 +33,9 @@ main window and do not branch on the preference.
 (**Account**, **Agents**, **Notifications**, **Menu Bar**, **General**, **Support**). Title
 QuotaBar, 960×640 minimum, frame autosave `QuotaBarMainWindow`, `.fullScreenPrimary`. Esc and ⌘W
 close it. The selected page persists as `main.page`; the first open lands on Quota. A shipped
-`main.page` of `today` is rewritten to `usage`. Provider
-selection for Quota is a toolbar menu, not sidebar rows.
+`main.page` of `today` is rewritten to `usage`. The Quota page is a
+subscription list beside one selected subscription; that list is inside the page, not extra
+window-sidebar rows. The selection lasts for the session.
 
 **The menu-bar item is the glance surface**, not a second product. Overview and one provider's
 detail, 320×480, nothing else. Widget deep links `quotabar:/overview` and
@@ -59,8 +60,9 @@ QuotaBar has two surfaces. The panel glances; the main window explains.
 opens the main window; there is no Settings stack inside the extra.
 
 **Main window — 960×640 minimum.** Titled `NSWindow`, `windowBackgroundColor`, 220–280pt sidebar:
-Quota and Usage as top-level rows, then a Settings group. Quota charts, Usage at width (the Today
-windows table lives on the Today period), and every preference. May go full screen.
+Quota and Usage as top-level rows, then a Settings group. Quota is a subscription list and one
+selected subscription's windows and remaining history; Usage at width (the Today windows table
+lives on the Today period); and every preference. May go full screen.
 
 **Activation.** QuotaBar is not `LSUIElement`. Show in Dock on (the default) keeps `.regular`.
 Show in Dock off is menu-bar-only except while the main window is open. Browser Access and
