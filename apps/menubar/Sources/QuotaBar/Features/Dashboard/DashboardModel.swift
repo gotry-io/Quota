@@ -140,7 +140,7 @@ final class DashboardModel {
   }
 
   var showsUsageSourcePicker: Bool {
-    model.accountSummary != nil && model.usageUploadEnabled
+    model.accountFlow.accountSummary != nil && model.usageUploadEnabled
   }
 
   /// The source Usage actually answers from. Account is only honest while a summary exists
@@ -230,7 +230,7 @@ final class DashboardModel {
     return DashboardUsagePresentation(
       source: source,
       refreshWarning: model.errorMessage,
-      accountWarning: source == .account ? model.accountErrorMessage : nil,
+      accountWarning: source == .account ? model.accountFlow.accountErrorMessage : nil,
       statusWarning: usageStatusWarning(detail: detail, source: source),
       usage: presented,
       sessions: usage.localUsage?.sessions,

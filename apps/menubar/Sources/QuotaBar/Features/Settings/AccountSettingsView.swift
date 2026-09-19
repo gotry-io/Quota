@@ -45,9 +45,10 @@ struct AccountSettingsView: View {
   var body: some View {
     TimelineView(.periodic(from: .now, by: 60)) { context in
       Form {
-        if let accountErrorMessage = model.accountErrorMessage {
+        if let accountErrorMessage = model.accountFlow.accountErrorMessage {
           let hideSignedOutHint =
-            accountErrorMessage == signedOutMessage && model.accountActionErrorMessage == nil
+            accountErrorMessage == signedOutMessage
+            && model.accountFlow.accountActionErrorMessage == nil
           if !hideSignedOutHint {
             Section {
               Label(accountErrorMessage, systemImage: "exclamationmark.circle")
@@ -56,7 +57,7 @@ struct AccountSettingsView: View {
         }
 
         accountSection
-        if model.accountState == .signedIn {
+        if model.accountFlow.accountState == .signedIn {
           devicesSection(now: context.date)
           websiteSection
           signOutSection
@@ -67,7 +68,7 @@ struct AccountSettingsView: View {
     }
     .confirmationDialog("Sign Out?", isPresented: $confirmSignOut, titleVisibility: .visible) {
       Button("Sign Out", role: .destructive) {
-        Task { await model.logout() }
+        Task { await model.accountFlow.logout() }
       }
     } message: {
       Text(
@@ -91,13 +92,13 @@ struct AccountSettingsView: View {
 
   @ViewBuilder
   private var accountSection: some View {
-    switch model.accountState {
+    switch model.accountFlow.accountState {
     case .signedIn:
       SwiftUI.Section {
         LabeledContent("Signed in as") {
-          Text(model.accountDisplayLabel)
+          Text(model.accountFlow.accountDisplayLabel)
         }
-        .accessibilityLabel("Signed in as \(model.accountDisplayLabel)")
+        .accessibilityLabel("Signed in as \(model.accountFlow.accountDisplayLabel)")
       } header: {
         Text("Account")
       }
@@ -106,16 +107,17 @@ struct AccountSettingsView: View {
       SwiftUI.Section {
         LabeledContent("Logout Pending") {
           Button {
-            Task { await model.logout() }
+            Task { await model.accountFlow.logout() }
           } label: {
-            if model.isLoggingOut {
+            if model.accountFlow.isLoggingOut {
               ProgressView().controlSize(.small)
             } else {
               Text("Retry Logout")
             }
           }
-          .disabled(model.isLoggingOut)
-          .accessibilityLabel(model.isLoggingOut ? "Retrying logout" : "Retry Logout")
+          .disabled(model.accountFlow.isLoggingOut)
+          .accessibilityLabel(
+            model.accountFlow.isLoggingOut ? "Retrying logout" : "Retry Logout")
         }
       } header: {
         Text("Account")
@@ -124,20 +126,20 @@ struct AccountSettingsView: View {
       }
 
     case .notChecked, .signedOut:
-      if model.isLoggingIn {
+      if model.accountFlow.isLoggingIn {
         SwiftUI.Section {
           Text("Finish sign-in in browser")
-          if model.canCopyLoginLink {
-            Button("Copy Link", action: model.copyLoginLink)
+          if model.accountFlow.canCopyLoginLink {
+            Button("Copy Link", action: model.accountFlow.copyLoginLink)
               .accessibilityLabel("Copy Link")
           }
-          Button("Cancel", role: .cancel, action: model.cancelLogin)
+          Button("Cancel", role: .cancel, action: model.accountFlow.cancelLogin)
         } header: {
           Text("Account")
         }
       } else {
         SwiftUI.Section {
-          Button("Sign In", action: model.startLogin)
+          Button("Sign In", action: model.accountFlow.startLogin)
             .accessibilityLabel("Sign In")
             .accessibilityHint(signedOutMessage)
         } footer: {
@@ -150,7 +152,7 @@ struct AccountSettingsView: View {
   @ViewBuilder
   private func devicesSection(now: Date) -> some View {
     SwiftUI.Section {
-      if let summary = model.accountSummary {
+      if let summary = model.accountFlow.accountSummary {
         if summary.devices.isEmpty {
           Text(AccountDevicesCopy.empty)
             .foregroundStyle(.secondary)
@@ -159,9 +161,9 @@ struct AccountSettingsView: View {
             deviceRow(device, now: now)
           }
         }
-      } else if model.accountRefreshing {
+      } else if model.accountFlow.accountRefreshing {
         ProgressView(AccountDevicesCopy.loading)
-      } else if let pageErrorMessage = model.accountErrorMessage ?? model.errorMessage {
+      } else if let pageErrorMessage = model.accountFlow.accountErrorMessage ?? model.errorMessage {
         Text(pageErrorMessage)
         Button("Retry") { Task { await model.refresh() } }
       } else {
@@ -176,7 +178,7 @@ struct AccountSettingsView: View {
   private func deviceRow(_ device: AccountDevice, now: Date) -> some View {
     let activity = device.activity(now: now)
     let lastSeen = FreshnessCopy.lastReading(since: activity.since, now: now)
-    let isThisMac = model.accountDeviceID == device.id
+    let isThisMac = model.accountFlow.accountDeviceID == device.id
     return HStack(alignment: .firstTextBaseline, spacing: QuotaDesign.Spacing.sm) {
       VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
         HStack(spacing: QuotaDesign.Spacing.sm) {
@@ -213,11 +215,13 @@ struct AccountSettingsView: View {
 
   private var signOutSection: some View {
     Section {
-      Button(model.isLoggingOut ? "Signing Out…" : "Sign Out", role: .destructive) {
+      Button(
+        model.accountFlow.isLoggingOut ? "Signing Out…" : "Sign Out", role: .destructive
+      ) {
         confirmSignOut = true
       }
-      .disabled(model.isLoggingOut)
-      .accessibilityLabel(model.isLoggingOut ? "Signing out" : "Sign Out")
+      .disabled(model.accountFlow.isLoggingOut)
+      .accessibilityLabel(model.accountFlow.isLoggingOut ? "Signing out" : "Sign Out")
       .accessibilityHint("Shows a confirmation")
     }
   }
@@ -230,7 +234,7 @@ struct AccountSettingsView: View {
   }
 
   private var signedOutMessage: String {
-    switch model.accountDisconnectReason {
+    switch model.accountFlow.accountDisconnectReason {
     case .deviceDeleted:
       "This device was removed. Sign in again to reconnect it."
     case .sessionEnded:
@@ -241,7 +245,7 @@ struct AccountSettingsView: View {
   }
 
   private var accountUnavailableMessage: String {
-    model.accountState == .logoutPending
+    model.accountFlow.accountState == .logoutPending
       ? "Logout is pending. QuotaBar will finish when this Mac is online."
       : "Sign in to view account devices."
   }

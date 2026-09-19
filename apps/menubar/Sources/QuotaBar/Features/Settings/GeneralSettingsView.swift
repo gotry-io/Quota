@@ -95,9 +95,10 @@ struct GeneralSettingsView: View {
             set: { desired in Task { await model.setUsageUploadEnabled(desired) } }
           )
         )
-        .disabled(model.isUpdatingUsageUpload || model.syncUsageDisabledReason != nil)
+        .disabled(model.isUpdatingUsageUpload || model.accountFlow.syncUsageDisabledReason != nil)
         .accessibilityLabel(GeneralSettingsCopy.uploadUsage)
-        .accessibilityHint(model.syncUsageDisabledReason ?? GeneralSettingsCopy.uploadUsageHint)
+        .accessibilityHint(
+          model.accountFlow.syncUsageDisabledReason ?? GeneralSettingsCopy.uploadUsageHint)
 
         Toggle(
           GeneralSettingsCopy.groupUsage,
@@ -112,7 +113,7 @@ struct GeneralSettingsView: View {
       } footer: {
         if let message = LaunchAtLoginController.statusMessage {
           Text(message)
-        } else if let reason = model.syncUsageDisabledReason {
+        } else if let reason = model.accountFlow.syncUsageDisabledReason {
           Text(reason)
         }
       }
