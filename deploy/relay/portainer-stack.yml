@@ -2,7 +2,7 @@
 # usable in Portainer stacks). Public traffic: Caddy (stack 87) -> relay:8787.
 services:
   relay:
-    image: ghcr.io/gotry-io/quota-relay:0.0.4
+    image: ghcr.io/gotry-io/quota-relay:0.0.5
     container_name: quota-relay
     restart: unless-stopped
     environment:
