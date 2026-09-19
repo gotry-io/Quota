@@ -58,13 +58,34 @@ final class QuotaUITests: XCTestCase {
         || app.descendants(matching: .any)["overview.today.tokens"].exists,
       "Today section"
     )
+    XCTAssertTrue(app.navigationBars["Quota"].exists, "Quota page title")
+    XCTAssertFalse(
+      app.navigationBars["octocat"].exists,
+      "account identity is not the Overview title"
+    )
+    XCTAssertFalse(
+      app.descendants(matching: .any)["overview.today.input"].exists,
+      "Input tile is gone"
+    )
+    XCTAssertFalse(
+      app.descendants(matching: .any)["overview.today.output"].exists,
+      "Output tile is gone"
+    )
+    XCTAssertTrue(
+      app.descendants(matching: .any)["overview.today.tokens"].exists,
+      "overview.today.tokens"
+    )
+    XCTAssertTrue(
+      app.descendants(matching: .any)["overview.today.cost"].exists,
+      "overview.today.cost"
+    )
     settle(app)
     attachScreenshot(app, name: "overview-content")
     try audit(app)
     try assertListScrolls(app, screenshot: "overview-scrolled")
     try restoreTabBar(app)
-
-    app.tabBars.buttons["Usage"].tap()
+    revealIdentifier(app, "overview.today")
+    app.descendants(matching: .any)["overview.today"].firstMatch.tap()
     XCTAssertTrue(
       app.descendants(matching: .any)["usage.root"].waitForExistence(timeout: 10),
       "usage.root"
@@ -72,6 +93,7 @@ final class QuotaUITests: XCTestCase {
     let period = app.segmentedControls.firstMatch
     XCTAssertTrue(period.waitForExistence(timeout: 5), "usage period control")
     XCTAssertTrue(period.buttons["Today"].exists, "Today segment")
+    XCTAssertTrue(period.buttons["Today"].isSelected, "Overview Today opens the Today period")
     XCTAssertTrue(period.buttons["Last 7 days"].exists, "Last 7 days segment")
     XCTAssertTrue(period.buttons["Last 30 days"].exists, "Last 30 days segment")
     period.buttons["Last 30 days"].tap()
@@ -402,7 +424,11 @@ final class QuotaUITests: XCTestCase {
       app.descendants(matching: .any)["overview.root"].waitForExistence(timeout: 10),
       "overview.root"
     )
-    XCTAssertTrue(app.staticTexts["No quota yet"].waitForExistence(timeout: 5), "No quota yet")
+    XCTAssertTrue(
+      app.staticTexts["See quota on this iPhone"].waitForExistence(timeout: 5),
+      "See quota on this iPhone"
+    )
+    XCTAssertFalse(app.staticTexts["No quota yet"].exists, "first-run copy replaced No quota yet")
     XCTAssertTrue(
       app.staticTexts[
         "Set up QuotaBar on a Mac to start reporting, or connect a provider to read it on this "
@@ -554,7 +580,21 @@ final class QuotaUITests: XCTestCase {
       "overview.root"
     )
     XCTAssertFalse(app.descendants(matching: .any)["connect.root"].exists, "no Connect wall")
-    XCTAssertTrue(app.staticTexts["No quota yet"].waitForExistence(timeout: 5), "No quota yet")
+    XCTAssertTrue(app.navigationBars["Quota"].waitForExistence(timeout: 5), "Quota page title")
+    XCTAssertTrue(
+      app.staticTexts["See quota on this iPhone"].waitForExistence(timeout: 5),
+      "See quota on this iPhone"
+    )
+    XCTAssertTrue(
+      app.staticTexts["Credentials stay on this phone."].exists,
+      "Connect outcome"
+    )
+    XCTAssertTrue(app.staticTexts["Already use QuotaBar?"].exists, "Already use QuotaBar?")
+    XCTAssertTrue(
+      app.staticTexts["See readings from your other devices."].exists,
+      "Sign-in outcome"
+    )
+    XCTAssertFalse(app.staticTexts["No quota yet"].exists, "first-run copy replaced No quota yet")
     XCTAssertTrue(app.buttons["Connect a provider"].exists, "Connect a provider")
     XCTAssertTrue(app.buttons["Sign in to Quota"].exists, "Sign in to Quota")
     assertTab(app, "Quota")
@@ -575,6 +615,10 @@ final class QuotaUITests: XCTestCase {
       app.descendants(matching: .any)["overview.subscription"].firstMatch.waitForExistence(
         timeout: 5),
       "a locally collected subscription"
+    )
+    XCTAssertFalse(
+      app.descendants(matching: .any)["overview.empty"].exists,
+      "not the empty state"
     )
     XCTAssertFalse(app.staticTexts["No quota yet"].exists, "not the empty state")
     // Today Usage is the Account's fold; without an account there is no such number.
@@ -800,7 +844,11 @@ final class QuotaUITests: XCTestCase {
       app.descendants(matching: .any)["overview.root"].waitForExistence(timeout: 10),
       "overview.root"
     )
-    XCTAssertTrue(app.staticTexts["No quota yet"].waitForExistence(timeout: 5), "No quota yet")
+    XCTAssertTrue(
+      app.staticTexts["See quota on this iPhone"].waitForExistence(timeout: 5),
+      "See quota on this iPhone"
+    )
+    XCTAssertFalse(app.staticTexts["No quota yet"].exists, "first-run copy replaced No quota yet")
     if !app.staticTexts["No usage today."].exists {
       scrollToIdentifier(app, "overview.today.empty")
     }
