@@ -73,15 +73,32 @@ if [ -n "$from" ] && version_only "$from"; then
 fi
 if [ -n "$from" ]; then
   if changed=$(git diff --name-only "$from" HEAD); then
+    # grep answers 0 for a match and 1 for none; anything else (a pattern it cannot compile, for
+    # one) is not an answer, and treating it as "no match" would quietly skip verification. Those
+    # exit with the selection unmade rather than with run=false.
     case "$mode" in
       any)
-        if ! printf '%s\n' "$changed" | grep -E -q "$pattern"; then
-          run=false
-        fi
+        printf '%s\n' "$changed" | grep -E -q "$pattern" && matched=0 || matched=$?
+        case "$matched" in
+          0) ;;
+          1) run=false ;;
+          *)
+            echo "grep could not judge the selection (exit $matched): $pattern" >&2
+            exit 2
+            ;;
+        esac
         ;;
       all)
-        if [ -n "$changed" ] && ! printf '%s\n' "$changed" | grep -E -v -q "$pattern"; then
-          run=false
+        if [ -n "$changed" ]; then
+          printf '%s\n' "$changed" | grep -E -v -q "$pattern" && unmatched=0 || unmatched=$?
+          case "$unmatched" in
+            0) ;;
+            1) run=false ;;
+            *)
+              echo "grep could not judge the selection (exit $unmatched): $pattern" >&2
+              exit 2
+              ;;
+          esac
         fi
         ;;
       *)

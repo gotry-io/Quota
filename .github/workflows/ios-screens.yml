@@ -127,10 +127,13 @@ jobs:
               problems=$((problems + 1))
               continue
             fi
+            recovered=$(grep -c "recovered-on-retry:" "dist/$name.log" 2>/dev/null || true)
             {
               echo "### $profile"
               node scripts/ios-ui-run-summary.mjs "$bundle" --title "Screen census" \
                 --expect-class QuotaScreenUITests --min-tests 30 || echo "EVIDENCE FAILED"
+              echo ""
+              echo "Interactions recovered on retry: ${recovered:-0}"
               node scripts/ios-ui-audit-summary.mjs "$bundle" \
                 --out-dir "dist/ios-screens-outcomes/$name" || echo "EVIDENCE FAILED"
             } | tee "dist/$name.summary" | tee -a "$GITHUB_STEP_SUMMARY"
@@ -156,6 +159,7 @@ jobs:
             dist/ios-screens-shots/
             dist/ios-screens-outcomes/
             dist/ios-screens-status
+            dist/ios-screens-*.log
           if-no-files-found: error
           retention-days: 14
 

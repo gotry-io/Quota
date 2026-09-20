@@ -4,14 +4,43 @@ import XCTest
 /// advisory screen census (`QuotaScreenUITests`). It declares no test method of its own, so XCTest
 /// discovers nothing here.
 class QuotaUITestCase: XCTestCase {
+  /// Every interaction this run had to repeat. Three helpers tap a second time when the first tap
+  /// was dropped, which is a workaround for event delivery and not a product behaviour: a test
+  /// that needed one is reported as recovered rather than simply passing, so the workaround can be
+  /// removed when the recoveries stop — or looked at when they do not.
+  private var recoveries: [String] = []
+
   override func setUpWithError() throws {
     continueAfterFailure = false
+    recoveries = []
     switch uitestEnvironment("QUOTA_IOS_APPEARANCE")?.lowercased() {
     case "dark":
       XCUIDevice.shared.appearance = .dark
     default:
       XCUIDevice.shared.appearance = .light
     }
+  }
+
+  override func tearDownWithError() throws {
+    try super.tearDownWithError()
+    guard !recoveries.isEmpty else { return }
+    let name = self.name
+    let lines = recoveries.map { "recovered-on-retry: \(name) — \($0)" }
+    // Both channels on purpose: the attachment travels with the result bundle, and the line is in
+    // the run's log where a job summary can count it without opening the bundle.
+    for line in lines { print(line) }
+    let attachment = XCTAttachment(string: lines.joined(separator: "\n"))
+    attachment.name = "recovered-on-retry"
+    attachment.lifetime = .keepAlways
+    add(attachment)
+  }
+
+  /// Records that an interaction worked only because it was repeated. Call it after the extra
+  /// attempt succeeded: a test that tapped twice and still failed did not recover, and a summary
+  /// that counted it would be claiming the opposite of what happened.
+  func recordRecovery(_ what: String, recovered: Bool, attempts: Int) {
+    guard recovered, attempts > 1 else { return }
+    recoveries.append(what)
   }
 
 
@@ -178,13 +207,16 @@ class QuotaUITestCase: XCTestCase {
     let root = app.descendants(matching: .any)["settings.root"]
     // A tap that lands while the iOS 26 tab bar is still expanding can be dropped; restore the
     // bar and tap once more before calling the destination missing.
+    var settingsTaps = 0
     for _ in 0..<2 where !root.exists {
       try restoreTabBar(app)
       let settings = app.tabBars.buttons["Settings"]
       XCTAssertTrue(settings.waitForExistence(timeout: 10), "Settings tab")
+      settingsTaps += 1
       settings.tap()
       _ = root.waitForExistence(timeout: 6)
     }
+    recordRecovery("the Settings tab dropped a tap", recovered: root.exists, attempts: settingsTaps)
     XCTAssertTrue(root.exists, "settings.root")
     openSettingsDestination(app, link: "settings.devices", root: "devices.root")
   }
@@ -282,7 +314,9 @@ class QuotaUITestCase: XCTestCase {
     // A tap that lands while the list is still settling can be dropped; tap once more while the
     // row is still there before calling the destination missing (the same rule as popBack).
     let target = app.descendants(matching: .any)[root]
+    var attempts = 0
     for _ in 0..<2 where !target.exists {
+      attempts += 1
       if control.exists, control.isHittable {
         control.tap()
       } else {
@@ -292,6 +326,7 @@ class QuotaUITestCase: XCTestCase {
       }
       _ = target.waitForExistence(timeout: 5)
     }
+    recordRecovery("\(link) dropped a tap", recovered: target.exists, attempts: attempts)
     XCTAssertTrue(target.exists, root)
   }
 
@@ -302,10 +337,13 @@ class QuotaUITestCase: XCTestCase {
     let back = app.navigationBars.buttons[backTitle]
     let target = app.descendants(matching: .any)[root]
     XCTAssertTrue(back.waitForExistence(timeout: 5), "back to \(backTitle)")
+    var rounds = 0
     for _ in 0..<2 where !target.exists {
+      rounds += 1
       if back.exists { back.tap() }
       _ = target.waitForExistence(timeout: 5)
     }
+    recordRecovery("back to \(backTitle) dropped a tap", recovered: target.exists, attempts: rounds)
     XCTAssertTrue(target.exists, "\(root) after back")
   }
 

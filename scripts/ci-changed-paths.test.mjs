@@ -207,3 +207,40 @@ test("an unknown base runs everything", () => {
   assert.equal(ask(swift.mode, swift.pattern, change, "workflow_dispatch"), "run=true");
   assert.equal(ask(ios.mode, ios.pattern, change, "workflow_dispatch"), "run=true");
 });
+
+/** Like `ask`, but keeps the script's exit status: some answers are supposed to be errors. */
+function askRaw(mode, pattern) {
+  const dir = mkdtempSync(join(tmpdir(), "ci-changed-paths-"));
+  const git = (...args) => execFileSync("git", args, { cwd: dir, encoding: "utf8" });
+  try {
+    git("init", "-q");
+    git("config", "user.email", "test@example.com");
+    git("config", "user.name", "test");
+    writeFileSync(join(dir, "a.txt"), "one\n");
+    git("add", "-A");
+    git("commit", "-q", "-m", "base");
+    const base = git("rev-parse", "HEAD").trim();
+    writeFileSync(join(dir, "a.txt"), "two\n");
+    git("add", "-A");
+    git("commit", "-q", "-m", "change");
+    const output = join(dir, "github-output");
+    writeFileSync(output, "");
+    return spawnSync(script, [mode, pattern], {
+      cwd: dir,
+      encoding: "utf8",
+      env: { ...process.env, EVENT_NAME: "pull_request", BASE_SHA: base, GITHUB_OUTPUT: output },
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("a pattern grep cannot judge stops the selection rather than skipping the work", () => {
+  // grep exits 2 on a broken pattern. Read as "no match", that would answer run=false and turn
+  // three required checks green without running any of them.
+  for (const mode of ["any", "all"]) {
+    const result = askRaw(mode, "a[b");
+    assert.equal(result.status, 2, `${mode}: an unjudgeable selection is an error`);
+    assert.match(result.stderr, /could not judge the selection/);
+  }
+});

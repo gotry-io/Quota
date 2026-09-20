@@ -55,3 +55,19 @@ test("a class that ran fewer tests than the floor is a problem", () => {
   });
   assert.deepEqual(problems, ["expected at least 5 tests, ran 1"]);
 });
+
+test("a suite-less test is named rather than left blank, and the title is the caller's", () => {
+  const { report } = summarize(
+    JSON.stringify({
+      testNodes: [
+        {
+          nodeType: "Test Plan",
+          children: [{ nodeType: "Test Case", name: "loose()", result: "Passed", duration: "1s" }],
+        },
+      ],
+    }),
+    { title: "iOS unit run" },
+  );
+  assert.match(report, /## iOS unit run/);
+  assert.match(report, /\| \(no suite\) \| 1 \|/);
+});

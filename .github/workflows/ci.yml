@@ -98,16 +98,19 @@ jobs:
           # The scripts that decide what CI runs and what a release tag may name.
           pnpm test:scripts
 
-      - name: Build the Node Relay
+      # `build` and `build:workers` both start by building the website, so calling both built it
+      # twice. The website is built once here, and the Worker bundle is asked for on its own.
+      - name: Build the website and the Node Relay
         run: pnpm --filter @gotry-io/quota-relay build
 
-      - name: Build the Relay Worker and website
-        run: pnpm --filter @gotry-io/quota-relay build:workers
+      - name: Build the Relay Worker bundle
+        run: pnpm --filter @gotry-io/quota-relay build:cloudflare
 
       - name: Run remaining Relay runtime suites
         run: |
           set -euo pipefail
           pnpm --filter @gotry-io/quota-relay test:workers
+          pnpm --filter @gotry-io/quota-relay test:workers:integration
           pnpm --filter @gotry-io/quota-relay test:node:integration
 
   verify-web-e2e:
@@ -139,10 +142,31 @@ jobs:
   # A change that reaches no Rust or Swift target answers success without the toolchain; the
   # selection is made once in `changes`.
   verify:
-    runs-on: macos-26
+    runs-on: ${{ needs.changes.outputs.swift == 'true' && 'macos-26' || 'ubuntu-24.04' }}
     needs: changes
     steps:
       - uses: actions/checkout@v6
+
+      # A required check that has nothing to do says so, and says it from a runner that is not
+      # scarce: this job is on macOS only when Rust or Swift sources changed.
+      - name: Say what this run decided
+        run: |
+          set -euo pipefail
+          decided="${{ needs.changes.outputs.swift }}"
+          case "$decided" in
+            true)
+              echo "Rust and Swift: running on $RUNNER_OS, attempt ${{ github.run_attempt }}." \
+                | tee -a "$GITHUB_STEP_SUMMARY" ;;
+            false)
+              echo "Rust and Swift: nothing they depend on changed; answered on $RUNNER_OS." \
+                | tee -a "$GITHUB_STEP_SUMMARY" ;;
+            *)
+              # Neither answer means the selection did not reach this job, which is not a reason to
+              # call a required check green.
+              echo "The change selection produced '$decided', which is not an answer." \
+                | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 1 ;;
+          esac
 
       - uses: dtolnay/rust-toolchain@stable
         if: ${{ needs.changes.outputs.swift == 'true' }}
@@ -204,10 +228,37 @@ jobs:
   # iOS generate/build/unit tests. A required check: it answers success without the Xcode steps
   # when `changes` says nothing iOS-related moved.
   verify-ios:
-    runs-on: macos-26
+    runs-on: ${{ needs.changes.outputs.ios == 'true' && 'macos-26' || 'ubuntu-24.04' }}
     needs: changes
     steps:
       - uses: actions/checkout@v6
+
+      # A required check that has nothing to do says so, and says it from a runner that is not
+      # scarce: this job is on macOS only when something the iOS unit tests cover changed.
+      - name: Say what this run decided
+        run: |
+          set -euo pipefail
+          decided="${{ needs.changes.outputs.ios }}"
+          case "$decided" in
+            true)
+              echo "iOS unit tests: running on $RUNNER_OS, attempt ${{ github.run_attempt }}." \
+                | tee -a "$GITHUB_STEP_SUMMARY" ;;
+            false)
+              echo "iOS unit tests: nothing they depend on changed; answered on $RUNNER_OS." \
+                | tee -a "$GITHUB_STEP_SUMMARY" ;;
+            *)
+              # Neither answer means the selection did not reach this job, which is not a reason to
+              # call a required check green.
+              echo "The change selection produced '$decided', which is not an answer." \
+                | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 1 ;;
+          esac
+
+      - uses: actions/setup-node@v6
+        if: ${{ needs.changes.outputs.ios == 'true' }}
+        with:
+          node-version: "24"
+          package-manager-cache: false
 
       - name: Install XcodeGen
         if: ${{ needs.changes.outputs.ios == 'true' }}
@@ -229,17 +280,66 @@ jobs:
         run: >
           QUOTA_IOS_ONLY_TESTING=QuotaTests
           QUOTA_IOS_SKIP_PACKAGE_TESTS=1
+          QUOTA_IOS_RESULT_BUNDLE=dist/ios-unit.xcresult
           ./scripts/test-ios.sh
+
+      # The same contract as the journeys: a selection that matched nothing is not a pass, and the
+      # count is on the record so a shrinking suite is visible rather than quietly green.
+      - name: Summarize the unit run
+        if: ${{ always() && needs.changes.outputs.ios == 'true' }}
+        run: |
+          set -euo pipefail
+          if [ ! -d dist/ios-unit.xcresult ]; then
+            echo "No dist/ios-unit.xcresult; the unit run produced no result bundle." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          node scripts/ios-ui-run-summary.mjs dist/ios-unit.xcresult \
+            --title "iOS unit run" --min-tests 200 \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # The failed attempt's own evidence, kept rather than re-derived from a rerun that passed.
+      - name: Upload the unit result bundle
+        if: ${{ failure() && needs.changes.outputs.ios == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-unit-xcresult-attempt-${{ github.run_attempt }}
+          path: |
+            dist/ios-unit.xcresult
+            dist/ios-unit.log
+          if-no-files-found: warn
+          retention-days: 5
 
   # The required iOS UI gate is QuotaSmokeUITests: fixture-backed journeys and interaction
   # contracts, no accessibility audit and no screen census. The census is QuotaScreenUITests in
   # .github/workflows/ios-screens.yml, which is advisory and does not hold the merge queue.
   # Same path gate as verify-ios.
   verify-ios-ui:
-    runs-on: macos-26
+    runs-on: ${{ needs.changes.outputs.ios == 'true' && 'macos-26' || 'ubuntu-24.04' }}
     needs: changes
     steps:
       - uses: actions/checkout@v6
+
+      # A required check that has nothing to do says so, and says it from a runner that is not
+      # scarce: this job is on macOS only when something the iOS journeys cover changed.
+      - name: Say what this run decided
+        run: |
+          set -euo pipefail
+          decided="${{ needs.changes.outputs.ios }}"
+          case "$decided" in
+            true)
+              echo "iOS journeys: running on $RUNNER_OS, attempt ${{ github.run_attempt }}." \
+                | tee -a "$GITHUB_STEP_SUMMARY" ;;
+            false)
+              echo "iOS journeys: nothing they depend on changed; answered on $RUNNER_OS." \
+                | tee -a "$GITHUB_STEP_SUMMARY" ;;
+            *)
+              # Neither answer means the selection did not reach this job, which is not a reason to
+              # call a required check green.
+              echo "The change selection produced '$decided', which is not an answer." \
+                | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 1 ;;
+          esac
 
       - uses: actions/setup-node@v6
         if: ${{ needs.changes.outputs.ios == 'true' }}
@@ -257,29 +357,48 @@ jobs:
 
       - name: Test Quota iOS UI journeys
         if: ${{ needs.changes.outputs.ios == 'true' }}
+        env:
+          BUNDLE: dist/ios-smoke.xcresult
         run: >
           QUOTA_IOS_ONLY_TESTING=QuotaUITests/QuotaSmokeUITests
           QUOTA_IOS_SKIP_PACKAGE_TESTS=1
-          QUOTA_IOS_RESULT_BUNDLE=dist/ios-smoke.xcresult
+          QUOTA_IOS_RESULT_BUNDLE="$BUNDLE"
           ./scripts/test-ios.sh
 
       # A journey failure needs the frames and hierarchy of the attempt that failed, and the
       # selection itself is a contract: an empty or misspelled selection must not read as green.
       - name: Summarize the journey run
         if: ${{ always() && needs.changes.outputs.ios == 'true' }}
+        env:
+          BUNDLE: dist/ios-smoke.xcresult
         run: |
           set -euo pipefail
-          if [ ! -d dist/ios-smoke.xcresult ]; then
-            echo "No dist/ios-smoke.xcresult; the journey run produced no result bundle." | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ ! -d "$BUNDLE" ]; then
+            echo "No $BUNDLE; the journey run produced no result bundle." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
-          node scripts/ios-ui-run-summary.mjs dist/ios-smoke.xcresult --expect-class QuotaSmokeUITests --min-tests 10 | tee -a "$GITHUB_STEP_SUMMARY"
+          node scripts/ios-ui-run-summary.mjs "$BUNDLE" \
+            --title "iOS journey run" --expect-class QuotaSmokeUITests --min-tests 10 \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          # A journey that needed a second tap passed, but not on its first attempt. The count is
+          # printed whether or not it is zero, so "no retries" and "nobody counted" look different.
+          log="${BUNDLE%.xcresult}.log"
+          test -f "$log" || { echo "No $log to count retries in." | tee -a "$GITHUB_STEP_SUMMARY"; exit 1; }
+          recovered=$(grep -c "recovered-on-retry:" "$log" || true)
+          {
+            echo ""
+            echo "Interactions recovered on retry: ${recovered:-0}"
+            grep "recovered-on-retry:" "$log" | sed 's/^/- /' || true
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the journey result bundle
         if: ${{ failure() && needs.changes.outputs.ios == 'true' }}
         uses: actions/upload-artifact@v4
         with:
-          name: ios-smoke-xcresult
-          path: dist/ios-smoke.xcresult
+          name: ios-smoke-xcresult-attempt-${{ github.run_attempt }}
+          path: |
+            dist/ios-smoke.xcresult
+            dist/ios-smoke.log
           if-no-files-found: warn
           retention-days: 5
