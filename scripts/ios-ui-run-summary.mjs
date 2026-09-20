@@ -7,6 +7,7 @@
 // expected class is missing or ran fewer tests than the floor.
 //
 // Usage: ios-ui-run-summary.mjs <result.xcresult> [--expect-class NAME] [--min-tests N]
+//                                [--title "What ran"]
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 
@@ -31,7 +32,7 @@ function cases(node, suite, found = []) {
 }
 
 /** The report and the verdict, from `xcresulttool get test-results tests --format json`. */
-export function summarize(json, { expectedClass, minimumTests = 0 } = {}) {
+export function summarize(json, { expectedClass, minimumTests = 0, title = "iOS UI run" } = {}) {
   const all = [];
   for (const plan of JSON.parse(json).testNodes ?? []) cases(plan, "", all);
 
@@ -44,13 +45,17 @@ export function summarize(json, { expectedClass, minimumTests = 0 } = {}) {
     byClass.set(one.suite, bucket);
   }
 
-  const lines = ["## iOS UI run", ""];
+  const lines = [`## ${title}`, ""];
   if (byClass.size === 0) {
     lines.push("No test case ran.");
   } else {
     lines.push("| Class | Tests | Failed | Seconds |", "| --- | ---: | ---: | ---: |");
     for (const [name, bucket] of [...byClass].sort(([a], [b]) => a.localeCompare(b))) {
-      lines.push(`| ${name} | ${bucket.total} | ${bucket.failed} | ${bucket.seconds.toFixed(1)} |`);
+      // A test that belongs to no suite still ran; name the row rather than leave a blank cell.
+      const shown = name === "" ? "(no suite)" : name;
+      lines.push(
+        `| ${shown} | ${bucket.total} | ${bucket.failed} | ${bucket.seconds.toFixed(1)} |`,
+      );
     }
   }
   const failures = all.filter((one) => one.result && one.result !== "Passed");
@@ -83,11 +88,13 @@ const option = (name) => {
 };
 const expectedClass = option("--expect-class");
 const minimumTests = Number(option("--min-tests") ?? 0);
+const title = option("--title");
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   if (!bundle || !existsSync(bundle)) {
     console.error(
-      "usage: ios-ui-run-summary.mjs <result.xcresult> [--expect-class NAME] [--min-tests N]",
+      "usage: ios-ui-run-summary.mjs <result.xcresult> [--expect-class NAME] [--min-tests N]" +
+        " [--title TEXT]",
     );
     process.exit(2);
   }
@@ -96,7 +103,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     ["xcresulttool", "get", "test-results", "tests", "--path", bundle, "--format", "json"],
     { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 },
   );
-  const { report, problems } = summarize(json, { expectedClass, minimumTests });
+  const { report, problems } = summarize(json, {
+    expectedClass,
+    minimumTests,
+    ...(title ? { title } : {}),
+  });
   console.log(report);
   if (problems.length > 0) process.exit(1);
 }

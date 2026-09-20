@@ -139,10 +139,23 @@ jobs:
   # A change that reaches no Rust or Swift target answers success without the toolchain; the
   # selection is made once in `changes`.
   verify:
-    runs-on: macos-26
+    runs-on: ${{ needs.changes.outputs.swift == 'true' && 'macos-26' || 'ubuntu-24.04' }}
     needs: changes
     steps:
       - uses: actions/checkout@v6
+
+      # A required check that has nothing to do says so, and says it from a runner that is not
+      # scarce: this job is on macOS only when Rust or Swift sources changed.
+      - name: Say what this run decided
+        run: |
+          set -euo pipefail
+          if [ "${{ needs.changes.outputs.swift }}" = "true" ]; then
+            echo "Rust and Swift: running on $RUNNER_OS, attempt ${{ github.run_attempt }}." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Rust and Swift: nothing they depend on changed; answered on $RUNNER_OS." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
 
       - uses: dtolnay/rust-toolchain@stable
         if: ${{ needs.changes.outputs.swift == 'true' }}
@@ -204,10 +217,29 @@ jobs:
   # iOS generate/build/unit tests. A required check: it answers success without the Xcode steps
   # when `changes` says nothing iOS-related moved.
   verify-ios:
-    runs-on: macos-26
+    runs-on: ${{ needs.changes.outputs.ios == 'true' && 'macos-26' || 'ubuntu-24.04' }}
     needs: changes
     steps:
       - uses: actions/checkout@v6
+
+      # A required check that has nothing to do says so, and says it from a runner that is not
+      # scarce: this job is on macOS only when something the iOS unit tests cover changed.
+      - name: Say what this run decided
+        run: |
+          set -euo pipefail
+          if [ "${{ needs.changes.outputs.ios }}" = "true" ]; then
+            echo "iOS unit tests: running on $RUNNER_OS, attempt ${{ github.run_attempt }}." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "iOS unit tests: nothing they depend on changed; answered on $RUNNER_OS." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/setup-node@v6
+        if: ${{ needs.changes.outputs.ios == 'true' }}
+        with:
+          node-version: "24"
+          package-manager-cache: false
 
       - name: Install XcodeGen
         if: ${{ needs.changes.outputs.ios == 'true' }}
@@ -229,17 +261,56 @@ jobs:
         run: >
           QUOTA_IOS_ONLY_TESTING=QuotaTests
           QUOTA_IOS_SKIP_PACKAGE_TESTS=1
+          QUOTA_IOS_RESULT_BUNDLE=dist/ios-unit.xcresult
           ./scripts/test-ios.sh
+
+      # The same contract as the journeys: a selection that matched nothing is not a pass, and the
+      # count is on the record so a shrinking suite is visible rather than quietly green.
+      - name: Summarize the unit run
+        if: ${{ always() && needs.changes.outputs.ios == 'true' }}
+        run: |
+          set -euo pipefail
+          if [ ! -d dist/ios-unit.xcresult ]; then
+            echo "No dist/ios-unit.xcresult; the unit run produced no result bundle." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          node scripts/ios-ui-run-summary.mjs dist/ios-unit.xcresult \
+            --title "iOS unit run" --min-tests 200 \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # The failed attempt's own evidence, kept rather than re-derived from a rerun that passed.
+      - name: Upload the unit result bundle
+        if: ${{ failure() && needs.changes.outputs.ios == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-unit-xcresult-attempt-${{ github.run_attempt }}
+          path: dist/ios-unit.xcresult
+          if-no-files-found: warn
+          retention-days: 5
 
   # The required iOS UI gate is QuotaSmokeUITests: fixture-backed journeys and interaction
   # contracts, no accessibility audit and no screen census. The census is QuotaScreenUITests in
   # .github/workflows/ios-screens.yml, which is advisory and does not hold the merge queue.
   # Same path gate as verify-ios.
   verify-ios-ui:
-    runs-on: macos-26
+    runs-on: ${{ needs.changes.outputs.ios == 'true' && 'macos-26' || 'ubuntu-24.04' }}
     needs: changes
     steps:
       - uses: actions/checkout@v6
+
+      # A required check that has nothing to do says so, and says it from a runner that is not
+      # scarce: this job is on macOS only when something the iOS journeys cover changed.
+      - name: Say what this run decided
+        run: |
+          set -euo pipefail
+          if [ "${{ needs.changes.outputs.ios }}" = "true" ]; then
+            echo "iOS journeys: running on $RUNNER_OS, attempt ${{ github.run_attempt }}." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "iOS journeys: nothing they depend on changed; answered on $RUNNER_OS." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
 
       - uses: actions/setup-node@v6
         if: ${{ needs.changes.outputs.ios == 'true' }}
@@ -279,7 +350,7 @@ jobs:
         if: ${{ failure() && needs.changes.outputs.ios == 'true' }}
         uses: actions/upload-artifact@v4
         with:
-          name: ios-smoke-xcresult
+          name: ios-smoke-xcresult-attempt-${{ github.run_attempt }}
           path: dist/ios-smoke.xcresult
           if-no-files-found: warn
           retention-days: 5
