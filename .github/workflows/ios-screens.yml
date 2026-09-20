@@ -119,15 +119,16 @@ jobs:
           set -euo pipefail
           mkdir -p dist/ios-screens-outcomes dist/ios-screens-shots
           problems=0
-          while read -r name _; do
+          while read -r profile _; do
+            name="ios-screens-$profile"
             bundle="dist/$name.xcresult"
             if [ ! -d "$bundle" ]; then
-              echo "$name produced no result bundle." | tee -a "$GITHUB_STEP_SUMMARY"
+              echo "$profile produced no result bundle." | tee -a "$GITHUB_STEP_SUMMARY"
               problems=$((problems + 1))
               continue
             fi
             {
-              echo "### $name"
+              echo "### $profile"
               node scripts/ios-ui-run-summary.mjs "$bundle" --title "Screen census" \
                 --expect-class QuotaScreenUITests --min-tests 30 || echo "EVIDENCE FAILED"
               node scripts/ios-ui-audit-summary.mjs "$bundle" \
@@ -139,7 +140,8 @@ jobs:
             # The pictures are the point of this workflow, so they leave the runner.
             if ! xcrun xcresulttool export attachments --path "$bundle" \
               --output-path "dist/ios-screens-shots/$name" >/dev/null; then
-              echo "$name: attachments could not be exported." | tee -a "$GITHUB_STEP_SUMMARY"
+              echo "$profile: attachments could not be exported." \
+                | tee -a "$GITHUB_STEP_SUMMARY"
               problems=$((problems + 1))
             fi
           done < dist/ios-screens-status
