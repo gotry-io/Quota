@@ -436,34 +436,40 @@ interface AppleStub {
   tokenForm?: URLSearchParams;
 }
 
-/** Apple's keys, its token endpoint, and the identity tokens both flows end in. */
-async function fakeApple(): Promise<AppleStub> {
-  const signing = (await crypto.subtle.generateKey(
-    {
-      name: "RSASSA-PKCS1-v1_5",
-      modulusLength: 2048,
-      publicExponent: new Uint8Array([1, 0, 1]),
-      hash: "SHA-256",
-    },
-    true,
-    ["sign", "verify"],
-  )) as CryptoKeyPair;
-  const foreign = (await crypto.subtle.generateKey(
-    {
-      name: "RSASSA-PKCS1-v1_5",
-      modulusLength: 2048,
-      publicExponent: new Uint8Array([1, 0, 1]),
-      hash: "SHA-256",
-    },
-    true,
-    ["sign", "verify"],
-  )) as CryptoKeyPair;
-  const publicJwk = await crypto.subtle.exportKey("jwk", signing.publicKey);
+const rsa = {
+  name: "RSASSA-PKCS1-v1_5",
+  modulusLength: 2048,
+  publicExponent: new Uint8Array([1, 0, 1]),
+  hash: "SHA-256",
+};
+
+/**
+ * The key material every stub uses, generated once for the file.
+ *
+ * Three key pairs per stub and thirteen stubs is thirteen times the work for the same keys, and
+ * under the Workers runtime on a loaded machine that cost is what made these tests exceed the
+ * five-second timeout. Nothing here is mutated per test: the stub's state is its claims and its
+ * responses, which stay per test.
+ */
+const appleKeys = (async () => {
+  const signing = (await crypto.subtle.generateKey(rsa, true, ["sign", "verify"])) as CryptoKeyPair;
+  const foreign = (await crypto.subtle.generateKey(rsa, true, ["sign", "verify"])) as CryptoKeyPair;
   const clientKey = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
     "sign",
     "verify",
   ])) as CryptoKeyPair;
-  const pkcs8 = new Uint8Array(await crypto.subtle.exportKey("pkcs8", clientKey.privateKey));
+  return {
+    signing,
+    foreign,
+    clientKey,
+    publicJwk: await crypto.subtle.exportKey("jwk", signing.publicKey),
+    pkcs8: new Uint8Array(await crypto.subtle.exportKey("pkcs8", clientKey.privateKey)),
+  };
+})();
+
+/** Apple's keys, its token endpoint, and the identity tokens both flows end in. */
+async function fakeApple(): Promise<AppleStub> {
+  const { signing, foreign, publicJwk, pkcs8 } = await appleKeys;
 
   const stub: AppleStub = {
     privateKeyPem: `-----BEGIN PRIVATE KEY-----\n${chunked(base64(pkcs8))}\n-----END PRIVATE KEY-----\n`,
