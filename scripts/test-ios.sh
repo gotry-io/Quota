@@ -129,10 +129,15 @@ fi
 
 # QUOTA_IOS_RESULT_BUNDLE is the xcresult path (CI's verify-ios-ui and local audit summary).
 result_args=()
+log_path=""
 if [ -n "${QUOTA_IOS_RESULT_BUNDLE:-}" ]; then
   mkdir -p "$(dirname -- "$QUOTA_IOS_RESULT_BUNDLE")"
   rm -rf -- "$QUOTA_IOS_RESULT_BUNDLE"
   result_args=(-resultBundlePath "$QUOTA_IOS_RESULT_BUNDLE")
+  # The run's own log beside its bundle. The tests print one line per interaction they had to
+  # repeat, and a job summary counts those lines without opening the bundle.
+  log_path="${QUOTA_IOS_RESULT_BUNDLE%.xcresult}.log"
+  : >"$log_path"
 fi
 
 # The runner reads the appearance and the text size it should launch with. TEST_RUNNER_* reaches
@@ -160,13 +165,22 @@ if [ -n "${QUOTA_IOS_APPEARANCE:-}" ] || [ -n "${QUOTA_IOS_TEXT_SIZE:-}" ]; then
   fi
 fi
 
-xcodebuild \
-  -project apps/ios/Quota.xcodeproj \
-  -scheme Quota \
-  -destination "$destination" \
-  -parallel-testing-enabled NO \
-  CODE_SIGNING_ALLOWED=NO \
-  CODE_SIGNING_REQUIRED=NO \
-  ${only_testing[@]+"${only_testing[@]}"} \
-  ${result_args[@]+"${result_args[@]}"} \
-  test
+run_xcodebuild() {
+  xcodebuild \
+    -project apps/ios/Quota.xcodeproj \
+    -scheme Quota \
+    -destination "$destination" \
+    -parallel-testing-enabled NO \
+    CODE_SIGNING_ALLOWED=NO \
+    CODE_SIGNING_REQUIRED=NO \
+    ${only_testing[@]+"${only_testing[@]}"} \
+    ${result_args[@]+"${result_args[@]}"} \
+    test
+}
+
+if [ -n "$log_path" ]; then
+  set -o pipefail
+  run_xcodebuild 2>&1 | tee "$log_path"
+else
+  run_xcodebuild
+fi

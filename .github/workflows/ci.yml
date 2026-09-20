@@ -347,7 +347,20 @@ jobs:
             echo "No dist/ios-smoke.xcresult; the journey run produced no result bundle." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
-          node scripts/ios-ui-run-summary.mjs dist/ios-smoke.xcresult --expect-class QuotaSmokeUITests --min-tests 10 | tee -a "$GITHUB_STEP_SUMMARY"
+          node scripts/ios-ui-run-summary.mjs dist/ios-smoke.xcresult \
+            --title "iOS journey run" --expect-class QuotaSmokeUITests --min-tests 10 \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+          # A journey that needed a second tap passed, but not on its first attempt. Say so: these
+          # retries are a workaround for dropped events and are meant to be removed, not inherited.
+          recovered=$(grep -c "recovered-on-retry:" dist/ios-smoke.log 2>/dev/null || true)
+          if [ "${recovered:-0}" -gt 0 ]; then
+            {
+              echo ""
+              echo "### Recovered on retry: $recovered"
+              echo ""
+              grep "recovered-on-retry:" dist/ios-smoke.log | sed 's/^/- /'
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Upload the journey result bundle
         if: ${{ failure() && needs.changes.outputs.ios == 'true' }}
