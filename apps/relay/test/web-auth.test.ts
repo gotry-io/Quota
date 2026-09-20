@@ -10,6 +10,7 @@ import { PRICING_CATALOG } from "../src/pricing-catalog.ts";
 import { encodeBase64UrlJSON, SecretHasher } from "../src/security.ts";
 import { D1AccountState } from "../src/state/d1-account-state.ts";
 import { D1UsageState } from "../src/state/d1-usage-state.ts";
+import { tamperedLastCharacter } from "./support/tamper.ts";
 import type { RelayDatabase } from "../src/platform/database.ts";
 import { testDatabase } from "./support/database.ts";
 
@@ -215,9 +216,7 @@ describe("browser sign-in through GitHub", () => {
     );
     expect(noCookie.status).toBe(400);
 
-    // Change the last character for certain: replacing it with a fixed one is a no-op whenever
-    // the signed value already ends in it.
-    const tampered = `${handoff.value.slice(0, -1)}${handoff.value.endsWith("0") ? "1" : "0"}`;
+    const tampered = tamperedLastCharacter(handoff.value);
     const tamperedCookie = await relay.app.request(
       `${origin}/api/auth/github/callback?code=first-code&state=${encodeURIComponent(state)}`,
       { headers: { Cookie: `${handoff.name}=${tampered}` } },

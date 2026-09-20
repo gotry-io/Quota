@@ -5,11 +5,18 @@ import Testing
 
 @Suite(.serialized)
 struct LocalServiceClientTests {
-  /// Fast enough for a test, and in the same proportions the app uses: the helper is declared
-  /// dead after two unanswered pings, and killed if it does not exit within the grace period.
-  /// Two missed pings close the connection, so the ping is the tolerance a loaded runner gets
-  /// before a healthy stub helper is killed: 50 ms (100 ms of grace) relaunched one on CI.
+  /// What most of these tests want: the client's real behaviour, and a liveness ping so far away
+  /// that it cannot reach in and kill a healthy stub helper because the machine was busy. An
+  /// accelerated ping here is what made a cancellation test observe an unrelated relaunch.
   private static let testTimings = LocalServiceClientTimings(
+    ready: .seconds(10),
+    ping: .seconds(30),
+    termination: .milliseconds(200)
+  )
+
+  /// For the watchdog itself: a ping fast enough that two unanswered rounds happen inside a test.
+  /// Only the tests whose subject IS liveness use this.
+  private static let livenessTimings = LocalServiceClientTimings(
     ready: .seconds(10),
     ping: .milliseconds(200),
     termination: .milliseconds(200)
@@ -381,7 +388,7 @@ struct LocalServiceClientTests {
         """#
     )
     defer { service.remove() }
-    let client = try client(for: service)
+    let client = try livenessClient(for: service)
 
     // The pending request fails only once the helper has been reaped and its reader has ended,
     // so reaching this line at all is what proves both happened.
@@ -399,8 +406,9 @@ struct LocalServiceClientTests {
 
   @Test
   func keepsASlowRequestRunningWhileTheHelperAnswersPings() async throws {
-    // Two seconds against a two-hundred-millisecond ping is ten rounds of liveness, the same
-    // proportion as a request running for almost a minute against the app's five-second ping.
+    // The helper holds the answer until it has answered three pings, so the request outlives
+    // several liveness rounds by construction rather than by outlasting an interval this test
+    // guessed. A helper that keeps answering keeps its request, however long the request takes.
     let service = try TemporaryService(
       python: #"""
         import json
@@ -408,37 +416,42 @@ struct LocalServiceClientTests {
         import threading
 
         lock = threading.Lock()
+        pings = 0
+        held = []
 
         def emit(message):
             with lock:
                 print(json.dumps(message), flush=True)
 
-        def answer_slowly(request_id):
-            threading.Event().wait(2.0)
-            emit({"type": "response", "request_id": request_id, "result": state(1)})
-
         for line in sys.stdin:
             request = json.loads(line)
             if request["operation"] == "ping":
+                pings += 1
                 emit({
                     "type": "response",
                     "request_id": request["request_id"],
                     "result": {"ok": True},
                 })
+                if pings >= 3 and held:
+                    mark("pings-answered")
+                    emit({
+                        "type": "response",
+                        "request_id": held.pop(0),
+                        "result": state(1),
+                    })
                 continue
             if request["operation"] == "shutdown":
                 emit({"type": "response", "request_id": request["request_id"], "result": {}})
                 break
-            threading.Thread(
-                target=answer_slowly, args=(request["request_id"],), daemon=True
-            ).start()
+            held.append(request["request_id"])
         """#
     )
     defer { service.remove() }
-    let client = try client(for: service)
+    let client = try livenessClient(for: service)
 
     let state = try await client.state()
     #expect(state.revision == 1)
+    #expect(service.markExists("pings-answered"), "the answer came after three liveness rounds")
     #expect(try service.launchCount() == 1)
     await client.shutdown()
   }
@@ -460,10 +473,15 @@ struct LocalServiceClientTests {
             with lock:
                 print(json.dumps(message), flush=True)
 
-        def answer_slowly(request_id):
-            threading.Event().wait(0.4)
+        # The second request is held until the test says it has let go of its waiter, and the
+        # answer is then sent late on purpose. Both halves are reported, so the test waits for
+        # what happened rather than for an interval.
+        def answer_when_released(request_id):
+            wait_for_mark("cancelled")
             emit({"type": "response", "request_id": request_id, "result": state(1)})
+            mark("late-answer-sent")
 
+        seen = 0
         for line in sys.stdin:
             request = json.loads(line)
             if request["operation"] == "ping":
@@ -476,9 +494,21 @@ struct LocalServiceClientTests {
             if request["operation"] == "shutdown":
                 emit({"type": "response", "request_id": request["request_id"], "result": {}})
                 break
-            threading.Thread(
-                target=answer_slowly, args=(request["request_id"],), daemon=True
-            ).start()
+            seen += 1
+            if seen == 1:
+                emit({
+                    "type": "response",
+                    "request_id": request["request_id"],
+                    "result": state(1),
+                })
+                continue
+            if seen == 2:
+                mark("second-request-received")
+                threading.Thread(
+                    target=answer_when_released, args=(request["request_id"],), daemon=True
+                ).start()
+                continue
+            emit({"type": "response", "request_id": request["request_id"], "result": state(1)})
         """#
     )
     defer { service.remove() }
@@ -489,14 +519,17 @@ struct LocalServiceClientTests {
     _ = try await client.state()
 
     let abandoned = Task { try await client.state() }
-    try await Task.sleep(for: .milliseconds(100))
+    // The helper has the request: cancelling now is cancelling a written request, whatever the
+    // machine's load.
+    try await service.waitForMark("second-request-received")
     abandoned.cancel()
     await #expect(throws: CancellationError.self) {
       _ = try await abandoned.value
     }
 
-    // The helper answers it anyway. The connection has to survive that.
-    try await Task.sleep(for: .milliseconds(500))
+    // Now the helper answers it anyway, and the connection has to survive that arrival.
+    service.mark("cancelled")
+    try await service.waitForMark("late-answer-sent")
     let state = try await client.state()
     #expect(state.revision == 1)
     #expect(try service.launchCount() == 1, "the late answer did not cost the helper its life")
@@ -584,6 +617,48 @@ struct LocalServiceClientTests {
   private func client(for service: TemporaryService) throws -> LocalServiceClient {
     try LocalServiceClient(executableURL: service.executableURL, timings: Self.testTimings)
   }
+
+  /// A client whose liveness ping is fast, for the two tests about liveness.
+  private func livenessClient(for service: TemporaryService) throws -> LocalServiceClient {
+    try LocalServiceClient(executableURL: service.executableURL, timings: Self.livenessTimings)
+  }
+}
+
+/// The liveness rule on its own: what a round decides, without a helper to run or a clock to
+/// wait on. The one real-process watchdog case above proves the monitor is wired to this.
+@Suite
+struct LivenessRoundTests {
+  @Test
+  func nothingOutstandingStopsTheWatch() {
+    #expect(
+      LivenessRound.next(pendingRequests: 0, pingsOutstanding: 1, missedPings: 1)
+        == .stopWatching
+    )
+  }
+
+  @Test
+  func anAnsweredRoundAsksAgainAndForgetsEarlierMisses() {
+    #expect(
+      LivenessRound.next(pendingRequests: 1, pingsOutstanding: 0, missedPings: 0)
+        == .ping(missedPings: 0)
+    )
+  }
+
+  @Test
+  func theFirstUnansweredPingCountsAndAsksAgain() {
+    #expect(
+      LivenessRound.next(pendingRequests: 1, pingsOutstanding: 1, missedPings: 0)
+        == .ping(missedPings: 1)
+    )
+  }
+
+  @Test
+  func theSecondUnansweredPingGivesUp() {
+    #expect(
+      LivenessRound.next(pendingRequests: 1, pingsOutstanding: 1, missedPings: 1) == .giveUp
+    )
+    #expect(LivenessRound.missedPingLimit == 2, "two rounds of silence, as the app ships it")
+  }
 }
 
 private func stateError(from client: LocalServiceClient) async -> LocalServiceClientError? {
@@ -602,6 +677,9 @@ private struct TemporaryService {
   let executableURL: URL
   let launchCountURL: URL
   let processIdentifierURL: URL
+  /// Where the fixture and the test leave notes for each other. A file appearing is something
+  /// that happened; waiting for one is waiting for that, not for an interval.
+  let marksURL: URL
 
   init(announcesReady: Bool = true, python body: String) throws {
     directoryURL = FileManager.default.temporaryDirectory
@@ -609,13 +687,24 @@ private struct TemporaryService {
     executableURL = directoryURL.appending(path: "quota-service")
     launchCountURL = directoryURL.appending(path: "launch-count")
     processIdentifierURL = directoryURL.appending(path: "pid")
-    try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+    marksURL = directoryURL.appending(path: "marks", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: marksURL, withIntermediateDirectories: true)
     let script = """
       #!/usr/bin/env python3
       import json as _json
       from pathlib import Path
+      import time as _time
       launch_count_path = Path(\(String(reflecting: launchCountURL.path)))
       pid_path = Path(\(String(reflecting: processIdentifierURL.path)))
+      marks_path = Path(\(String(reflecting: marksURL.path)))
+      def mark(name):
+          (marks_path / name).write_text("1")
+      def wait_for_mark(name, timeout=20.0):
+          deadline = _time.monotonic() + timeout
+          while not (marks_path / name).exists():
+              if _time.monotonic() > deadline:
+                  raise SystemExit("fixture waited for mark " + name)
+              _time.sleep(0.01)
       count = int(launch_count_path.read_text()) if launch_count_path.exists() else 0
       launch_count_path.write_text(str(count + 1))
       def ready():
@@ -692,6 +781,32 @@ private struct TemporaryService {
 
   func launchCount() throws -> Int {
     try Int(String(contentsOf: launchCountURL, encoding: .utf8)) ?? 0
+  }
+
+  /// Leaves a note for the fixture.
+  func mark(_ name: String) {
+    try? Data().write(to: marksURL.appending(path: name), options: .atomic)
+  }
+
+  func markExists(_ name: String) -> Bool {
+    FileManager.default.fileExists(atPath: marksURL.appending(path: name).path)
+  }
+
+  /// Waits for the fixture to report something, within a bound generous enough that only a
+  /// fixture that never got there fails. The bound is a hang detector, not a pace.
+  func waitForMark(_ name: String, within seconds: Double = 20) async throws {
+    let deadline = ContinuousClock.now + .seconds(seconds)
+    while !markExists(name) {
+      guard ContinuousClock.now < deadline else {
+        throw MarkTimeout(name: name)
+      }
+      try await Task.sleep(for: .milliseconds(10))
+    }
+  }
+
+  struct MarkTimeout: Error, CustomStringConvertible {
+    let name: String
+    var description: String { "the fixture never reported \(name)" }
   }
 
   func processIdentifier() throws -> pid_t {
