@@ -32,6 +32,11 @@ final class QuotaScreenUITests: QuotaUITestCase {
         || app.descendants(matching: .any)["overview.today.empty"].exists,
       "No usage today."
     )
+    // At accessibility sizes the Mac-setup group starts below the fold, and a lazy List has not
+    // built it yet: the same reveal its neighbours get, or this asserts what is merely on screen.
+    if !app.staticTexts["Set up QuotaBar"].exists {
+      scrollToIdentifier(app, "section.header.mac-setup", attempts: 12)
+    }
     XCTAssertTrue(
       app.staticTexts["Set up QuotaBar"].exists
         || app.descendants(matching: .any)["section.header.mac-setup"].exists,
