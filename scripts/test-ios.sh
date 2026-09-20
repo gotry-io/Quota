@@ -49,8 +49,30 @@ for runtime, devices in runtime_devices.items():
             continue
         rows.append((version, name, udid))
 
+# Which iPhone, when several are available. The runtime and the model decide how the app lays
+# out and what the accessibility auditor reports, so "whichever the list happened to put
+# first" is a difference between two runs that nothing records. First match wins; anything
+# unlisted is ordered by name so the choice stays the same on a machine that has none of these.
+PREFERRED = (
+    "iPhone 17 Pro",
+    "iPhone 17",
+    "iPhone 16 Pro",
+    "iPhone 16",
+    "iPhone 15 Pro",
+    "iPhone 15",
+)
+
+
+def preference(name):
+    try:
+        return (0, PREFERRED.index(name), name)
+    except ValueError:
+        return (1, 0, name)
+
+
 def emit(row):
-    sys.stderr.write("Using iOS Simulator: %s (%s)\n" % (row[1], row[2]))
+    version = ".".join(str(part) for part in row[0])
+    sys.stderr.write("Using iOS Simulator: %s on iOS %s (%s)\n" % (row[1], version, row[2]))
     sys.stdout.write("%s\n" % row[2])
 
 if override is not None:
@@ -67,10 +89,7 @@ if override is not None:
             sys.stderr.write("No available iOS simulators were listed.\n")
         sys.exit(1)
     latest = max(row[0] for row in matched)
-    for row in matched:
-        if row[0] == latest:
-            emit(row)
-            break
+    emit(min((row for row in matched if row[0] == latest), key=lambda row: row[2]))
     sys.exit(0)
 
 iphones = [row for row in rows if "iPhone" in row[1]]
@@ -82,10 +101,8 @@ if not iphones:
     sys.exit(1)
 
 latest = max(row[0] for row in iphones)
-for row in iphones:
-    if row[0] == latest:
-        emit(row)
-        break
+newest = [row for row in iphones if row[0] == latest]
+emit(min(newest, key=lambda row: preference(row[1])))
 '
 )"
 
@@ -93,6 +110,12 @@ if [ -z "$udid" ]; then
   echo "Quota iOS tests failed to select an iOS Simulator." >&2
   exit 1
 fi
+
+# The toolchain is part of the result: a layout or an audit that differs between two machines is
+# usually this line differing, and a log that never said it cannot tell anyone that.
+xcodebuild -version | tr '\n' ' '
+echo
+
 
 destination="platform=iOS Simulator,id=$udid"
 
