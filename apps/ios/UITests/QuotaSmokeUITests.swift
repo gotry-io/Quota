@@ -498,6 +498,9 @@ final class QuotaSmokeUITests: QuotaUITestCase {
       app.descendants(matching: .any)["overview.today"].exists,
       "no managed Today without an account"
     )
+    // The identifier and the words both: a Today section that lost its identifier is still a
+    // Today section this phone has no account to fill.
+    XCTAssertFalse(app.staticTexts["Today"].exists, "no Today section without an account")
     XCTAssertFalse(
       app.descendants(matching: .any)["overview.empty"].exists,
       "not the empty state"

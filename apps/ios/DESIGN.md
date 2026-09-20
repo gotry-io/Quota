@@ -909,12 +909,14 @@ fixture screenshots to
 `QUOTA_IOS_APPEARANCE` (`light` or `dark`) select Dynamic Type and appearance for that run; variant
 PNGs land in a subdirectory. Re-run Connect, Confirm, Overview, Usage, Devices, subscription
 detail, and each Settings destination at one accessibility text size.
-`QuotaUITests.testLargeTypeScreenshots` always launches at `accessibilityExtraLarge` (including
-CI's `verify-ios-ui`) and visits **View day** / the day sheet, Settings › About, hub Log Out after
-pop, and the first connected Providers session, so a below-the-fold regression fails that job
-instead of only a local screenshot run. It asserts remaining percent, tokens, and cost on
-Overview, subscription detail, and Usage: each is hittable, carries the full accessibility
-label, and is not clipped by the window.
+The required check asserts the seven essential values at the standard size and at
+`accessibilityExtraLarge` (`QuotaSmokeUITests.testEssentialValuesAtStandardSize` and
+`…AtAccessibilitySize`): Overview remaining, Today tokens, cost and the combined Today label, the
+Usage headline's tokens and cost, and subscription remaining — each exists, is hittable, carries
+its whole accessibility label, and sits on screen. One large-type journey stays with them,
+Settings › About and back with Log Out still on the hub. Everything else at that size — the
+providers matrix, the day sheet, the rest of the screens — is captured and audited by the
+advisory `ios-screens` census, not on the merge path.
 
 ### DEBUG visual fixtures
 

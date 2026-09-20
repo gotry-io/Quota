@@ -109,20 +109,41 @@ jobs:
               ;;
           esac
 
+      # Every profile that ran must have left a bundle, a run that matched the census class, and
+      # audit outcomes. A summary or an export that fails is a census without evidence, which is
+      # not the same as a census that found nothing.
       - name: Summarize the census
+        id: summary
         if: ${{ always() }}
         run: |
           set -euo pipefail
-          mkdir -p dist/ios-screens-outcomes
-          for bundle in dist/ios-screens-*.xcresult; do
-            [ -d "$bundle" ] || continue
-            name="$(basename "$bundle" .xcresult)"
+          mkdir -p dist/ios-screens-outcomes dist/ios-screens-shots
+          problems=0
+          while read -r name _; do
+            bundle="dist/$name.xcresult"
+            if [ ! -d "$bundle" ]; then
+              echo "$name produced no result bundle." | tee -a "$GITHUB_STEP_SUMMARY"
+              problems=$((problems + 1))
+              continue
+            fi
             {
               echo "### $name"
-              node scripts/ios-ui-run-summary.mjs "$bundle" --expect-class QuotaScreenUITests --min-tests 20 || true
-              node scripts/ios-ui-audit-summary.mjs "$bundle" --out-dir "dist/ios-screens-outcomes/$name" || true
-            } | tee -a "$GITHUB_STEP_SUMMARY"
-          done
+              node scripts/ios-ui-run-summary.mjs "$bundle" --title "Screen census" \
+                --expect-class QuotaScreenUITests --min-tests 30 || echo "EVIDENCE FAILED"
+              node scripts/ios-ui-audit-summary.mjs "$bundle" \
+                --out-dir "dist/ios-screens-outcomes/$name" || echo "EVIDENCE FAILED"
+            } | tee "dist/$name.summary" | tee -a "$GITHUB_STEP_SUMMARY"
+            if grep -q "EVIDENCE FAILED" "dist/$name.summary"; then
+              problems=$((problems + 1))
+            fi
+            # The pictures are the point of this workflow, so they leave the runner.
+            if ! xcrun xcresulttool export attachments --path "$bundle" \
+              --output-path "dist/ios-screens-shots/$name" >/dev/null; then
+              echo "$name: attachments could not be exported." | tee -a "$GITHUB_STEP_SUMMARY"
+              problems=$((problems + 1))
+            fi
+          done < dist/ios-screens-status
+          echo "evidence-problems=$problems" >> "$GITHUB_OUTPUT"
 
       - name: Upload screenshots and audit outcomes
         if: ${{ always() }}
@@ -130,17 +151,23 @@ jobs:
         with:
           name: ios-screens
           path: |
+            dist/ios-screens-shots/
             dist/ios-screens-outcomes/
             dist/ios-screens-status
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
 
-      # The captures and audits are the point; a profile that failed keeps this job red without
-      # blocking the queue, because this workflow is not a required check.
+      # The captures and audits are the point; a profile that failed — or that produced no evidence
+      # that it ran at all — keeps this job red without blocking the queue, because this workflow
+      # is not a required check.
       - name: Fail if a profile failed
         if: ${{ always() }}
         run: |
           set -euo pipefail
-          test -f dist/ios-screens-status || { echo "no profile ran"; exit 1; }
+          test -s dist/ios-screens-status || { echo "no profile ran"; exit 1; }
           cat dist/ios-screens-status
+          if [ "${{ steps.summary.outputs.evidence-problems }}" != "0" ]; then
+            echo "A profile left no usable evidence; see the summary above."
+            exit 1
+          fi
           ! grep -qv " 0$" dist/ios-screens-status

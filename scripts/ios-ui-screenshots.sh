@@ -109,6 +109,17 @@ if [ ! -d "$result" ]; then
   exit "${status:-1}"
 fi
 
+# The census names every capture in one place; this reads that list rather than keeping a second
+# copy that goes stale whenever a screen is renamed.
+screen_names="$(
+  grep -o 'attachScreenshot(app, name: "[a-z0-9-]*"' apps/ios/UITests/QuotaScreenUITests.swift \
+    | sed 's/.*name: "//;s/"//' | sort -u | paste -sd, -
+)"
+if [ -z "$screen_names" ]; then
+  echo "Could not read the screen names from apps/ios/UITests/QuotaScreenUITests.swift" >&2
+  exit 1
+fi
+
 export_dir="$(mktemp -d)"
 trap 'rm -rf "$export_dir"; rm -f "$appearance_file" "$text_size_file"' EXIT
 xcrun xcresulttool export attachments --path "$result" --output-path "$export_dir"
@@ -125,36 +136,7 @@ if (!fs.existsSync(manifestPath)) {
   process.exit(1);
 }
 const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-const wanted = [
-  "overview-content",
-  "overview-no-devices",
-  "overview-empty",
-  "overview-cached-error",
-  "overview-scrolled",
-  "connect-sign-in",
-  "connect-connecting",
-  "connect-error",
-  "connect-expired",
-  "connect-refresh-failed",
-  "root-loading",
-  "confirm-account",
-  "usage-content",
-  "usage-activity",
-  "usage-activity-loading",
-  "usage-activity-failed",
-  "usage-empty",
-  "usage-day",
-  "usage-day-empty",
-  "usage-day-failed",
-  "subscription-detail",
-  "devices-content",
-  "devices-empty",
-  "settings-main",
-  "settings-notifications",
-  "settings-appearance",
-  "settings-about",
-  "settings-providers",
-];
+const wanted = process.argv[4].split(",").filter(Boolean);
 const found = new Map();
 for (const test of manifest) {
   for (const attachment of test.attachments || []) {
@@ -186,11 +168,16 @@ for (const name of wanted) {
   }
   fs.copyFileSync(src, path.join(destDir, name + ".png"));
 }
-' "$export_dir" "$shots" "${QUOTA_IOS_TEXT_SIZE:+allow-missing}"
+' "$export_dir" "$shots" "${QUOTA_IOS_TEXT_SIZE:+allow-missing}" "$screen_names"
 
 if [ -n "${QUOTA_IOS_TEXT_SIZE:-}" ]; then
   missing=""
-  for name in sign-in confirm-account overview-content usage-content devices-content subscription-detail settings-main settings-notifications settings-appearance settings-about; do
+  old_ifs=$IFS
+  IFS=,
+  # shellcheck disable=SC2086
+  set -- $screen_names
+  IFS=$old_ifs
+  for name in "$@"; do
     if [ ! -f "$shots/$name.png" ]; then
       missing="$missing $name"
     fi
@@ -199,7 +186,6 @@ if [ -n "${QUOTA_IOS_TEXT_SIZE:-}" ]; then
     echo "missing accessibility PNG:$missing" >&2
     exit 1
   fi
-  exit 0
 fi
 
-exit "$status"
+exit "${status:-0}"

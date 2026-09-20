@@ -573,17 +573,6 @@ final class QuotaScreenUITests: QuotaUITestCase {
   }
 
   /// Devices reached directly, so the journey does not have to carry its picture.
-  func testSettingsDevicesScreen() throws {
-    let app = launch(fixture: "content", route: "settings.devices")
-    XCTAssertTrue(
-      app.descendants(matching: .any)["devices.root"].waitForExistence(timeout: 10),
-      "devices.root"
-    )
-    settle(app)
-    attachScreenshot(app, name: "devices-content")
-    try audit(app)
-  }
-
   /// The account states the smoke tests assert controls for: their copy and their audit.
   func testSignedOutScreen() throws {
     try captureRoot(fixture: "signed-out", root: "overview.root", name: "overview-signed-out")
@@ -634,6 +623,16 @@ final class QuotaScreenUITests: QuotaUITestCase {
     attachScreenshot(app, name: "subscription-detail-local")
     settle(app)
     try audit(app)
+
+    // What read it is the other half of a local-only detail: the disclosure lists the sources, and
+    // this phone is one of them.
+    revealSources(app)
+    XCTAssertTrue(
+      app.descendants(matching: .any)["subscription.sources"].exists,
+      "subscription.sources"
+    )
+    scrollToIdentifier(app, "subscription.reporting")
+    XCTAssertTrue(app.staticTexts["This iPhone"].waitForExistence(timeout: 5), "This iPhone")
   }
 
   func testLocalOnlySettingsScreen() throws {

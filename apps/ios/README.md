@@ -174,7 +174,8 @@ and sits on screen. `scripts/ios-ui-run-summary.mjs` reports what ran and fails 
 selection matched nothing, so an empty selection cannot read as green.
 
 **`QuotaScreenUITests` — the advisory census** (`.github/workflows/ios-screens.yml`, not a required
-check, nightly on main and on iOS-touching pull requests). One screen or state per test, opened
+check, nightly on main and on iOS-touching pull requests). Mostly one screen or state per test (a few fixtures whose second
+screen is only reachable through the first still walk both), opened
 with `--route` where the fixture allows it, captured light/large, dark/large and
 light/`accessibilityExtraLarge` (nightly adds dark/large-type), and audited with the app-owned
 auditor including contrast. Each screen audit attaches `audit-outcome.<screen>` JSON with one
