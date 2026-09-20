@@ -113,8 +113,10 @@ pnpm test
 pnpm build
 ```
 
-Workers commands stay explicit: `pnpm dev:workers`, `pnpm test:workers`, `pnpm build:workers`
-(website, Workers integration, wrangler dry-run). Apply local D1 migrations before Wrangler:
+Workers commands stay explicit: `pnpm dev:workers`, `pnpm test:workers`,
+`pnpm test:workers:integration`, and `pnpm build:workers` (website, then `build:cloudflare`'s
+wrangler dry-run). A build script runs no tests: CI asks for the website once and then for each
+bundle and suite by name. Apply local D1 migrations before Wrangler:
 
 ```bash
 pnpm d1:migrate:local
