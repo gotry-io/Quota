@@ -231,9 +231,10 @@ jobs:
           QUOTA_IOS_SKIP_PACKAGE_TESTS=1
           ./scripts/test-ios.sh
 
-  # The UI tests launch the app, load a fixture, and run the accessibility audit one screen
-  # at a time, which is most of an iOS run; they get their own runner so a unit failure is
-  # known in minutes and the two halves finish side by side. Same path gate as verify-ios.
+  # The required iOS UI gate is QuotaSmokeUITests: fixture-backed journeys and interaction
+  # contracts, no accessibility audit and no screen census. The census is QuotaScreenUITests in
+  # .github/workflows/ios-screens.yml, which is advisory and does not hold the merge queue.
+  # Same path gate as verify-ios.
   verify-ios-ui:
     runs-on: macos-26
     needs: changes
@@ -254,30 +255,31 @@ jobs:
         if: ${{ needs.changes.outputs.ios == 'true' }}
         run: ./scripts/generate-ios.sh
 
-      - name: Test Quota iOS UI
+      - name: Test Quota iOS UI journeys
         if: ${{ needs.changes.outputs.ios == 'true' }}
         run: >
-          QUOTA_IOS_ONLY_TESTING=QuotaUITests
+          QUOTA_IOS_ONLY_TESTING=QuotaUITests/QuotaSmokeUITests
           QUOTA_IOS_SKIP_PACKAGE_TESTS=1
-          QUOTA_IOS_RESULT_BUNDLE=dist/ios-ui.xcresult
+          QUOTA_IOS_RESULT_BUNDLE=dist/ios-smoke.xcresult
           ./scripts/test-ios.sh
 
-      - name: Summarize accessibility audit outcomes
+      # A journey failure needs the frames and hierarchy of the attempt that failed, and the
+      # selection itself is a contract: an empty or misspelled selection must not read as green.
+      - name: Summarize the journey run
         if: ${{ always() && needs.changes.outputs.ios == 'true' }}
         run: |
           set -euo pipefail
-          if [ ! -d dist/ios-ui.xcresult ]; then
-            echo "No dist/ios-ui.xcresult; accessibility audit summary skipped." | tee -a "$GITHUB_STEP_SUMMARY"
-            exit 0
+          if [ ! -d dist/ios-smoke.xcresult ]; then
+            echo "No dist/ios-smoke.xcresult; the journey run produced no result bundle." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
-          mkdir -p dist/ios-ui-audit-outcomes
-          node scripts/ios-ui-audit-summary.mjs dist/ios-ui.xcresult --out-dir dist/ios-ui-audit-outcomes | tee -a "$GITHUB_STEP_SUMMARY"
+          node scripts/ios-ui-run-summary.mjs dist/ios-smoke.xcresult --expect-class QuotaSmokeUITests --min-tests 10 | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload accessibility audit outcomes
-        if: ${{ always() && needs.changes.outputs.ios == 'true' }}
+      - name: Upload the journey result bundle
+        if: ${{ failure() && needs.changes.outputs.ios == 'true' }}
         uses: actions/upload-artifact@v4
         with:
-          name: ios-ui-audit-outcomes
-          path: dist/ios-ui-audit-outcomes/
+          name: ios-smoke-xcresult
+          path: dist/ios-smoke.xcresult
           if-no-files-found: warn
-          retention-days: 7
+          retention-days: 5

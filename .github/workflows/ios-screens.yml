@@ -1,0 +1,146 @@
+name: ios-screens
+
+# The advisory iOS screen census: one screen or state per test, captured and audited with the
+# accessibility auditor. It is deliberately **not** a required check and never runs from
+# `merge_group`, so a rendering finding does not hold the merge queue; it still fails visibly, and a
+# confirmed finding is a defect to fix. The required journeys are `verify-ios-ui` in ci.yml.
+on:
+  pull_request:
+  schedule:
+    # Nightly on main, 03:40 UTC.
+    - cron: "40 3 * * *"
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "Which profiles to capture"
+        default: all
+        type: choice
+        options: [all, light-large, dark-large, light-accessibility]
+
+permissions:
+  contents: read
+
+# Its own namespace: sharing ci's group would let an advisory run cancel a required one.
+concurrency:
+  group: ios-screens-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    outputs:
+      ios: ${{ steps.ios.outputs.run }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # A scheduled or manual run captures the census whatever moved; a pull request captures it
+      # only when something iOS-related did. An unknown base still answers run=true.
+      - name: Detect iOS-related path changes
+        id: ios
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          ./scripts/ci-changed-paths.sh any \
+            '^(apps/ios(/|$)|packages/apple-client(/|$)|packages/apple-shared(/|$)|packages/protocol(/|$)|packages/provider(/|$)|packages/design-tokens(/|$)|scripts/[^/]*ios[^/]*$|scripts/generate-(design-tokens|provider-catalog|plan-display)\.mjs$|scripts/ci-changed-paths\.sh$|\.github/workflows/ios-screens\.yml$)'
+
+  # One macOS job walks the profiles in sequence. A matrix would ask for three macOS runners at
+  # once, which is the demand this split exists to reduce.
+  screens:
+    needs: changes
+    if: ${{ needs.changes.outputs.ios == 'true' }}
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Install XcodeGen
+        run: HOMEBREW_NO_AUTO_UPDATE=1 brew install xcodegen
+
+      - name: Generate the iOS Xcode project
+        run: ./scripts/generate-ios.sh
+
+      # Appearance and text size are independent axes; each profile names both, and every launch
+      # sets them explicitly rather than inheriting whatever the simulator had.
+      - name: Capture and audit the screens
+        env:
+          PROFILE: ${{ github.event.inputs.profile || 'all' }}
+          NIGHTLY: ${{ github.event_name == 'schedule' }}
+        run: |
+          set -euo pipefail
+          run_profile() {
+            name="$1"; appearance="$2"; size="$3"
+            echo "::group::$name ($appearance, $size)"
+            status=0
+            QUOTA_IOS_ONLY_TESTING=QuotaUITests/QuotaScreenUITests \
+            QUOTA_IOS_SKIP_PACKAGE_TESTS=1 \
+            QUOTA_IOS_APPEARANCE="$appearance" \
+            QUOTA_IOS_TEXT_SIZE="$size" \
+            QUOTA_IOS_RESULT_BUNDLE="dist/ios-screens-$name.xcresult" \
+            ./scripts/test-ios.sh || status=$?
+            echo "::endgroup::"
+            echo "$name $status" >> dist/ios-screens-status
+          }
+          mkdir -p dist
+          : > dist/ios-screens-status
+          case "$PROFILE" in
+            light-large) run_profile light-large light large ;;
+            dark-large) run_profile dark-large dark large ;;
+            light-accessibility) run_profile light-accessibility light accessibilityExtraLarge ;;
+            *)
+              run_profile light-large light large
+              run_profile dark-large dark large
+              run_profile light-accessibility light accessibilityExtraLarge
+              if [ "$NIGHTLY" = "true" ]; then
+                run_profile dark-accessibility dark accessibilityExtraLarge
+              fi
+              ;;
+          esac
+
+      - name: Summarize the census
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/ios-screens-outcomes
+          for bundle in dist/ios-screens-*.xcresult; do
+            [ -d "$bundle" ] || continue
+            name="$(basename "$bundle" .xcresult)"
+            {
+              echo "### $name"
+              node scripts/ios-ui-run-summary.mjs "$bundle" --expect-class QuotaScreenUITests --min-tests 20 || true
+              node scripts/ios-ui-audit-summary.mjs "$bundle" --out-dir "dist/ios-screens-outcomes/$name" || true
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Upload screenshots and audit outcomes
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-screens
+          path: |
+            dist/ios-screens-outcomes/
+            dist/ios-screens-status
+          if-no-files-found: warn
+          retention-days: 14
+
+      # The captures and audits are the point; a profile that failed keeps this job red without
+      # blocking the queue, because this workflow is not a required check.
+      - name: Fail if a profile failed
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          test -f dist/ios-screens-status || { echo "no profile ran"; exit 1; }
+          cat dist/ios-screens-status
+          ! grep -qv " 0$" dist/ios-screens-status

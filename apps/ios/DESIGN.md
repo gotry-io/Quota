@@ -841,11 +841,17 @@ provider and support, and no custom card chrome beyond the system widget contain
   full accessibility audit with no skip.
 - Settings account actions sit on the hub, not below per-subscription alert groups. Settings
   destinations run the full app-owned accessibility audit. Do not skip an unnamed clipping issue.
+- The audit and the screen census live in `QuotaScreenUITests`, run by the advisory `ios-screens`
+  workflow (nightly on main, and on iOS-touching pull requests), not by the required `verify-ios-ui`
+  check. A confirmed finding there is a defect to fix, but it does not block a merge, and the
+  reachability of these layouts at large type is therefore no longer checked on every merge. What
+  the required check still proves is in `QuotaSmokeUITests`: the journeys, the state controls, and
+  the seven essential values at the standard and `accessibilityExtraLarge` sizes.
 - Contrast is guaranteed by `ContrastTokenTests`, which compute the WCAG 2.x contrast ratio of
   every text and fill pairing the tokens allow in light and dark. The XCTest accessibility audit
-  still runs on every fixture screen and gates every type except contrast: the iOS 26
-  pixel-sampling contrast pass persistently reports low contrast on system label colour, which
-  is not low contrast.
+  still runs on every fixture screen in `ios-screens` and gates every type there except
+  contrast: the iOS 26 pixel-sampling contrast pass persistently reports low contrast on system
+  label colour, which is not low contrast.
 - Unnamed glass (`issue.element == nil`) is recorded and does not gate. The iOS 26.3 auditor
   still reports Dynamic Type "partially unsupported" on specific system list headers/footers,
   Form/Link inner labels, combined-row inner text (Usage budget, Settings appearance/budget,
@@ -858,14 +864,14 @@ provider and support, and no custom card chrome beyond the system widget contain
   finding twice), `unconfirmed` (first pass only), or `incomplete` (timed out). Confirmed
   non-contrast findings still fail the test; contrast never gates and is summarised as advisory;
   incomplete does not fail. Read the outcomes in the xcresult or via
-  `scripts/ios-ui-audit-summary.mjs` (CI `verify-ios-ui` job summary). A contrast pass that
+  `scripts/ios-ui-audit-summary.mjs` (the `ios-screens` job summary). A contrast pass that
   exceeds the auditor deadline on the 365-day heatmap may retry without contrast; that is a
   deadline, not a type skip.
 - The Connect footnote sits 24 pt below the prominent button so the button's glass bloom does not
   reach it.
 - `scripts/ios-ui-screenshots.sh` removes its `/tmp/quota-ios-uitest-*` override files on exit; a
   stale text-size override would otherwise silently run every later UI test at that size.
-- Overview and Usage UI tests scroll the list (`overview-scrolled`). Tab-bar minimization
+- Overview and Usage census tests scroll the list (`overview-scrolled`). Tab-bar minimization
   (`tabBarMinimizeBehavior(.onScrollDown)`) is a manual visual gate: the simulator used for
   screenshots does not expose a measurable height drop or a single-button minimized tab bar.
 

@@ -96,7 +96,7 @@ xcodebuild \
   -project apps/ios/Quota.xcodeproj \
   -scheme Quota \
   -destination "platform=iOS Simulator,name=$simulator_name" \
-  -only-testing:QuotaUITests \
+  -only-testing:QuotaUITests/QuotaScreenUITests \
   -parallel-testing-enabled NO \
   -resultBundlePath "$result" \
   -collect-test-diagnostics never \

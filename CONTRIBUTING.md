@@ -60,6 +60,12 @@ release still publishes and warns that main was left on the released version. A 
 app narrows the token to the permissions it needs, so granting the app a new one for some other job
 never widens an existing one.
 
+Required checks are the ones a merge must not break. The iOS accessibility audit and the screen
+census are not among them: they run in the advisory `ios-screens` workflow, whose own concurrency
+namespace keeps it from cancelling a required run, while `verify-ios-ui` runs the journeys in
+`QuotaSmokeUITests`. A confirmed `ios-screens` finding is still a defect to fix — nothing merges
+that on purpose.
+
 A change that moves nothing but a product's version string answers the macOS checks without running
 them (`scripts/ci-changed-paths.sh`, judged on file content, not on the pull request's author); the
 Linux jobs still run in full. `update-bump-prs` re-syncs an open bump pull request when main moves.

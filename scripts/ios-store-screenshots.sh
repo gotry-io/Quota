@@ -6,7 +6,7 @@ cd "$root"
 shots_root="dist/ios-store-screenshots"
 derived="dist/ios-store-derived"
 bundle_id="io.gotry.quota"
-uitests_src="apps/ios/UITests/QuotaUITests.swift"
+uitests_src="apps/ios/UITests/QuotaScreenUITests.swift"
 wanted_pngs="content usage-content subscription-detail settings no-devices"
 
 find_udid() {
@@ -151,7 +151,7 @@ capture_uitests() {
     -project apps/ios/Quota.xcodeproj \
     -scheme Quota \
     -destination "platform=iOS Simulator,id=$udid" \
-    -only-testing:QuotaUITests \
+    -only-testing:QuotaUITests/QuotaScreenUITests \
     -resultBundlePath "$result" \
     -derivedDataPath "$derived" \
     -collect-test-diagnostics never \
