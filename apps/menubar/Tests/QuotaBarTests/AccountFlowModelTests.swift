@@ -214,7 +214,9 @@ func aSignInResultThatLandsAfterTheFlowWasCancelledWritesNothing() async throws 
 
   flow.startLogin()
   flow.cancelLogin()
-  try await Task.sleep(for: .milliseconds(150))
+  // The answer the cancelled sign-in was waiting for has now been produced; what this asserts is
+  // that it reached nothing, which is only meaningful once it exists.
+  #expect(try await eventually { transport.answered })
 
   #expect(transport.loginCalls == 1)
   #expect(flow.loginAuthorizeURL == nil)
@@ -298,6 +300,9 @@ private final class DelayedLoginTransport: AccountFlowTransport, @unchecked Send
   let delay: Duration
   private let lock = NSLock()
   private(set) var loginCalls = 0
+  /// Set once the delayed answer has actually been produced, so a test can wait for the result to
+  /// have landed somewhere rather than for the delay to have probably elapsed.
+  private(set) var answered = false
 
   init(delay: Duration) {
     self.delay = delay
@@ -306,6 +311,7 @@ private final class DelayedLoginTransport: AccountFlowTransport, @unchecked Send
   func login() async throws -> LocalServiceLoginResult {
     lock.withLock { loginCalls += 1 }
     try? await Task.sleep(for: delay)
+    lock.withLock { answered = true }
     return LocalServiceLoginResult(
       status: .loggingIn,
       accountID: nil,
