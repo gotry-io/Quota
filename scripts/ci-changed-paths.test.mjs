@@ -109,3 +109,48 @@ test("a merge group and a push diff against their own base", () => {
   const source = (write) => write("apps/ios/Sources/App.swift", "let a = 4\n");
   assert.equal(ask("any", iosPaths, source, "merge_group"), "run=true");
 });
+
+/**
+ * The selections CI actually uses, read out of the workflow rather than copied here: a rule that
+ * stops matching a dependency is a CI defect, and the table below is what it costs.
+ */
+function workflowPatterns() {
+  const yaml = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
+  const found = [...yaml.matchAll(/ci-changed-paths\.sh (all|any)\n\s+'([^']+)'/g)];
+  assert.equal(found.length, 2, "ci.yml should ask for exactly two selections");
+  const [swift, ios] = found;
+  return { swift: { mode: swift[1], pattern: swift[2] }, ios: { mode: ios[1], pattern: ios[2] } };
+}
+
+test("the workflow's own selections answer for each kind of change", () => {
+  const { swift, ios } = workflowPatterns();
+  const cases = [
+    { name: "docs only", path: "docs/architecture.md", swift: false, ios: false },
+    { name: "an iOS view", path: "apps/ios/Sources/UsageView.swift", swift: true, ios: true },
+    { name: "the Mac app", path: "apps/menubar/Sources/QuotaBar/App.swift", swift: true, ios: false },
+    { name: "a shared Apple package", path: "packages/apple-shared/Sources/X.swift", swift: true, ios: true },
+    { name: "a protocol fixture", path: "packages/protocol/fixtures/x.json", swift: true, ios: true },
+    { name: "design tokens", path: "packages/design-tokens/tokens.json", swift: true, ios: true },
+    { name: "a token generator", path: "scripts/generate-design-tokens.mjs", swift: true, ios: true },
+    { name: "the Rust service", path: "packages/service/src/lib.rs", swift: true, ios: false },
+    { name: "the website", path: "apps/web/src/app.css", swift: false, ios: false },
+    { name: "Relay", path: "apps/relay/src/app.ts", swift: false, ios: false },
+    { name: "this workflow", path: ".github/workflows/ci.yml", swift: true, ios: true },
+  ];
+  for (const one of cases) {
+    const change = (write) => write(one.path, "changed\n");
+    assert.equal(
+      ask(swift.mode, swift.pattern, change),
+      `run=${one.swift}`,
+      `${one.name} → Rust/Swift`,
+    );
+    assert.equal(ask(ios.mode, ios.pattern, change), `run=${one.ios}`, `${one.name} → iOS`);
+  }
+});
+
+test("an unknown base runs everything", () => {
+  const { swift, ios } = workflowPatterns();
+  const change = (write) => write("docs/architecture.md", "changed\n");
+  assert.equal(ask(swift.mode, swift.pattern, change, "workflow_dispatch"), "run=true");
+  assert.equal(ask(ios.mode, ios.pattern, change, "workflow_dispatch"), "run=true");
+});
