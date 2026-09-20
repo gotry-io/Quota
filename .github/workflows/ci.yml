@@ -12,13 +12,54 @@ on:
 permissions:
   contents: read
 
-# A superseded run on a PR branch is cancelled as soon as the next push starts.
-# main never cancels: every commit on it keeps a complete, attributable result.
+# A superseded run on a PR branch is cancelled as soon as the next push starts. main does not
+# cancel a running commit; a pending main run can still be replaced by a newer one, which is
+# GitHub's queueing behaviour and not a promise that every main SHA keeps a full result.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  # One Ubuntu job decides what the macOS runners have to do. Detecting it inside each macOS job
+  # meant allocating a scarce macOS runner and a full-history checkout only to answer "nothing to
+  # do"; the selections are the same script, run once, on a runner that is never the bottleneck.
+  changes:
+    runs-on: ubuntu-24.04
+    outputs:
+      swift: ${{ steps.swift.outputs.run }}
+      ios: ${{ steps.ios.outputs.run }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # A change confined to the website, the Relay Worker, relay-core, or documentation reaches
+      # no Rust or Swift target, and verify-web already checks it. Anything else, including
+      # packages/protocol (Swift and Rust decode its fixtures), scripts, and this file, is Swift work.
+      - name: Detect paths that reach Rust or Swift
+        id: swift
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: >-
+          ./scripts/ci-changed-paths.sh all
+          '^(apps/web/|apps/relay/|packages/relay-core/|docs/|[^/]+\.md$|\.github/workflows/(pr-agent|release-ios|release-menubar|release-relay-image)\.yml$)'
+
+      # The iOS app, the Apple packages it embeds, the contracts they decode, the generators that
+      # write those contracts, and this file.
+      - name: Detect iOS-related path changes
+        id: ios
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: >-
+          ./scripts/ci-changed-paths.sh any
+          '^(apps/ios(/|$)|packages/apple-client(/|$)|packages/apple-shared(/|$)|packages/protocol(/|$)|packages/provider(/|$)|packages/design-tokens(/|$)|scripts/[^/]*ios[^/]*$|scripts/generate-(design-tokens|provider-catalog|plan-display)\.mjs$|scripts/ci-changed-paths\.sh$|\.github/workflows/ci\.yml$)'
+
   # TypeScript, the provider catalog, and Biome formatting need no macOS toolchain, so they
   # run here and leave `verify` carrying only Swift and macOS-gated Rust.
   # `verify` remains the required macOS check name; keep this job required too.
@@ -48,6 +89,7 @@ jobs:
           pnpm format:check:js
           pnpm check:provider-catalog
           pnpm check:design-tokens
+          pnpm check:plan-display
           pnpm check:adr-index
           pnpm check:reference
           pnpm check:schema
@@ -94,37 +136,23 @@ jobs:
       - name: Run website end-to-end tests
         run: pnpm --filter @gotry-io/quota-web test:e2e
 
+  # A change that reaches no Rust or Swift target answers success without the toolchain; the
+  # selection is made once in `changes`.
   verify:
     runs-on: macos-26
+    needs: changes
     steps:
       - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      # A change confined to the website, the Relay Worker, relay-core, or documentation reaches
-      # no Rust or Swift target, and verify-web already checks it; this job then answers
-      # success without the toolchain. Anything else, including packages/protocol (Swift and Rust
-      # decode its fixtures), scripts, and this file, runs the whole job.
-      - name: Detect paths that reach Rust or Swift
-        id: mac
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          BEFORE_SHA: ${{ github.event.before }}
-          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
-        run: >-
-          ./scripts/ci-changed-paths.sh all
-          '^(apps/web/|apps/relay/|packages/relay-core/|docs/|[^/]+\.md$|\.github/workflows/(pr-agent|release-ios|release-menubar|release-relay-image)\.yml$)'
 
       - uses: dtolnay/rust-toolchain@stable
-        if: ${{ steps.mac.outputs.run == 'true' }}
+        if: ${{ needs.changes.outputs.swift == 'true' }}
         with:
           components: rustfmt
 
       # Only main writes the cache. Feature branches restore from it but never save, which
       # keeps a busy PR queue from evicting main's entry out of the 10 GB repository limit.
       - uses: Swatinem/rust-cache@v2
-        if: ${{ steps.mac.outputs.run == 'true' }}
+        if: ${{ needs.changes.outputs.swift == 'true' }}
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
@@ -135,7 +163,7 @@ jobs:
       # `check` runs first, and the packaging step below links QuotaBar in release, so neither
       # belongs here. rustfmt covers the whole workspace and this is the only Rust runner.
       - name: Verify Rust and Swift
-        if: ${{ steps.mac.outputs.run == 'true' }}
+        if: ${{ needs.changes.outputs.swift == 'true' }}
         run: |
           set -euo pipefail
           swift --version
@@ -144,7 +172,7 @@ jobs:
           ./scripts/test-swift.sh
 
       - name: Upload Visual QA matrix
-        if: ${{ steps.mac.outputs.run == 'true' }}
+        if: ${{ needs.changes.outputs.swift == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: quotabar-visual-matrix
@@ -156,51 +184,39 @@ jobs:
       # file added without regenerating it would still build under SwiftPM above and only fail
       # here, so the committed project is checked against a fresh generation first.
       - name: Install XcodeGen
-        if: ${{ steps.mac.outputs.run == 'true' }}
+        if: ${{ needs.changes.outputs.swift == 'true' }}
         run: HOMEBREW_NO_AUTO_UPDATE=1 brew install xcodegen
 
       - name: Check the committed QuotaBar project is current
-        if: ${{ steps.mac.outputs.run == 'true' }}
+        if: ${{ needs.changes.outputs.swift == 'true' }}
         run: |
           ./scripts/generate-menubar.sh
           git diff --exit-code -- apps/menubar/QuotaBar.xcodeproj
 
       - name: Package unsigned arm64 app
-        if: ${{ steps.mac.outputs.run == 'true' }}
+        if: ${{ needs.changes.outputs.swift == 'true' }}
         run: ./scripts/package-menubar.sh 0.0.1 "${{ github.run_number }}"
 
       - name: Test packaged helper with isolated local state
-        if: ${{ steps.mac.outputs.run == 'true' }}
+        if: ${{ needs.changes.outputs.swift == 'true' }}
         run: ./scripts/test-menubar-helper.sh
 
-  # iOS generate/build/test. Advisory: not a required check. The Xcode steps run
-  # only when the pull request or push touches iOS-related paths.
+  # iOS generate/build/unit tests. A required check: it answers success without the Xcode steps
+  # when `changes` says nothing iOS-related moved.
   verify-ios:
     runs-on: macos-26
+    needs: changes
     steps:
       - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Detect iOS-related path changes
-        id: ios
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          BEFORE_SHA: ${{ github.event.before }}
-          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
-        run: >-
-          ./scripts/ci-changed-paths.sh any
-          '^(apps/ios(/|$)|packages/apple-client(/|$)|packages/apple-shared(/|$)|packages/protocol(/|$)|packages/provider(/|$)|scripts/[^/]*ios[^/]*$|scripts/ci-changed-paths\.sh$|\.github/workflows/ci\.yml$)'
 
       - name: Install XcodeGen
-        if: ${{ steps.ios.outputs.run == 'true' }}
+        if: ${{ needs.changes.outputs.ios == 'true' }}
         run: HOMEBREW_NO_AUTO_UPDATE=1 brew install xcodegen
 
       # The generated project is committed; a project.yml edit that was not regenerated fails
       # here rather than shipping a project that disagrees with its source, as QuotaBar's does.
       - name: Generate the iOS Xcode project
-        if: ${{ steps.ios.outputs.run == 'true' }}
+        if: ${{ needs.changes.outputs.ios == 'true' }}
         run: |
           set -euo pipefail
           ./scripts/generate-ios.sh
@@ -209,53 +225,45 @@ jobs:
       # `xcodebuild test` builds the app and the test bundles itself; a separate build step
       # first was the same simulator build twice. `pnpm build:ios` remains for a local check.
       - name: Test Quota iOS
-        if: ${{ steps.ios.outputs.run == 'true' }}
-        run: QUOTA_IOS_ONLY_TESTING=QuotaTests ./scripts/test-ios.sh
+        if: ${{ needs.changes.outputs.ios == 'true' }}
+        run: >
+          QUOTA_IOS_ONLY_TESTING=QuotaTests
+          QUOTA_IOS_SKIP_PACKAGE_TESTS=1
+          ./scripts/test-ios.sh
 
   # The UI tests launch the app, load a fixture, and run the accessibility audit one screen
   # at a time, which is most of an iOS run; they get their own runner so a unit failure is
   # known in minutes and the two halves finish side by side. Same path gate as verify-ios.
   verify-ios-ui:
     runs-on: macos-26
+    needs: changes
     steps:
       - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Detect iOS-related path changes
-        id: ios
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          BEFORE_SHA: ${{ github.event.before }}
-          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
-        run: >-
-          ./scripts/ci-changed-paths.sh any
-          '^(apps/ios(/|$)|packages/apple-client(/|$)|packages/apple-shared(/|$)|packages/protocol(/|$)|packages/provider(/|$)|scripts/[^/]*ios[^/]*$|scripts/ci-changed-paths\.sh$|\.github/workflows/ci\.yml$)'
 
       - uses: actions/setup-node@v6
-        if: ${{ steps.ios.outputs.run == 'true' }}
+        if: ${{ needs.changes.outputs.ios == 'true' }}
         with:
           node-version: "24"
           package-manager-cache: false
 
       - name: Install XcodeGen
-        if: ${{ steps.ios.outputs.run == 'true' }}
+        if: ${{ needs.changes.outputs.ios == 'true' }}
         run: HOMEBREW_NO_AUTO_UPDATE=1 brew install xcodegen
 
       - name: Generate the iOS Xcode project
-        if: ${{ steps.ios.outputs.run == 'true' }}
+        if: ${{ needs.changes.outputs.ios == 'true' }}
         run: ./scripts/generate-ios.sh
 
       - name: Test Quota iOS UI
-        if: ${{ steps.ios.outputs.run == 'true' }}
+        if: ${{ needs.changes.outputs.ios == 'true' }}
         run: >
           QUOTA_IOS_ONLY_TESTING=QuotaUITests
+          QUOTA_IOS_SKIP_PACKAGE_TESTS=1
           QUOTA_IOS_RESULT_BUNDLE=dist/ios-ui.xcresult
           ./scripts/test-ios.sh
 
       - name: Summarize accessibility audit outcomes
-        if: ${{ always() && steps.ios.outputs.run == 'true' }}
+        if: ${{ always() && needs.changes.outputs.ios == 'true' }}
         run: |
           set -euo pipefail
           if [ ! -d dist/ios-ui.xcresult ]; then
@@ -266,7 +274,7 @@ jobs:
           node scripts/ios-ui-audit-summary.mjs dist/ios-ui.xcresult --out-dir dist/ios-ui-audit-outcomes | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Upload accessibility audit outcomes
-        if: ${{ always() && steps.ios.outputs.run == 'true' }}
+        if: ${{ always() && needs.changes.outputs.ios == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: ios-ui-audit-outcomes

@@ -60,9 +60,9 @@ release still publishes and warns that main was left on the released version. A 
 app narrows the token to the permissions it needs, so granting the app a new one for some other job
 never widens an existing one.
 
-A change that moves nothing but a product's version string answers every required check without
-running it (`scripts/ci-changed-paths.sh`, judged on file content, not on the pull request's
-author), and `update-bump-prs` re-syncs an open bump pull request when main moves.
+A change that moves nothing but a product's version string answers the macOS checks without running
+them (`scripts/ci-changed-paths.sh`, judged on file content, not on the pull request's author); the
+Linux jobs still run in full. `update-bump-prs` re-syncs an open bump pull request when main moves.
 
 Relay/website production is the owner action in `docs/relay-self-host.md`. Local builds and Wrangler
 dry runs are verification; do not deploy without explicit authorization.
