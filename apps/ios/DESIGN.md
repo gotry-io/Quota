@@ -439,7 +439,10 @@ Body, in order:
    `Color.primary.opacity(0.85)`. Empty and unpriced days follow **An empty day is a tick, not a
    bar** in [Shared product vocabulary](../../docs/design.md#shared-product-vocabulary) — a
    missing day keeps its slot as a gap, never a zero bar. A caption legend of three 8pt squares
-   (Cached, Fresh, Output) sits under the chart in Tokens mode. Tap or drag selects a day and
+   (Cached, Fresh, Output) sits under the chart in Tokens mode; the squares scale with the caption
+   (capped at 1.75×) and the row reflows into a column when three of them stop fitting on one line,
+   because a legend that cannot grow reads to the auditor as unsupported Dynamic Type. The legend
+   is accessibility-hidden — `section.footer.daily` carries the same words for VoiceOver. Tap or drag selects a day and
    opens that day's sheet. `usage.daily.chart` stays. The All period has no Daily chart.
 4. Three destination rows:
    - **By provider / By model** (`usage.open-breakdown` → `usage.breakdown`): secondary token
@@ -841,11 +844,17 @@ provider and support, and no custom card chrome beyond the system widget contain
   full accessibility audit with no skip.
 - Settings account actions sit on the hub, not below per-subscription alert groups. Settings
   destinations run the full app-owned accessibility audit. Do not skip an unnamed clipping issue.
+- The audit and the screen census live in `QuotaScreenUITests`, run by the advisory `ios-screens`
+  workflow (nightly on main, and on iOS-touching pull requests), not by the required `verify-ios-ui`
+  check. A confirmed finding there is a defect to fix, but it does not block a merge, and the
+  reachability of these layouts at large type is therefore no longer checked on every merge. What
+  the required check still proves is in `QuotaSmokeUITests`: the journeys, the state controls, and
+  the seven essential values at the standard and `accessibilityExtraLarge` sizes.
 - Contrast is guaranteed by `ContrastTokenTests`, which compute the WCAG 2.x contrast ratio of
   every text and fill pairing the tokens allow in light and dark. The XCTest accessibility audit
-  still runs on every fixture screen and gates every type except contrast: the iOS 26
-  pixel-sampling contrast pass persistently reports low contrast on system label colour, which
-  is not low contrast.
+  still runs on every fixture screen in `ios-screens` and gates every type there except
+  contrast: the iOS 26 pixel-sampling contrast pass persistently reports low contrast on system
+  label colour, which is not low contrast.
 - Unnamed glass (`issue.element == nil`) is recorded and does not gate. The iOS 26.3 auditor
   still reports Dynamic Type "partially unsupported" on specific system list headers/footers,
   Form/Link inner labels, combined-row inner text (Usage budget, Settings appearance/budget,
@@ -858,14 +867,14 @@ provider and support, and no custom card chrome beyond the system widget contain
   finding twice), `unconfirmed` (first pass only), or `incomplete` (timed out). Confirmed
   non-contrast findings still fail the test; contrast never gates and is summarised as advisory;
   incomplete does not fail. Read the outcomes in the xcresult or via
-  `scripts/ios-ui-audit-summary.mjs` (CI `verify-ios-ui` job summary). A contrast pass that
+  `scripts/ios-ui-audit-summary.mjs` (the `ios-screens` job summary). A contrast pass that
   exceeds the auditor deadline on the 365-day heatmap may retry without contrast; that is a
   deadline, not a type skip.
 - The Connect footnote sits 24 pt below the prominent button so the button's glass bloom does not
   reach it.
 - `scripts/ios-ui-screenshots.sh` removes its `/tmp/quota-ios-uitest-*` override files on exit; a
   stale text-size override would otherwise silently run every later UI test at that size.
-- Overview and Usage UI tests scroll the list (`overview-scrolled`). Tab-bar minimization
+- Overview and Usage census tests scroll the list (`overview-scrolled`). Tab-bar minimization
   (`tabBarMinimizeBehavior(.onScrollDown)`) is a manual visual gate: the simulator used for
   screenshots does not expose a measurable height drop or a single-button minimized tab bar.
 
@@ -900,12 +909,14 @@ fixture screenshots to
 `QUOTA_IOS_APPEARANCE` (`light` or `dark`) select Dynamic Type and appearance for that run; variant
 PNGs land in a subdirectory. Re-run Connect, Confirm, Overview, Usage, Devices, subscription
 detail, and each Settings destination at one accessibility text size.
-`QuotaUITests.testLargeTypeScreenshots` always launches at `accessibilityExtraLarge` (including
-CI's `verify-ios-ui`) and visits **View day** / the day sheet, Settings › About, hub Log Out after
-pop, and the first connected Providers session, so a below-the-fold regression fails that job
-instead of only a local screenshot run. It asserts remaining percent, tokens, and cost on
-Overview, subscription detail, and Usage: each is hittable, carries the full accessibility
-label, and is not clipped by the window.
+The required check asserts the seven essential values at the standard size and at
+`accessibilityExtraLarge` (`QuotaSmokeUITests.testEssentialValuesAtStandardSize` and
+`…AtAccessibilitySize`): Overview remaining, Today tokens, cost and the combined Today label, the
+Usage headline's tokens and cost, and subscription remaining — each exists, is hittable, carries
+its whole accessibility label, and sits on screen. One large-type journey stays with them,
+Settings › About and back with Log Out still on the hub. Everything else at that size — the
+providers matrix, the day sheet, the rest of the screens — is captured and audited by the
+advisory `ios-screens` census, not on the merge path.
 
 ### DEBUG visual fixtures
 

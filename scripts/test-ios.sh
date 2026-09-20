@@ -96,8 +96,9 @@ fi
 
 destination="platform=iOS Simulator,id=$udid"
 
-# QUOTA_IOS_ONLY_TESTING names one test target (QuotaTests or QuotaUITests) so CI can run the
-# two on separate runners; unset, the whole scheme runs as before.
+# QUOTA_IOS_ONLY_TESTING names a target, or a target/class ("QuotaUITests/QuotaSmokeUITests"), so
+# CI can run the unit tests, the required journeys and the advisory screen census separately;
+# unset, the whole scheme runs as before.
 only_testing=()
 if [ -n "${QUOTA_IOS_ONLY_TESTING:-}" ]; then
   only_testing=("-only-testing:${QUOTA_IOS_ONLY_TESTING}")
@@ -109,6 +110,31 @@ if [ -n "${QUOTA_IOS_RESULT_BUNDLE:-}" ]; then
   mkdir -p "$(dirname -- "$QUOTA_IOS_RESULT_BUNDLE")"
   rm -rf -- "$QUOTA_IOS_RESULT_BUNDLE"
   result_args=(-resultBundlePath "$QUOTA_IOS_RESULT_BUNDLE")
+fi
+
+# The runner reads the appearance and the text size it should launch with. TEST_RUNNER_* reaches
+# XCTest's environment; the files beside them are the fallback when a runner strips that prefix,
+# the same two channels scripts/ios-ui-screenshots.sh uses. Both are cleared on exit so a later
+# run on this machine cannot inherit them.
+appearance_file=/tmp/quota-ios-uitest-appearance
+text_size_file=/tmp/quota-ios-uitest-text-size
+if [ -n "${QUOTA_IOS_APPEARANCE:-}" ] || [ -n "${QUOTA_IOS_TEXT_SIZE:-}" ]; then
+  : >"$appearance_file"
+  : >"$text_size_file"
+  trap 'rm -f "$appearance_file" "$text_size_file"' EXIT INT TERM
+  if [ -n "${QUOTA_IOS_APPEARANCE:-}" ]; then
+    TEST_RUNNER_QUOTA_IOS_APPEARANCE="$QUOTA_IOS_APPEARANCE"
+    export TEST_RUNNER_QUOTA_IOS_APPEARANCE
+    printf '%s' "$QUOTA_IOS_APPEARANCE" >"$appearance_file"
+    xcrun simctl boot "$udid" >/dev/null 2>&1 || true
+    xcrun simctl bootstatus "$udid" -b >/dev/null 2>&1 || true
+    xcrun simctl ui "$udid" appearance "$QUOTA_IOS_APPEARANCE" >/dev/null 2>&1 || true
+  fi
+  if [ -n "${QUOTA_IOS_TEXT_SIZE:-}" ]; then
+    TEST_RUNNER_QUOTA_IOS_TEXT_SIZE="$QUOTA_IOS_TEXT_SIZE"
+    export TEST_RUNNER_QUOTA_IOS_TEXT_SIZE
+    printf '%s' "$QUOTA_IOS_TEXT_SIZE" >"$text_size_file"
+  fi
 fi
 
 xcodebuild \

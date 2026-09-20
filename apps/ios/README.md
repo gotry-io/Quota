@@ -157,40 +157,43 @@ project. Pass `--no-commit` to skip the commit.
 
 ### UI tests
 
-`QuotaUITests` is XCUITest (not swift-testing) and launches DEBUG visual fixtures. Single-screen
-tests open a destination with `--route` (for example `usage.patterns`, `settings.devices`). One
-genuine tap-through journey per area still covers navigation: Overview Today opens Usage and a
-quota row opens subscription detail; Usage opens breakdown, patterns, and **View day**; Settings
-opens Notifications, Appearance, and About; Settings › Devices is its own journey. It asserts
-`overview.root` / `overview.today` for `content`, Usage empty / activity-loading / activity-failed /
-day-empty / day-failed fixtures, empty quota/Today for `empty`, the compact Mac setup Section for
-`no-devices`, the Providers group's three connection states plus a refused session for
-`providers`, Devices content and empty states, the cached-error status Label, the two invitations
-on the empty Overview for `signed-out`, the locally collected Overview and its **This iPhone**
-reading for `local-only`, the one merged row for `merged`, connecting / connect-error / expired /
-loading fixtures, the inline GitHub account confirmation for `confirm-account`, and Settings for
-the compact hub plus its destinations, and runs an accessibility audit on each.
-Overview and Usage scroll to assert tab-bar minimization. Connect, Overview, subscription detail,
-Devices, Usage, and the Settings destinations run the app-owned audit, including contrast, with no
-unnamed clipping skip and no whole-type contrast skip. Each screen audit attaches
-`audit-outcome.<screen>` JSON with one outcome per type — `passed`, `confirmed` (same finding on
-two passes), `unconfirmed` (first pass only), or `incomplete` (timed out) — plus exempted counts
-and the raw first- and second-pass findings, including nil-element and exempted issues. Confirmed
-non-contrast findings still fail the test; contrast never gates; incomplete does not fail.
-Unnamed glass (`issue.element == nil`) stays recorded and non-gating: the auditor names no
-element to fix. Kept exemptions are one audit type, one identifier or exact label, and one
-screen, each with a reason (iOS 26.3 auditor limitations on system list chrome, Form inner
-labels, combined-row inner text including Usage budget, Settings appearance/budget, and
-breakdown count rows, wrapping subscription-detail history and readings titles, and the
-sheet Done control).
-`scripts/ios-ui-audit-summary.mjs` prints those outcomes from an `.xcresult` (CI
-`verify-ios-ui` appends it to the job summary). Log Out and Delete Account sit on the
-Settings hub. Delete Account starts on the website. `testLargeTypeScreenshots` always runs at
-`accessibilityExtraLarge` (CI's `verify-ios-ui` included) and opens **View day**, Settings › About,
-hub Log Out after a pop, and a connected Providers session so a below-the-fold regression fails
-that job rather than only a local screenshot run. At that size it also asserts remaining percent,
-tokens, and cost on Overview, subscription detail, and Usage: each exists, is hittable, has the
-full accessibility label, and is not clipped by the window.
+The UI tests are XCUITest (not swift-testing) and launch DEBUG visual fixtures. They are two
+classes with two jobs:
+
+**`QuotaSmokeUITests` — the required gate** (`verify-ios-ui`, `QuotaUITests/QuotaSmokeUITests`).
+Journeys and interaction contracts, **no accessibility audit and no screen census**: Overview's
+Today row opens Usage already on Today and a quota row opens subscription detail and comes back;
+Usage opens breakdown and Activity patterns and returns, and the period menu selects Today and
+applies a custom range; Settings opens Notifications, Appearance and About and returns, with Log Out
+still on the hub; Settings › Devices is its own journey; the signed-out, connecting,
+pending-refresh, confirm-account, refused-session and local-only states assert the controls they
+offer. It also asserts the seven essential values — Overview remaining, Today tokens, cost and the
+combined Today label, Usage headline tokens and cost, subscription remaining — at the standard size
+and at `accessibilityExtraLarge`: each exists, is hittable, carries its whole accessibility label
+and sits on screen. `scripts/ios-ui-run-summary.mjs` reports what ran and fails the job when the
+selection matched nothing, so an empty selection cannot read as green.
+
+**`QuotaScreenUITests` — the advisory census** (`.github/workflows/ios-screens.yml`, not a required
+check, nightly on main and on iOS-touching pull requests). Mostly one screen or state per test (a few fixtures whose second
+screen is only reachable through the first still walk both), opened
+with `--route` where the fixture allows it, captured light/large, dark/large and
+light/`accessibilityExtraLarge` (nightly adds dark/large-type), and audited with the app-owned
+auditor including contrast. Each screen audit attaches `audit-outcome.<screen>` JSON with one
+outcome per type — `passed`, `confirmed` (same finding on two passes), `unconfirmed` (first pass
+only), or `incomplete` (timed out) — plus exempted counts and the raw first- and second-pass
+findings, including nil-element and exempted issues. Confirmed non-contrast findings fail that
+workflow; contrast never gates; incomplete does not fail. Unnamed glass (`issue.element == nil`)
+stays recorded and non-gating: the auditor names no element to fix. Kept exemptions are one audit
+type, one identifier or exact label, and one screen, each with a reason (iOS 26.3 auditor
+limitations on system list chrome, Form inner labels, combined-row inner text including Usage
+budget, Settings appearance/budget, and breakdown count rows, wrapping subscription-detail history
+and readings titles, and the sheet Done control). `scripts/ios-ui-audit-summary.mjs` prints those
+outcomes from an `.xcresult`.
+
+**What that trades.** Copy of the error and empty variants, dark-mode rendering, the broad Dynamic
+Type and contrast audits and most large-type reachability no longer block a merge; they are reported
+by `ios-screens`, and a confirmed finding there is a defect to fix. Log Out and Delete Account sit
+on the Settings hub; Delete Account starts on the website.
 
 ```bash
 ./scripts/ios-ui-screenshots.sh
@@ -198,12 +201,13 @@ QUOTA_IOS_APPEARANCE=dark ./scripts/ios-ui-screenshots.sh
 QUOTA_IOS_TEXT_SIZE=accessibilityExtraLarge ./scripts/ios-ui-screenshots.sh
 ```
 
-That script runs only `QuotaUITests`, writes `dist/ios-ui.xcresult`, and exports PNG attachments to
+That script runs only `QuotaUITests/QuotaScreenUITests` (the census class), writes
+`dist/ios-ui.xcresult`, and exports PNG attachments to
 `dist/ios-ui-screenshots/`. It uses `QUOTA_IOS_SIMULATOR` when set, otherwise the first available
 iPhone from `xcrun simctl list devices available -j`. `QUOTA_IOS_TEXT_SIZE` (SwiftUI `DynamicTypeSize`
 name or a `UICTContentSizeCategory*` value) and `QUOTA_IOS_APPEARANCE` (`light` or `dark`) are
 forwarded to the UI tests; variant runs write a subdirectory. Screenshot artifacts are for local
-visual QA and are not part of CI.
+visual QA; `ios-screens` captures the same class in CI, advisory.
 
 ### DEBUG visual fixtures
 
@@ -228,8 +232,9 @@ today's clock for marketing captures.
 
 To add a scenario: add a `VisualFixture` case, a `VisualScenario.make` branch (phase, session,
 summary, usage, local readings), content in `VisualFixtureContent` if the data is new, a parser
-test, and a state test that the combination is valid and stays offline. UI tests for a single
-screen pass `--route`; keep one tap-through journey per area.
+test, and a state test that the combination is valid and stays offline. A census test for a single screen goes in
+`QuotaScreenUITests` and passes `--route`; a journey or an interaction contract goes in
+`QuotaSmokeUITests`, which is the required check, so add there only what a merge must not break.
 
 See [`DESIGN.md`](DESIGN.md) for fixture contents and the full visual QA checklist.
 

@@ -168,6 +168,39 @@ test("the workflow's own selections answer for each kind of change", () => {
   }
 });
 
+/** The advisory census keeps its own copy of the iOS selection; it must select the same paths. */
+function censusPattern() {
+  const yaml = readFileSync(join(root, ".github/workflows/ios-screens.yml"), "utf8");
+  const found = [...yaml.matchAll(/ci-changed-paths\.sh (all|any) \\\n\s+'([^']+)'/g)];
+  assert.equal(found.length, 1, "ios-screens.yml should ask for exactly one selection");
+  return { mode: found[0][1], pattern: found[0][2] };
+}
+
+test("the census selection agrees with the required iOS selection", () => {
+  const { ios } = workflowPatterns();
+  const census = censusPattern();
+  // Each workflow names its own file, so those two entries are expected to differ; every other
+  // input must answer the same in both, or a rendering change would be captured by neither.
+  for (const path of [
+    "apps/ios/Sources/UsageView.swift",
+    "packages/apple-shared/Sources/X.swift",
+    "packages/design-tokens/tokens.json",
+    "scripts/generate-design-tokens.mjs",
+    "scripts/ios-ui-screenshots.sh",
+    "scripts/ci-changed-paths.sh",
+    "apps/menubar/Sources/QuotaBar/App.swift",
+    "apps/web/src/app.css",
+    "docs/architecture.md",
+  ]) {
+    const change = (write) => write(path, "changed\n");
+    assert.equal(
+      ask(census.mode, census.pattern, change),
+      ask(ios.mode, ios.pattern, change),
+      `${path} answers the same in both workflows`,
+    );
+  }
+});
+
 test("an unknown base runs everything", () => {
   const { swift, ios } = workflowPatterns();
   const change = (write) => write("docs/architecture.md", "changed\n");
