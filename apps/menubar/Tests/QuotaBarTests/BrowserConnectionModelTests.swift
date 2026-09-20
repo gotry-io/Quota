@@ -537,7 +537,9 @@ func aScanResultFromAnOlderGenerationIsIgnored() async throws {
   model.confirmProviderBrowserSessionConsent()
   try await waitUntil { await importer.calls >= 1 }
   model.setBrowserScanEnabled(.cursor, enabled: false)
-  try await Task.sleep(for: .milliseconds(1200))
+  // The read that was already in flight finishes; the point is that its result is dropped, which
+  // can only be checked once the read is done.
+  try await waitUntil { await importer.completions >= 1 }
   #expect(await transport.replaces.isEmpty)
   #expect(model.browserSessionScanGeneration == 0)
 }
@@ -600,6 +602,9 @@ private actor FlowImporter: BrowserSessionImporting {
   let outcomes: [SweetCookieKit.Browser: BrowserSessionReadOutcome]
   let delay: Duration
   private(set) var calls = 0
+  /// How many reads have finished, delay included. A test that wants to know a scan had its chance
+  /// waits for this rather than for an interval longer than the delay.
+  private(set) var completions = 0
   private(set) var browsers: [SweetCookieKit.Browser] = []
 
   init(
@@ -621,6 +626,7 @@ private actor FlowImporter: BrowserSessionImporting {
     calls += 1
     browsers.append(browser)
     if delay > .zero { try? await Task.sleep(for: delay) }
+    completions += 1
     return Task.isCancelled ? .noSession : (outcomes[browser] ?? value)
   }
 }

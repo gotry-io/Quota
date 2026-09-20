@@ -443,33 +443,64 @@ func quittingAsksTheLocalServiceToShutDownBeforeTheAppGoes() async {
   #expect(shutdowns == 1, "the app's termination path sends the service its shutdown")
 }
 
-/// The other half of that promise: a quit is a decision the person already made, so a service
-/// that never answers costs the deadline and nothing more. The injected value stands in for the
-/// two seconds production waits, which the first expectation pins.
-@Test @MainActor
+/// The other half of that promise: a quit is a decision the person already made, so a service that
+/// never answers costs the deadline and nothing more. What this pins is which wait ends the quit —
+/// the deadline's, released here on purpose — rather than how many milliseconds passed on the
+/// machine that happened to run it. The time limit is the hang detector, not the assertion.
+@Test(.timeLimit(.minutes(1))) @MainActor
 func quittingStopsWaitingOnAHelperThatNeverAnswersItsShutdown() async {
   #expect(MenuBarViewModel.shutdownDeadline == .seconds(2))
   let record = CallRecord()
+  let heldGoodbye = TestGate()
+  let waitingOnTheDeadline = TestGate()
+  let deadlineElapsed = TestGate()
+  let askedFor = DurationRecord()
   let model = MenuBarViewModel(
     client: StubLocalService(
       state: loggingInState(),
       shutdownRecord: record,
-      shutdownAnswerDelayNanoseconds: 60_000_000_000
+      shutdownGate: heldGoodbye
     ),
-    shutdownDeadline: .milliseconds(120)
+    shutdownDeadline: .milliseconds(120),
+    deadlineSleeper: { duration in
+      await askedFor.record(duration)
+      await waitingOnTheDeadline.open()
+      await deadlineElapsed.wait()
+    }
   )
   model.start()
 
-  let started = ContinuousClock.now
-  await model.shutdown()
-  let waited = ContinuousClock.now - started
+  let quit = Task { await model.shutdown() }
+  await waitingOnTheDeadline.wait()
+  // The quit is inside the deadline's wait, so it has not returned, and the helper it is waiting
+  // for has not answered.
+  #expect(await askedFor.durations == [.milliseconds(120)], "the quit waits out its deadline")
+  #expect(await record.count == 0)
 
-  // The helper answers after 60 s; a quit that honours the 120 ms deadline returns long before
-  // that. The bound is loose on purpose: a loaded CI runner once took 2.4 s here, which is
-  // scheduling, not waiting on the helper.
-  #expect(waited < .seconds(10), "the quit waited on a helper that was never going to answer")
-  let shutdowns = await record.count
-  #expect(shutdowns == 0, "the helper had not answered, and the quit went ahead anyway")
+  await deadlineElapsed.open()
+  await quit.value
+  #expect(
+    await record.count == 0,
+    "the helper had not answered, and the quit went ahead anyway"
+  )
+  // Let the abandoned goodbye finish rather than leaving a task parked on the gate.
+  await heldGoodbye.open()
+}
+
+/// A healthy quit is not slowed to the deadline: the goodbye that lands cancels it. The sleeper
+/// here only ends by cancellation, so a quit that returns proves the arrival cancelled it.
+@Test(.timeLimit(.minutes(1))) @MainActor
+func quittingThatGetsItsGoodbyeDoesNotWaitOutTheDeadline() async {
+  let record = CallRecord()
+  let model = MenuBarViewModel(
+    client: StubLocalService(state: loggingInState(), shutdownRecord: record),
+    deadlineSleeper: { _ in try await Task.sleep(for: .seconds(3_600)) }
+  )
+  model.start()
+
+  await model.shutdown()
+
+  #expect(await record.count == 1, "the helper answered, and the quit took that as its answer")
 }
 
 @Test @MainActor
@@ -939,6 +970,35 @@ actor PinCallRecord {
 
 /// Counts the calls a stub was asked for, which is all a fire-and-forget operation leaves behind
 /// once the service it spoke to is gone.
+/// A one-shot signal. Whoever waits proceeds when the test opens it, which is how these tests say
+/// "this work has not finished yet" without naming an interval.
+actor TestGate {
+  private var isOpen = false
+  private var waiting: [CheckedContinuation<Void, Never>] = []
+
+  func open() {
+    guard !isOpen else { return }
+    isOpen = true
+    let resuming = waiting
+    waiting = []
+    for one in resuming { one.resume() }
+  }
+
+  func wait() async {
+    if isOpen { return }
+    await withCheckedContinuation { waiting.append($0) }
+  }
+}
+
+/// What a sleeper was asked to wait for, in order.
+actor DurationRecord {
+  private(set) var durations: [Duration] = []
+
+  func record(_ duration: Duration) {
+    durations.append(duration)
+  }
+}
+
 actor CallRecord {
   private(set) var count = 0
 
@@ -967,7 +1027,9 @@ struct StubLocalService: LocalServiceServing {
   let cancelFails: Bool
   let cancelRecord: CallRecord?
   let shutdownRecord: CallRecord?
-  let shutdownAnswerDelayNanoseconds: UInt64
+  /// Where the helper's goodbye waits. A held goodbye is a helper that has not answered yet — no
+  /// interval to guess, and nothing that answers early on a fast machine or late on a loaded one.
+  let shutdownGate: TestGate?
   let loginError: LocalServiceClientError?
   let authorizeURL: String?
   let pinRecord: PinCallRecord?
@@ -983,7 +1045,7 @@ struct StubLocalService: LocalServiceServing {
     cancelFails: Bool = false,
     cancelRecord: CallRecord? = nil,
     shutdownRecord: CallRecord? = nil,
-    shutdownAnswerDelayNanoseconds: UInt64 = 0,
+    shutdownGate: TestGate? = nil,
     loginError: LocalServiceClientError? = nil,
     authorizeURL: String? = nil,
     pinRecord: PinCallRecord? = nil,
@@ -997,7 +1059,7 @@ struct StubLocalService: LocalServiceServing {
     self.cancelFails = cancelFails
     self.cancelRecord = cancelRecord
     self.shutdownRecord = shutdownRecord
-    self.shutdownAnswerDelayNanoseconds = shutdownAnswerDelayNanoseconds
+    self.shutdownGate = shutdownGate
     self.loginError = loginError
     self.authorizeURL = authorizeURL
     self.pinRecord = pinRecord
@@ -1134,9 +1196,7 @@ struct StubLocalService: LocalServiceServing {
     accessDenials: [BrowserAccessDenial]
   ) async throws {}
   func shutdown() async {
-    if shutdownAnswerDelayNanoseconds > 0 {
-      try? await Task.sleep(nanoseconds: shutdownAnswerDelayNanoseconds)
-    }
+    await shutdownGate?.wait()
     await shutdownRecord?.record()
   }
 }

@@ -151,6 +151,11 @@ final class MenuBarViewModel {
 
   @ObservationIgnored
   private let shutdownDeadline: Duration
+  /// What the quit's deadline actually is: production sleeps, and a test can hold the deadline
+  /// open and release it on purpose. Injected so proving the deadline governs the wait does not
+  /// mean measuring elapsed time on a loaded machine.
+  @ObservationIgnored
+  private let deadlineSleeper: @Sendable (Duration) async throws -> Void
   private let statePollInterval: Duration
 
   @ObservationIgnored
@@ -194,6 +199,9 @@ final class MenuBarViewModel {
     budgetStore: UsageBudgetStore? = nil,
     widgetPublisher: DesktopWidgetPublisher? = nil,
     shutdownDeadline: Duration = MenuBarViewModel.shutdownDeadline,
+    deadlineSleeper: @escaping @Sendable (Duration) async throws -> Void = {
+      try await Task.sleep(for: $0)
+    },
     loginPollInterval: Duration = AccountFlowModel.loginPollInterval,
     statePollInterval: Duration = MenuBarViewModel.statePollInterval
   ) {
@@ -214,6 +222,7 @@ final class MenuBarViewModel {
       relauncher
       ?? (injectedClient ? NoOpQuotaBarRelauncher() : WorkspaceQuotaBarRelauncher())
     self.shutdownDeadline = shutdownDeadline
+    self.deadlineSleeper = deadlineSleeper
     self.statePollInterval = statePollInterval
     self.notificationDefaults = notificationDefaults
     self.notificationRules = NotificationRules.store(defaults: notificationDefaults).load()
@@ -314,6 +323,7 @@ final class MenuBarViewModel {
       widgetPublishingStatus = .unentitled
       client = nil
       shutdownDeadline = MenuBarViewModel.shutdownDeadline
+      deadlineSleeper = { try await Task.sleep(for: $0) }
       statePollInterval = MenuBarViewModel.statePollInterval
       notificationStore = InMemoryAlertStateStore()
       notificationSink = NoOpAlertSink()
@@ -594,7 +604,8 @@ final class MenuBarViewModel {
     // A race whose loser is abandoned rather than awaited: the deadline is the thing waited on,
     // and a goodbye that lands first cancels it so a healthy quit is not slowed to two seconds.
     let goodbye = Task { await client.shutdown() }
-    let deadline = Task { try await Task.sleep(for: shutdownDeadline) }
+    let sleeper = deadlineSleeper
+    let deadline = Task { try await sleeper(shutdownDeadline) }
     let arrival = Task {
       await goodbye.value
       deadline.cancel()

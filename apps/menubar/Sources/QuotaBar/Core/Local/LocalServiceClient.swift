@@ -91,13 +91,37 @@ extension LocalServiceServing {
   }
 }
 
+/// One round of the liveness rule, as a decision rather than a side effect. The monitor supplies
+/// what it can see — whether anything is outstanding — and gets back what to do, so the rule that
+/// two unanswered pings end a connection can be read and tested without a helper or a clock.
+enum LivenessRound: Equatable {
+  /// Nothing is waiting on the helper any more, so there is nothing to watch.
+  case stopWatching
+  /// Ask again, and keep this many consecutive misses on the record.
+  case ping(missedPings: Int)
+  /// The helper has missed its limit: the connection is gone.
+  case giveUp
+
+  /// Two consecutive pings with no answer. At the default cadence that is ten seconds of silence
+  /// from an operation the helper answers without taking a lock, so it is not working: it is gone.
+  static let missedPingLimit = 2
+
+  static func next(
+    pendingRequests: Int,
+    pingsOutstanding: Int,
+    missedPings: Int
+  ) -> LivenessRound {
+    guard pendingRequests > 0 else { return .stopWatching }
+    guard pingsOutstanding > 0 else { return .ping(missedPings: missedPings) }
+    let missed = missedPings + 1
+    return missed >= missedPingLimit ? .giveUp : .ping(missedPings: missed)
+  }
+}
+
 actor LocalServiceClient: LocalServiceServing {
   nonisolated let events: AsyncStream<LocalServiceEvent>
 
   private static let maximumLineBytes = 1_048_576
-  /// Two consecutive pings with no answer. At the default cadence that is ten seconds of silence
-  /// from an operation the helper answers without taking a lock, so it is not working: it is gone.
-  private static let missedPingLimit = 2
 
   private let executableURL: URL
   private let timings: LocalServiceClientTimings
@@ -564,21 +588,25 @@ actor LocalServiceClient: LocalServiceServing {
   /// One liveness round. Returns false when this monitor has nothing left to watch.
   private func checkLiveness(generation: Int) async -> Bool {
     guard generation == connectionGeneration else { return false }
-    guard !pending.isEmpty else {
+    switch LivenessRound.next(
+      pendingRequests: pending.count,
+      pingsOutstanding: outstandingPings.count,
+      missedPings: missedPings
+    ) {
+    case .stopWatching:
       livenessTask = nil
       outstandingPings.removeAll()
       missedPings = 0
       return false
+    case .giveUp:
+      missedPings = LivenessRound.missedPingLimit
+      await close(error: LocalServiceClientError.connectionClosed)
+      return false
+    case .ping(let missed):
+      missedPings = missed
+      sendPing()
+      return true
     }
-    if !outstandingPings.isEmpty {
-      missedPings += 1
-      if missedPings >= Self.missedPingLimit {
-        await close(error: LocalServiceClientError.connectionClosed)
-        return false
-      }
-    }
-    sendPing()
-    return true
   }
 
   private func sendPing() {
