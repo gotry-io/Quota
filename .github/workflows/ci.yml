@@ -98,16 +98,19 @@ jobs:
           # The scripts that decide what CI runs and what a release tag may name.
           pnpm test:scripts
 
-      - name: Build the Node Relay
+      # `build` and `build:workers` both start by building the website, so calling both built it
+      # twice. The website is built once here, and the Worker bundle is asked for on its own.
+      - name: Build the website and the Node Relay
         run: pnpm --filter @gotry-io/quota-relay build
 
-      - name: Build the Relay Worker and website
-        run: pnpm --filter @gotry-io/quota-relay build:workers
+      - name: Build the Relay Worker bundle
+        run: pnpm --filter @gotry-io/quota-relay build:cloudflare
 
       - name: Run remaining Relay runtime suites
         run: |
           set -euo pipefail
           pnpm --filter @gotry-io/quota-relay test:workers
+          pnpm --filter @gotry-io/quota-relay test:workers:integration
           pnpm --filter @gotry-io/quota-relay test:node:integration
 
   verify-web-e2e:

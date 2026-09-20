@@ -72,7 +72,7 @@ Cargo crate `quota-menubar-helper`; bins `quota-menubar-helper`.
 
 ### `apps/relay`
 npm package `@gotry-io/quota-relay`.
-Scripts: `build`, `build:web`, `build:workers`, `check`, `deploy:cloudflare`, `dev`, `dev:workers`, `d1:migrate:local`, `d1:migrate:remote`, `test`, `test:workers`, `test:workers:integration`, `test:node:integration`, `test:restore-drill`, `build:node`, `start:node`.
+Scripts: `build`, `build:web`, `build:workers`, `build:cloudflare`, `check`, `deploy:cloudflare`, `dev`, `dev:workers`, `d1:migrate:local`, `d1:migrate:remote`, `test`, `test:workers`, `test:workers:integration`, `test:node:integration`, `test:restore-drill`, `build:node`, `start:node`.
 
 ### `apps/web`
 npm package `@gotry-io/quota-web`.
