@@ -197,6 +197,7 @@ struct UsageBudgetEditor: View {
 struct UsageRangeEditor: View {
   @Bindable var model: AppModel
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.displayClock) private var displayClock
   @State private var from = Date()
   @State private var to = Date()
 
@@ -236,8 +237,8 @@ struct UsageRangeEditor: View {
   }
 
   private var bounds: ClosedRange<Date> {
-    let earliest = UsageDateText.date(from: model.usage.usageEarliestDay) ?? Date()
-    let latest = UsageDateText.date(from: model.usage.activityToday) ?? Date()
+    let earliest = UsageDateText.date(from: model.usage.usageEarliestDay) ?? displayClock.now()
+    let latest = UsageDateText.date(from: model.usage.activityToday) ?? displayClock.now()
     return earliest...max(earliest, latest)
   }
 }

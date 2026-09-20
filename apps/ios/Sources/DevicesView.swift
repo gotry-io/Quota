@@ -149,9 +149,11 @@ enum DevicesCopy {
 /// manage, and removing what it reads is removing a provider sign-in in Settings.
 struct ThisIPhoneRow: View {
   let lastCollectedAt: Date?
+  @Environment(\.displayClock) private var displayClock
 
   var body: some View {
-    let content = DeviceRowContent.thisIPhone(lastCollectedAt: lastCollectedAt)
+    let content = DeviceRowContent.thisIPhone(
+      lastCollectedAt: lastCollectedAt, now: displayClock.now())
     DeviceRowBody(content: content)
       .accessibilityIdentifier("devices.this-iphone")
   }
@@ -159,9 +161,10 @@ struct ThisIPhoneRow: View {
 
 struct DeviceRow: View {
   let device: AccountDevice
+  @Environment(\.displayClock) private var displayClock
 
   var body: some View {
-    DeviceRowBody(content: DeviceRowContent.make(device))
+    DeviceRowBody(content: DeviceRowContent.make(device, now: displayClock.now()))
       .accessibilityIdentifier("devices.row")
   }
 }

@@ -514,7 +514,7 @@ struct AppModelTests {
       authenticator: ScriptedAuthenticator(results: []),
       makeAuthorizationAttempt: { connectAttempt() }
     )
-    model.sessionActivation = .active
+    model.poseSession(activation: .active)
 
     await model.loadIdentities()
     #expect(model.identities.identities.map(\.provider) == [.github, .apple])
@@ -537,7 +537,7 @@ struct AppModelTests {
       authenticator: ScriptedAuthenticator(results: []),
       makeAuthorizationAttempt: { connectAttempt() }
     )
-    model.sessionActivation = .active
+    model.poseSession(activation: .active)
 
     await model.loadIdentities()
     #expect(model.identities == .failed)
@@ -561,7 +561,7 @@ struct AppModelTests {
       authenticator: authenticator,
       makeAuthorizationAttempt: { connectAttempt() }
     )
-    model.sessionActivation = .active
+    model.poseSession(activation: .active)
 
     await model.presentSignInMethodsOnWeb()
     #expect(

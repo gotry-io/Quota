@@ -55,6 +55,20 @@ enum DeepLink: Equatable, Sendable {
   }
 }
 
+/// Usage stack destinations. The hub is the empty path; DEBUG `--route` writes this path.
+enum UsageDestination: Hashable, Sendable {
+  case breakdown
+  case patterns
+}
+
+/// Settings stack destinations. The hub is the empty path; DEBUG `--route` writes this path.
+enum SettingsDestination: Hashable, Sendable {
+  case devices
+  case notifications
+  case appearance
+  case about
+}
+
 enum AppTab: Hashable, Sendable, CaseIterable {
   case quota
   case usage

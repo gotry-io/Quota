@@ -957,7 +957,8 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 | `activity-day-failed` | Signed-in Usage presenting a day sheet with **Couldn't load this day's usage.** and **Retry** |
 | `sign-in-methods` | Signed-in Settings with the Sign-in methods group in every row state: GitHub bound as **octocat**, Apple bound with no label (**Linked**), Email **Not linked** with **Link on Web** |
 
-Fixtures construct `AppModel` UI state in-process, skip Keychain/network restore, and never embed
-access tokens, refresh tokens, or production data. Release builds ignore the flag. Launch-time
-fixtures anchor synthetic timestamps to the process launch instant so Updated age and reset
-instants stay current; unit tests inject `VisualFixture.referenceDate` for determinism.
+Fixtures construct `AppModel` UI state in-process from a `VisualScenario` (DEBUG `Sources/Fixtures/`),
+skip Keychain/network restore, and never embed access tokens, refresh tokens, or production data.
+Release builds ignore the flags. The display clock is `VisualFixture.referenceDate` so period titles
+and activity days agree; `--visual-clock wall` keeps today's clock for marketing captures.
+`--route <destination>` opens a screen on the scenario without tapping through.

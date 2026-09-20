@@ -4,6 +4,7 @@ import SwiftUI
 
 struct OverviewView: View {
   @Bindable var model: AppModel
+  @Environment(\.displayClock) private var displayClock
 
   var body: some View {
     List {
@@ -83,7 +84,7 @@ struct OverviewView: View {
       }
     } footer: {
       if let updatedAt = model.updatedAt {
-        Text(QuotaFormat.updated(updatedAt))
+        Text(QuotaFormat.updated(updatedAt, now: displayClock.now()))
           .font(QuotaDesign.Typography.meta.monospacedDigit())
           .foregroundStyle(.primary)
           .fixedSize(horizontal: false, vertical: true)

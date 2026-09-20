@@ -157,17 +157,19 @@ project. Pass `--no-commit` to skip the commit.
 
 ### UI tests
 
-`QuotaUITests` is XCUITest (not swift-testing) and launches DEBUG visual fixtures. It asserts
-`overview.root` / `overview.today` for `content`, opens Usage from that Today row (Today period) for
-`usage.root` / a model row at 30 Days / the Activity heatmap / **View day** and the populated day
-sheet, plus Usage empty / activity-loading / activity-failed / day-empty / day-failed fixtures,
-opens the first quota row for `subscription-detail`, empty quota/Today for `empty`, the compact Mac
-setup Section for `no-devices`, the Providers group's three connection states plus a refused
-session for `providers`, Devices content and empty states, the cached-error status Label, the two
-invitations on the empty Overview for `signed-out`, the locally collected Overview and its
-**This iPhone** reading for `local-only`, the one merged row for `merged`, connecting /
-connect-error / expired / loading fixtures, the inline GitHub account confirmation for `confirm-account`, and Settings for the compact
-hub plus Notifications, Appearance, and About destinations, and runs an accessibility audit on each.
+`QuotaUITests` is XCUITest (not swift-testing) and launches DEBUG visual fixtures. Single-screen
+tests open a destination with `--route` (for example `usage.patterns`, `settings.devices`). One
+genuine tap-through journey per area still covers navigation: Overview Today opens Usage and a
+quota row opens subscription detail; Usage opens breakdown, patterns, and **View day**; Settings
+opens Notifications, Appearance, and About; Settings › Devices is its own journey. It asserts
+`overview.root` / `overview.today` for `content`, Usage empty / activity-loading / activity-failed /
+day-empty / day-failed fixtures, empty quota/Today for `empty`, the compact Mac setup Section for
+`no-devices`, the Providers group's three connection states plus a refused session for
+`providers`, Devices content and empty states, the cached-error status Label, the two invitations
+on the empty Overview for `signed-out`, the locally collected Overview and its **This iPhone**
+reading for `local-only`, the one merged row for `merged`, connecting / connect-error / expired /
+loading fixtures, the inline GitHub account confirmation for `confirm-account`, and Settings for
+the compact hub plus its destinations, and runs an accessibility audit on each.
 Overview and Usage scroll to assert tab-bar minimization. Connect, Overview, subscription detail,
 Devices, Usage, and the Settings destinations run the app-owned audit, including contrast, with no
 unnamed clipping skip and no whole-type contrast skip. Each screen audit attaches
@@ -205,13 +207,29 @@ visual QA and are not part of CI.
 
 ### DEBUG visual fixtures
 
-DEBUG builds accept a launch argument that loads offline UI state for screenshots (no network or
-Keychain restore):
+DEBUG builds accept launch arguments that load offline UI state for screenshots (no network or
+Keychain restore). Scenarios live under `Sources/Fixtures/`: a small `VisualScenario` value, shared
+content builders in `VisualFixtureContent`, and blocked network / memory stores in
+`FixtureServices`.
 
 ```bash
-# Example scheme arguments: --visual-fixture content
-# Values: signed-out | connecting | connect-error | expired | confirm-account | connect-refresh-failed | loading | content | cached-error | empty | no-devices | local-only | merged | providers | activity-loading | activity-failed | activity-day-empty | activity-day-failed
+# Example scheme arguments:
+#   --visual-fixture content
+#   --visual-fixture content --route usage.patterns
+#   --visual-fixture content --visual-clock wall
+# Values: signed-out | connecting | connect-error | expired | confirm-account | connect-refresh-failed | loading | content | cached-error | empty | no-devices | local-only | merged | providers | activity-loading | activity-failed | activity-day-empty | activity-day-failed | sign-in | sign-in-methods
 ```
+
+`--route` opens a destination on that scenario without tapping through: `usage`, `usage.breakdown`,
+`usage.patterns`, `usage.day`, `subscription.detail/<key>`, `settings`, `settings.devices`,
+`settings.notifications`, `settings.appearance`, `settings.about`. The default display clock is
+`VisualFixture.referenceDate` so period titles and activity days agree; `--visual-clock wall` keeps
+today's clock for marketing captures.
+
+To add a scenario: add a `VisualFixture` case, a `VisualScenario.make` branch (phase, session,
+summary, usage, local readings), content in `VisualFixtureContent` if the data is new, a parser
+test, and a state test that the combination is valid and stays offline. UI tests for a single
+screen pass `--route`; keep one tap-through journey per area.
 
 See [`DESIGN.md`](DESIGN.md) for fixture contents and the full visual QA checklist.
 

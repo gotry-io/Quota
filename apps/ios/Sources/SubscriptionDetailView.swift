@@ -177,9 +177,10 @@ struct SubscriptionDetailView: View {
 
   @State private var selectedWindowID: String?
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+  @Environment(\.displayClock) private var displayClock
 
   var body: some View {
-    let now = Date()
+    let now = displayClock.now()
     let content = SubscriptionDetailContent.make(
       subscription: subscription,
       deviceNames: deviceNames,

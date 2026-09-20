@@ -15,14 +15,13 @@ struct SettingsView: View {
   @State private var removing: StoredProviderSession?
 
   @Environment(\.colorScheme) private var colorScheme
+  @Environment(\.displayClock) private var displayClock
 
   var body: some View {
     Form {
       accountSection
       Section {
-        NavigationLink {
-          SettingsNotificationsView(model: model, settings: settings)
-        } label: {
+        NavigationLink(value: SettingsDestination.notifications) {
           HStack(spacing: 12) {
             SettingsRowIcon(symbol: "bell.badge.fill", tint: .red)
             Text(SettingsCopy.notifications)
@@ -30,9 +29,7 @@ struct SettingsView: View {
         }
         .accessibilityIdentifier("settings.notifications")
 
-        NavigationLink {
-          SettingsAppearanceView(settings: settings)
-        } label: {
+        NavigationLink(value: SettingsDestination.appearance) {
           preferenceRow(
             symbol: "circle.lefthalf.filled",
             tint: .indigo,
@@ -77,9 +74,7 @@ struct SettingsView: View {
           }
         }
         .buttonStyle(.plain)
-        NavigationLink {
-          SettingsAboutView()
-        } label: {
+        NavigationLink(value: SettingsDestination.about) {
           HStack(spacing: 12) {
             SettingsRowIcon(symbol: "info.circle.fill", tint: .gray)
             Text(SettingsCopy.about)
@@ -98,6 +93,18 @@ struct SettingsView: View {
     .accessibilityIdentifier("settings.root")
     .navigationTitle("Settings")
     .navigationBarTitleDisplayMode(.large)
+    .navigationDestination(for: SettingsDestination.self) { destination in
+      switch destination {
+      case .devices:
+        DevicesView(model: model)
+      case .notifications:
+        SettingsNotificationsView(model: model, settings: settings)
+      case .appearance:
+        SettingsAppearanceView(settings: settings)
+      case .about:
+        SettingsAboutView()
+      }
+    }
     .confirmationDialog(
       "Log out of Quota on this device?",
       isPresented: $confirmLogout,
@@ -202,9 +209,7 @@ struct SettingsView: View {
         } label: {
           identityCard
         }
-        NavigationLink {
-          DevicesView(model: model)
-        } label: {
+        NavigationLink(value: SettingsDestination.devices) {
           HStack(spacing: 12) {
             SettingsRowIcon(symbol: "laptopcomputer", tint: .gray)
             Text(SettingsCopy.devices)
@@ -390,7 +395,7 @@ struct SettingsView: View {
     }
     return
       "\(session.provider.displayName), \(connected), "
-      + ProvidersCopy.checked(at: session.lastValidatedAt, now: Date())
+      + ProvidersCopy.checked(at: session.lastValidatedAt, now: displayClock.now())
   }
 
   private func connectedStatus(_ session: StoredProviderSession) -> some View {
