@@ -1,7 +1,9 @@
 # ADR 0015: Diagnostic attempts, support reports, and Device Health
 
-- Status: Superseded by [ADR 0022](./0022-minimal-diagnostics.md) on 2026-08-25
+- Status: Superseded
 - Date: 2026-08-15
+- Superseded by: 0022
+- Amended: 2026-08-25
 
 The diagnostics evaluator of [ADR 0008](./0008-data-integrity-and-diagnostics.md) needed durable
 evidence about completed work, so an owner-only structured attempt journal recorded every refresh and

@@ -232,13 +232,15 @@
     #expect(
       model.usage.usagePeriods?.local.today?.usage.projects?.map(\.displayName)
         == ["Quota", "Other"])
-    #expect(model.accountState == .signedIn)
-    #expect(model.accountDisplayLabel == "octocat")
-    #expect(model.syncUsageDisabledReason == nil)
-    #expect(model.accountSummary?.devices.map(\.displayName) == ["Studio Mac", "Travel Mac"])
-    #expect(model.accountDeviceID == "device_visual_studio_mac_01")
-    #expect(model.accountSummary?.usage.today.cost.status == .partial)
-    #expect(model.accountSummary?.usage.today.partial == true)
+    #expect(model.accountFlow.accountState == .signedIn)
+    #expect(model.accountFlow.accountDisplayLabel == "octocat")
+    #expect(model.accountFlow.syncUsageDisabledReason == nil)
+    #expect(
+      model.accountFlow.accountSummary?.devices.map(\.displayName)
+        == ["Studio Mac", "Travel Mac"])
+    #expect(model.accountFlow.accountDeviceID == "device_visual_studio_mac_01")
+    #expect(model.accountFlow.accountSummary?.usage.today.cost.status == .partial)
+    #expect(model.accountFlow.accountSummary?.usage.today.partial == true)
     #expect(model.usage.localUsage?.sessions.active == 2)
     #expect(model.usage.localUsage?.sessions.today == 14)
     #expect(model.usage.localUsage?.sessions.recent.count == 3)
@@ -246,7 +248,7 @@
     #expect(
       model.usage.localUsage?.sessions.recent.map(\.projectKey) == ["Quota", "Quota", "menubar"])
     #expect(
-      model.accountSummary?.usage.today.agents.flatMap { agent in
+      model.accountFlow.accountSummary?.usage.today.agents.flatMap { agent in
         agent.providers.flatMap { $0.models.map(\.model) }
       } == ["gpt-5", "claude-sonnet-4"]
     )
@@ -297,7 +299,7 @@
       Set(codex.sources.map(\.observedAt)).count == 2
     )
 
-    let encoded = try QuotaWireCodec.makeEncoder().encode(model.accountSummary)
+    let encoded = try QuotaWireCodec.makeEncoder().encode(model.accountFlow.accountSummary)
     let encodedText = String(decoding: encoded, as: UTF8.self).lowercased()
     #expect(!encodedText.contains("bearer"))
     #expect(!encodedText.contains("token_secret"))
@@ -317,8 +319,8 @@
       fixture: .cachedRefreshError,
       referenceDate: referenceDate
     ).makeModel()
-    #expect(cachedModel.accountSummary != nil)
-    #expect(cachedModel.accountErrorMessage == nil)
+    #expect(cachedModel.accountFlow.accountSummary != nil)
+    #expect(cachedModel.accountFlow.accountErrorMessage == nil)
     #expect(cachedModel.errorMessage == "Sync failed. Showing the last known result.")
     guard
       case .content(_, let refreshWarning) = cachedModel.overviewState(
@@ -333,7 +335,7 @@
 
     let signedOutModel = try configuration(fixture: .empty, referenceDate: referenceDate)
       .makeModel()
-    #expect(signedOutModel.accountState == .signedOut)
+    #expect(signedOutModel.accountFlow.accountState == .signedOut)
     guard
       case .content(let emptyProviders, let emptyWarning) = signedOutModel.overviewState(
         enabledProviders: ProviderID.allCases,

@@ -4,8 +4,9 @@
 > but there is no write gate on what it uploads. `GET /api/v2/device/sync` answers the generation
 > and nothing else; there is no 402 and no sync-off banner.
 
-- Status: Accepted
+- Status: Partially superseded
 - Date: 2026-09-06
+- Superseded by: 0048
 - Updates [ADR 0013](0013-readonly-ios-account-client.md), which decided `quota-ios` never
   receives write authority
 - Extends [ADR 0027](0027-one-token-per-client.md), [ADR 0033](0033-entitlement-is-read-from-revenuecat.md),

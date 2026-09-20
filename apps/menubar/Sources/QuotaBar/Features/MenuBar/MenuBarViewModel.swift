@@ -63,18 +63,6 @@ struct AccountQuotaPresentation: Equatable, Identifiable {
   }
 }
 
-enum AccountViewState: Equatable {
-  case notChecked
-  case signedOut
-  case logoutPending
-  case signedIn
-}
-
-enum AccountDisconnectReason: Equatable {
-  case deviceDeleted
-  case sessionEnded
-}
-
 #if DEBUG
   struct MenuBarVisualState {
     let report: QuotaCollectionReport
@@ -97,29 +85,20 @@ final class MenuBarViewModel {
   let usage: UsageModel
   /// Consent, cookie-store reads, reconnect, and the Browser Access grant window.
   let browserConnection: BrowserConnectionModel
-  private(set) var accountSummary: AccountSummary?
-  /// The name the sign-in gave, held until an account read carries one of its own.
-  private(set) var signInDisplayLabel: String?
+  /// Sign-in phases, session identity/epoch, and sign-out.
+  let accountFlow: AccountFlowModel
   private(set) var errorMessage: String?
-  private(set) var accountErrorMessage: String?
   private(set) var isRefreshing = false
-  private(set) var accountRefreshing = false
-  private(set) var isLoggingIn = false
-  private(set) var isLoggingOut = false
   private(set) var isUpdatingUsageUpload = false
   private(set) var usageUploadEnabled = true
   private(set) var isUpdatingGroupUsageByProject = false
   private(set) var groupUsageByProject = true
   private(set) var quotaRefreshIntervalSeconds = QuotaRefreshInterval.fallback.rawValue
   private(set) var isUpdatingQuotaRefreshInterval = false
-  private(set) var accountDisconnectReason: AccountDisconnectReason?
-  /// This Mac's Device id while signed in, used to mark the Devices table row.
-  private(set) var accountDeviceID: String?
   private(set) var lastCheckedAt: Date?
   private(set) var providerConfigurations: [ProviderID: LocalServiceProviderConfig] = [:]
   private(set) var providerStatus: [ProviderID: LocalServiceProviderStatus] = [:]
 
-  private var authStatus: LocalServiceAuthStatus?
   private var overview: [LocalServiceOverviewItem] = []
   private var revision = 0
   private(set) var cache: LocalServiceCacheState = .settled
@@ -131,41 +110,6 @@ final class MenuBarViewModel {
   /// own the item would keep a percent that stopped describing live quota until the next
   /// service event, which for a Mac that has stopped collecting is never.
   private(set) var menuBarClock = Date()
-
-  var accountState: AccountViewState {
-    switch authStatus {
-    case .signedIn: .signedIn
-    case .logoutPending: .logoutPending
-    case .loggingIn, .signedOut: .signedOut
-    case nil: .notChecked
-    }
-  }
-
-  /// What to call the account.
-  ///
-  /// The account read is the fuller answer, but it is not the first one: signing in already said
-  /// what the account is called, so the name stands from that moment rather than from whenever
-  /// the first read finishes.
-  var accountDisplayLabel: String {
-    PlanDisplay.accountLabel(accountSummary?.account.displayLabel)
-      ?? PlanDisplay.accountLabel(signInDisplayLabel)
-      ?? "Quota account"
-  }
-
-  /// Why Sync Usage cannot be turned on, or nil when it can.
-  var syncUsageDisabledReason: String? {
-    accountState == .signedIn ? nil : "Sign in to your Quota account"
-  }
-
-  var accountDeviceSummary: String {
-    guard let devices = accountSummary?.devices else {
-      return accountState == .signedIn ? "Unavailable" : "Sign in"
-    }
-    let now = Date()
-    let active = devices.filter { $0.activity(now: now).status == .active }
-      .count
-    return active == devices.count ? "\(devices.count)" : "\(active)/\(devices.count) active"
-  }
 
   @ObservationIgnored
   private let client: (any LocalServiceServing)?
@@ -180,19 +124,9 @@ final class MenuBarViewModel {
   @ObservationIgnored
   private var eventTask: Task<Void, Never>?
 
-  @ObservationIgnored
-  private var loginTask: Task<Void, Never>?
-
-  /// Follows a sign-in in progress by asking for state, until the service says the flow is over.
-  @ObservationIgnored
-  private var loginPollTask: Task<Void, Never>?
-
   /// Re-reads state on a fixed cadence, whatever events did or did not arrive.
   @ObservationIgnored
   private var statePollTask: Task<Void, Never>?
-
-  @ObservationIgnored
-  private var cancelLoginTask: Task<Void, Never>?
 
   @ObservationIgnored
   private var menuBarClockTask: Task<Void, Never>?
@@ -204,23 +138,11 @@ final class MenuBarViewModel {
   @ObservationIgnored
   private let loginURLOpener: any LoginURLOpening
 
-  private(set) var accountActionErrorMessage: String?
-  private(set) var loginAuthorizeURL: URL?
-  private var browserOpenFailed = false
-
-  var canCopyLoginLink: Bool { loginAuthorizeURL != nil }
-
   /// How long a quit waits for the service's goodbye before going ahead without it.
   nonisolated static let shutdownDeadline: Duration = .seconds(2)
-  /// How often a sign-in in progress asks the service for its state, until the flow is over. A
-  /// browser round trip ends on the service's thread and is announced by an event; this is the
-  /// answer for the one event that does not arrive.
-  nonisolated static let loginPollInterval: Duration = .seconds(2)
   /// How often the panel re-reads the service's state on its own. Events are the fast path and
   /// carry every change; this is the bound on how stale the panel can be without one.
   nonisolated static let statePollInterval: Duration = .seconds(60)
-  /// A sign-in that has been in progress this long is no longer being followed by the poll.
-  nonisolated static let loginPollLimit: Duration = .seconds(900)
 
   /// How often the menu-bar item is re-evaluated against the clock. The shared freshness rule's
   /// smallest unit is a minute — under one everything reads "just now" — so a minute is as fine
@@ -229,7 +151,6 @@ final class MenuBarViewModel {
 
   @ObservationIgnored
   private let shutdownDeadline: Duration
-  private let loginPollInterval: Duration
   private let statePollInterval: Duration
 
   @ObservationIgnored
@@ -273,7 +194,7 @@ final class MenuBarViewModel {
     budgetStore: UsageBudgetStore? = nil,
     widgetPublisher: DesktopWidgetPublisher? = nil,
     shutdownDeadline: Duration = MenuBarViewModel.shutdownDeadline,
-    loginPollInterval: Duration = MenuBarViewModel.loginPollInterval,
+    loginPollInterval: Duration = AccountFlowModel.loginPollInterval,
     statePollInterval: Duration = MenuBarViewModel.statePollInterval
   ) {
     let injectedClient = client != nil
@@ -293,7 +214,6 @@ final class MenuBarViewModel {
       relauncher
       ?? (injectedClient ? NoOpQuotaBarRelauncher() : WorkspaceQuotaBarRelauncher())
     self.shutdownDeadline = shutdownDeadline
-    self.loginPollInterval = loginPollInterval
     self.statePollInterval = statePollInterval
     self.notificationDefaults = notificationDefaults
     self.notificationRules = NotificationRules.store(defaults: notificationDefaults).load()
@@ -357,11 +277,29 @@ final class MenuBarViewModel {
       grantPresenter: resolvedGrantPresenter,
       relauncher: resolvedRelauncher
     )
+    self.accountFlow = AccountFlowModel(
+      transport: self.client,
+      loginURLOpener: loginURLOpener,
+      unavailableMessage: initializationError,
+      loginPollInterval: loginPollInterval
+    )
     self.usage.onRequestError = { [weak self] message in
       self?.errorMessage = message
     }
     self.browserConnection.onNeedsReload = { [weak self] in
       await self?.reloadState()
+    }
+    self.usage.sessionEpoch = { [weak self] in self?.accountFlow.sessionEpoch ?? 0 }
+    self.browserConnection.sessionEpoch = { [weak self] in self?.accountFlow.sessionEpoch ?? 0 }
+    self.accountFlow.onNeedsReload = { [weak self] in
+      await self?.reloadState()
+    }
+    self.accountFlow.onAccountWentAway = { [weak self] _ in
+      guard let self else { return }
+      self.usage.accountDidGoAway()
+      self.browserConnection.accountDidGoAway()
+      try? self.notificationStore.clear()
+      self.resetScheduler.removeAll()
     }
   }
 
@@ -376,7 +314,6 @@ final class MenuBarViewModel {
       widgetPublishingStatus = .unentitled
       client = nil
       shutdownDeadline = MenuBarViewModel.shutdownDeadline
-      loginPollInterval = MenuBarViewModel.loginPollInterval
       statePollInterval = MenuBarViewModel.statePollInterval
       notificationStore = InMemoryAlertStateStore()
       notificationSink = NoOpAlertSink()
@@ -393,6 +330,10 @@ final class MenuBarViewModel {
         accessProbe: UnrestrictedBrowserAccessProbe(),
         relauncher: NoOpQuotaBarRelauncher()
       )
+      self.accountFlow = AccountFlowModel(
+        transport: nil,
+        loginURLOpener: loginURLOpener
+      )
       let center = NoOpNotificationCenter()
       notificationCenter = center
       resetScheduler = ResetReminderScheduler(center: center)
@@ -403,7 +344,6 @@ final class MenuBarViewModel {
       self.lastCheckedAt = lastCheckedAt
       guard let visualTestState else { return }
       report = visualTestState.report
-      accountSummary = visualTestState.accountSummary
       var fixturePeriods: LocalServiceUsagePeriodCache?
       var fixtureBudgetMonth: LocalServiceUsageDetail?
       if let accountUsage = visualTestState.accountSummary?.usage {
@@ -433,8 +373,12 @@ final class MenuBarViewModel {
         usageUploadEnabled: true,
         hasAccountSummary: visualTestState.accountSummary != nil
       )
-      authStatus = visualTestState.authStatus
-      accountDeviceID = visualTestState.deviceID
+      accountFlow.applyVisualFixture(
+        authStatus: visualTestState.authStatus,
+        accountSummary: visualTestState.accountSummary,
+        displayLabel: visualTestState.accountSummary?.account.displayLabel,
+        deviceID: visualTestState.deviceID
+      )
       applyOverview(visualTestState.overview)
       cache = visualTestState.cache
       providerStatus = Dictionary(
@@ -573,9 +517,6 @@ final class MenuBarViewModel {
   deinit {
     eventTask?.cancel()
     statePollTask?.cancel()
-    loginTask?.cancel()
-    loginPollTask?.cancel()
-    cancelLoginTask?.cancel()
     menuBarClockTask?.cancel()
   }
 
@@ -647,8 +588,7 @@ final class MenuBarViewModel {
     eventTask = nil
     statePollTask?.cancel()
     statePollTask = nil
-    loginPollTask?.cancel()
-    loginPollTask = nil
+    accountFlow.shutdown()
     browserConnection.shutdown()
     guard let client else { return }
     // A race whose loser is abandoned rather than awaited: the deadline is the thing waited on,
@@ -744,129 +684,6 @@ final class MenuBarViewModel {
       now: now,
       today: usage.menuBarTodaySnapshot()
     )
-  }
-
-  func startLogin() {
-    guard loginTask == nil, let client else {
-      if self.client == nil { accountErrorMessage = initializationError }
-      return
-    }
-    accountActionErrorMessage = nil
-    accountErrorMessage = nil
-    loginAuthorizeURL = nil
-    browserOpenFailed = false
-    isLoggingIn = true
-    loginTask = Task { @MainActor [weak self] in
-      guard let self else { return }
-      defer {
-        isLoggingIn = !Task.isCancelled && authStatus == .loggingIn
-        loginTask = nil
-      }
-      do {
-        let result = try await client.login()
-        if let raw = result.authorizeURL, let url = URL(string: raw) {
-          loginAuthorizeURL = url
-          if !loginURLOpener.open(url) {
-            browserOpenFailed = true
-            let message =
-              "QuotaBar could not open your browser. Copy the sign-in link and open it yourself."
-            accountActionErrorMessage = message
-            accountErrorMessage = message
-          }
-        }
-        // The service stores logging_in before acknowledging this request. From here onward its
-        // state/events, rather than the short-lived request task, are authoritative.
-        loginTask = nil
-        await reloadState()
-        // A cancel that landed while the request was in flight has already stopped following.
-        if !Task.isCancelled {
-          followLoginInProgress()
-        }
-      } catch is CancellationError {
-        return
-      } catch {
-        accountActionErrorMessage = Self.message(for: error)
-        accountErrorMessage = accountActionErrorMessage
-        await reloadState()
-      }
-    }
-  }
-
-  /// Keeps asking the service how the sign-in is going until it is no longer in progress.
-  ///
-  /// The browser round trip finishes on the service's own thread and is announced with a
-  /// `state_changed` event, which is the fast path. A sign-in is the one moment the panel is
-  /// waiting on exactly one event, so it also asks, on a short cadence and for a bounded time,
-  /// rather than showing "finish sign-in in browser" past a sign-in that already finished.
-  private func followLoginInProgress() {
-    loginPollTask?.cancel()
-    guard authStatus == .loggingIn else { return }
-    let interval = loginPollInterval
-    let deadline = ContinuousClock.now + Self.loginPollLimit
-    loginPollTask = Task { @MainActor [weak self] in
-      while !Task.isCancelled, ContinuousClock.now < deadline {
-        do {
-          try await Task.sleep(for: interval)
-        } catch {
-          return
-        }
-        guard let self, authStatus == .loggingIn else { return }
-        await reloadState()
-      }
-    }
-  }
-
-  /// Calls off a browser sign-in.
-  ///
-  /// The row keeps its Cancel until the service says the flow is over, so it is easy to press
-  /// twice. A second press joins the request already in flight rather than sending the service a
-  /// second `cancel_login` to race the first.
-  func cancelLogin() {
-    guard cancelLoginTask == nil, let client else { return }
-    loginTask?.cancel()
-    loginTask = nil
-    loginPollTask?.cancel()
-    loginPollTask = nil
-    isLoggingIn = false
-    accountActionErrorMessage = nil
-    accountErrorMessage = nil
-    loginAuthorizeURL = nil
-    browserOpenFailed = false
-    cancelLoginTask = Task { @MainActor [weak self] in
-      defer { self?.cancelLoginTask = nil }
-      do {
-        try await client.cancelLogin()
-      } catch {
-        let message = Self.message(for: error)
-        self?.accountActionErrorMessage = message
-        self?.accountErrorMessage = message
-        await self?.reloadState()
-      }
-    }
-  }
-
-  func copyLoginLink() {
-    guard let url = loginAuthorizeURL else { return }
-    NSPasteboard.general.clearContents()
-    NSPasteboard.general.setString(url.absoluteString, forType: .string)
-  }
-
-  func logout() async {
-    guard !isLoggingOut, let client else { return }
-    isLoggingOut = true
-    defer { isLoggingOut = false }
-    accountActionErrorMessage = nil
-    accountErrorMessage = nil
-    do {
-      _ = try await client.logout()
-      await reloadState()
-    } catch is CancellationError {
-      return
-    } catch {
-      accountActionErrorMessage = Self.message(for: error)
-      accountErrorMessage = accountActionErrorMessage
-      await reloadState()
-    }
   }
 
   func setUsageUploadEnabled(_ enabled: Bool) async {
@@ -1086,42 +903,10 @@ final class MenuBarViewModel {
     usageUploadEnabled = state.usageUploadEnabled
     groupUsageByProject = state.groupUsageByProject
     quotaRefreshIntervalSeconds = state.quotaRefreshIntervalSeconds
-    usage.acceptState(state)
     report = state.quota.value
-    accountSummary = state.account.value?.accountSummary
-    signInDisplayLabel = state.account.value?.displayLabel
-    accountDeviceID = state.account.value?.deviceID
-    let incomingAuth =
-      state.account.value?.authStatus
-      ?? (state.account.status == .signedOut ? .signedOut : nil)
-    let previouslySignedIn = authStatus == .signedIn || authStatus == .logoutPending
-    if incomingAuth == .signedIn {
-      if !browserOpenFailed {
-        accountActionErrorMessage = nil
-      }
-      loginAuthorizeURL = nil
-      browserOpenFailed = false
-    } else if incomingAuth == .loggingIn, authStatus != .loggingIn, !browserOpenFailed {
-      accountActionErrorMessage = nil
-    } else if incomingAuth != .loggingIn, authStatus == .loggingIn {
-      loginAuthorizeURL = nil
-      browserOpenFailed = false
-    }
-    authStatus = incomingAuth
-    if authStatus != .loggingIn {
-      loginPollTask?.cancel()
-      loginPollTask = nil
-    }
-    accountDisconnectReason =
-      if authStatus == .signedOut {
-        switch state.account.lastError?.code {
-        case .deviceDeleted: .deviceDeleted
-        case .staleGeneration, .authenticationRequired: .sessionEnded
-        default: nil
-        }
-      } else {
-        nil
-      }
+    let previouslySignedIn = accountFlow.hasAccountSession
+    accountFlow.acceptState(state)
+    usage.acceptState(state)
     applyOverview(state.overview)
     advanceMenuBarClock(to: Date(), forNewReadings: true)
     providerConfigurations = Dictionary(
@@ -1131,10 +916,8 @@ final class MenuBarViewModel {
       uniqueKeysWithValues: state.providerStatus.map { ($0.provider, $0) }
     )
     browserConnection.acceptState(state)
-    accountRefreshing = state.account.refreshing
-    isRefreshing = state.quota.refreshing || usage.usageRefreshing || accountRefreshing
-    isLoggingIn = authStatus == .loggingIn || loginTask != nil
-    isLoggingOut = authStatus == .logoutPending
+    isRefreshing =
+      state.quota.refreshing || usage.usageRefreshing || accountFlow.accountRefreshing
     lastCheckedAt = [state.quota.updatedAt, state.usage.updatedAt].compactMap { $0 }.max()
 
     let componentError = state.quota.lastError ?? state.usage.lastError
@@ -1144,17 +927,8 @@ final class MenuBarViewModel {
       errorMessage = nil
     }
 
-    if let action = accountActionErrorMessage {
-      accountErrorMessage = action
-    } else if let accountError = state.account.lastError {
-      accountErrorMessage = LocalServiceClientError.remote(accountError).errorDescription
-    } else {
-      accountErrorMessage = nil
-    }
-
-    if previouslySignedIn && incomingAuth == .signedOut {
-      try? notificationStore.clear()
-      resetScheduler.removeAll()
+    if previouslySignedIn && !accountFlow.hasAccountSession {
+      // onAccountWentAway already cleared notification state and told the other owners.
     } else {
       evaluateNotifications(overview: state.overview, now: Date())
     }
@@ -1374,15 +1148,5 @@ final class MenuBarViewModel {
       return description
     }
     return "QuotaBar's local service could not complete the request."
-  }
-}
-
-protocol LoginURLOpening: Sendable {
-  func open(_ url: URL) -> Bool
-}
-
-struct WorkspaceLoginURLOpener: LoginURLOpening {
-  func open(_ url: URL) -> Bool {
-    NSWorkspace.shared.open(url)
   }
 }

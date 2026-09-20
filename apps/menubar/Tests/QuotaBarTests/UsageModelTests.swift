@@ -306,7 +306,7 @@ struct UsageModelTests {
     let key = UsageModel.periodKey(source: .account, ("2026-08-01", "2026-08-03"))
     try await waitUntil { await transport.pendingCount(key) == 1 }
 
-    let coverage = UsagePeriodCoverage(
+    let coverage = LocalServiceUsageCoverage(
       partial: true, truncatedByRetention: true)
     let detail = periodDetail(
       from: "2026-08-01", to: "2026-08-03", tokens: 40, coverage: coverage)
@@ -490,7 +490,7 @@ private func accountSummaryState() -> LocalServiceState {
 }
 
 private func periodDetail(
-  from: String, to: String, tokens: Int, coverage: UsagePeriodCoverage? = nil
+  from: String, to: String, tokens: Int, coverage: LocalServiceUsageCoverage? = nil
 ) -> LocalServiceUsageDetail {
   LocalServiceUsageDetail(
     range: UsageDateRange(from: from, to: to),

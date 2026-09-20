@@ -1,6 +1,17 @@
+# CodexBar platform capabilities (research, archived 2026-09-19)
+
+This file is a dated comparison of CodexBar's quota, usage, and fallback behaviour, archived on
+2026-09-19. It is not a compatibility contract. Quota's collection strategy remains
+[`provider-collection.md`](../provider-collection.md).
+
+Original observation dates in the table below are unchanged: the primary source pass is 2026-08-20
+(`f74117a`); incremental passes are 2026-08-22 and 2026-08-26.
+
+---
+
 # CodexBar 平台能力梳理
 
-本文梳理 [CodexBar](https://github.com/steipete/CodexBar) 的**平台额度**、**使用量/成本**、**鉴权与降级规则**及平台特有能力，作为 Quota 对齐基线。Quota 自身策略仍以 [`provider-collection.md`](provider-collection.md) 为准。
+本文梳理 [CodexBar](https://github.com/steipete/CodexBar) 的**平台额度**、**使用量/成本**、**鉴权与降级规则**及平台特有能力，作为 Quota 对齐基线。Quota 自身策略仍以 [`provider-collection.md`](../provider-collection.md) 为准。
 
 ## 核对说明
 
@@ -280,7 +291,7 @@ Cost：本机 projects JSONL；Admin 另出 org spend。
 
 ## 7. 与 Quota 对照
 
-| 主题 | CodexBar（源码） | Quota 现状（[`provider-collection.md`](provider-collection.md)） |
+| 主题 | CodexBar（源码） | Quota 现状（[`provider-collection.md`](../provider-collection.md)） |
 | --- | --- | --- |
 | Cursor 额度 | Probe 内 App→Cookie；`usage-summary` + `get-sand-usage-status`（Grok Bot 周额度）+ `/api/usage?user=`（legacy 按次套餐） | 已对齐：Cursor.app `state.vscdb` → stored browser session；三个端点及 legacy 套餐替换规则一致。Cursor 是唯一 `exclusive` 的 provider——它既无 CLI 登录也无 API key，Settings 因此不显示登录命令行；cookie 名只保留三个 WorkOS 名（CodexBar 另列 NextAuth/Auth.js 名，那是别家的 jar）。**Quota 独有**：首次读 cookie 前有同意弹窗，被 macOS 拒绝时报 `browser_access_denied` 而不是「无会话」 |
 | Cursor cost | Dashboard events + token-cost | 本机 bubble/JSONL，不等价 |
@@ -305,4 +316,4 @@ Cost：本机 projects JSONL；Admin 另出 org spend。
 1. 变更后先读 `ProviderManifest` 与对应 `*ProviderDescriptor.resolveStrategies`。
 2. 窗口语义仍可读 `docs/<provider>.md`，但 **pipeline 顺序以源码为准**。
 3. 刷新本文件时更新「核对提交」哈希。
-4. 不替代 [`provider-collection.md`](provider-collection.md)；分叉需在 collection 文档标明有意差异或待对齐。
+4. 不替代 [`provider-collection.md`](../provider-collection.md)；分叉需在 collection 文档标明有意差异或待对齐。

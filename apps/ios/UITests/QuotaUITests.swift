@@ -1405,11 +1405,20 @@ final class QuotaUITests: XCTestCase {
     settle(app)
     control = app.descendants(matching: .any)[link].firstMatch
     XCTAssertTrue(control.waitForExistence(timeout: 5), "\(link) after scroll")
-    control.tap()
-    XCTAssertTrue(
-      app.descendants(matching: .any)[root].waitForExistence(timeout: 5),
-      root
-    )
+    // A tap that lands while the list is still settling can be dropped; tap once more while the
+    // row is still there before calling the destination missing (the same rule as popBack).
+    let target = app.descendants(matching: .any)[root]
+    for _ in 0..<2 where !target.exists {
+      if control.exists, control.isHittable {
+        control.tap()
+      } else {
+        revealIdentifier(app, link, attempts: 4)
+        control = app.descendants(matching: .any)[link].firstMatch
+        if control.exists { control.tap() }
+      }
+      _ = target.waitForExistence(timeout: 5)
+    }
+    XCTAssertTrue(target.exists, root)
   }
 
   /// Pops one navigation level and waits for `root`. A back tap that lands mid-transition can be

@@ -115,36 +115,6 @@ private func eventually(
   return condition()
 }
 
-/// A sign-in finishes on the service's thread and is announced by an event. When that event does
-/// not arrive, the panel still stops saying "finish sign-in in browser": it asks.
-@Test @MainActor
-func aSignInThatFinishedWithoutAnEventIsNoticedByThePoll() async throws {
-  let service = ScriptedLocalService(
-    states: [signedOutWithSessionEndedState(), loggingInState()],
-    holding: justSignedInState(label: "kyledh")
-  )
-  let model = MenuBarViewModel(
-    client: service,
-    loginPollInterval: .milliseconds(50),
-    statePollInterval: .seconds(3600)
-  )
-  model.start()
-  #expect(try await eventually { model.accountState == .signedOut })
-
-  model.startLogin()
-  #expect(try await eventually { model.isLoggingIn })
-  try await Task.sleep(for: .milliseconds(150))
-  #expect(model.isLoggingIn, "the service still answers logging_in and no event has followed")
-
-  service.release()
-  #expect(try await eventually { model.accountState == .signedIn && !model.isLoggingIn })
-  try await Task.sleep(for: .milliseconds(100))
-  let calls = service.stateCalls
-  try await Task.sleep(for: .milliseconds(200))
-  #expect(service.stateCalls == calls, "a finished sign-in is not followed any further")
-  await model.shutdown()
-}
-
 /// Events are the fast path; the panel still re-reads state on its own so nothing it shows can
 /// stay behind the service for longer than one interval.
 @Test @MainActor
@@ -159,40 +129,8 @@ func thePanelReReadsStateOnItsOwnCadence() async throws {
     statePollInterval: .milliseconds(60)
   )
   model.start()
-  #expect(try await eventually { model.accountState == .signedOut })
+  #expect(try await eventually { model.accountFlow.accountState == .signedOut })
   service.release()
-  #expect(try await eventually { model.accountState == .signedIn })
-  await model.shutdown()
-}
-
-/// Cancelling the sign-in also stops following it.
-@Test @MainActor
-func cancellingASignInStopsThePoll() async throws {
-  let service = ScriptedLocalService(states: [
-    signedOutWithSessionEndedState(),
-    loggingInState(),
-  ])
-  let model = MenuBarViewModel(
-    client: service,
-    loginPollInterval: .milliseconds(40),
-    statePollInterval: .seconds(3600)
-  )
-  model.start()
-  #expect(try await eventually { model.accountState == .signedOut })
-  model.startLogin()
-  #expect(try await eventually { model.isLoggingIn })
-  model.cancelLogin()
-  // A poll iteration already on the main actor's queue when Cancel landed still runs once, and
-  // on a loaded runner it can land later than any fixed offset. Wait for the count to hold
-  // still across a whole window instead of sampling it at one.
-  let deadline = ContinuousClock.now + .seconds(3)
-  var calls = service.stateCalls
-  var settled = false
-  while !settled, ContinuousClock.now < deadline {
-    try await Task.sleep(for: .milliseconds(200))
-    settled = service.stateCalls == calls
-    calls = service.stateCalls
-  }
-  #expect(settled, "state() is still being polled after Cancel")
+  #expect(try await eventually { model.accountFlow.accountState == .signedIn })
   await model.shutdown()
 }

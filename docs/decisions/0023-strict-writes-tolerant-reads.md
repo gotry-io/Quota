@@ -1,10 +1,10 @@
 # ADR 0023: Strict writes, tolerant reads
 
-- Status: Accepted
+- Status: Partially superseded
 - Date: 2026-08-25
+- Superseded by: 0028
+- Amended: 2026-08-31
 - Partially supersedes [ADR 0018](0018-single-managed-data-contract.md)
-- Partially superseded by [ADR 0028](0028-the-boundary-answers-the-write.md) on 2026-08-31: the
-  sending-side restatement of write contracts
 
 ## Context
 

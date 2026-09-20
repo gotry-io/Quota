@@ -316,8 +316,8 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
 
 ## Network, subprocesses, and diagnostics
 
-- Provider credentials go only to the fixed endpoints in
-  [`provider-collection.md`](provider-collection.md); apart from the acquisition above, do not
+- Provider credentials go only to the fixed endpoints named in each
+  [`providers/<id>.md`](provider-collection.md#providers) file; apart from the acquisition above, do not
   import browser Cookies, and hidden WebView state is never an authentication source. Quota iOS's
   sign-in sheet is the visible opposite of that: the reader is looking at the page whose session is
   being taken, and the sheet's store holds nothing else.

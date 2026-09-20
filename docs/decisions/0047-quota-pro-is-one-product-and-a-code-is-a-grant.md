@@ -3,8 +3,9 @@
 > Superseded by [ADR 0048](0048-sync-is-free-and-billing-is-gone.md): there is no product and no
 > code, because sync is free.
 
-- Status: Accepted
+- Status: Superseded
 - Date: 2026-09-07
+- Superseded by: 0048
 - Updates [ADR 0033](0033-entitlement-is-read-from-revenuecat.md)
 
 ## Context

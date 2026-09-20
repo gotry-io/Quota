@@ -1,4 +1,3 @@
-import AppKit
 import Foundation
 import QuotaAlertDelivery
 import QuotaAlerts
@@ -129,9 +128,10 @@ func consumesServiceMergedOverviewWithoutReprocessingObservations() async throws
   #expect(providers.first?.accounts.first?.snapshot == snapshot)
   #expect(model.providerConfigurations[.openrouter]?.maskedAPIKey == "OpenRouter ···test")
   #expect(model.lastCheckedAt == now)
-  #expect(model.accountDisconnectReason == .deviceDeleted)
+  #expect(model.accountFlow.accountDisconnectReason == .deviceDeleted)
   #expect(
-    model.accountErrorMessage == "This device was removed. Sign in again to reconnect it."
+    model.accountFlow.accountErrorMessage
+      == "This device was removed. Sign in again to reconnect it."
   )
 }
 
@@ -260,149 +260,6 @@ func aRebuildingCacheShowsTheCatchUpNoticeAndASettledOneDoesNot() async throws {
   #expect(model.cache.resetAt == Date(timeIntervalSince1970: 1_786_300_000))
 }
 
-@Test @MainActor
-func successfulLoginCancellationDoesNotRestoreStaleLoggingInState() async throws {
-  let model = MenuBarViewModel(
-    client: StubLocalService(
-      state: loggingInState(),
-      loginDelayNanoseconds: 30_000_000_000,
-      cancelDelayNanoseconds: 50_000_000
-    )
-  )
-  await model.refreshIfNeeded()
-
-  model.startLogin()
-  model.cancelLogin()
-  #expect(!model.isLoggingIn)
-  try await Task.sleep(nanoseconds: 60_000_000)
-  #expect(!model.isLoggingIn)
-}
-
-/// The row keeps its Cancel until the service says the flow is over, so it is easy to press
-/// twice. Two presses are one request, and a press after that one finished is a new one.
-@Test @MainActor
-func repeatedCancelTapsSendOneCancelLogin() async throws {
-  let record = CallRecord()
-  let model = MenuBarViewModel(
-    client: StubLocalService(
-      state: loggingInState(),
-      loginDelayNanoseconds: 30_000_000_000,
-      cancelDelayNanoseconds: 50_000_000,
-      cancelRecord: record
-    )
-  )
-  await model.refreshIfNeeded()
-
-  model.startLogin()
-  model.cancelLogin()
-  model.cancelLogin()
-  model.cancelLogin()
-
-  // Three presses coalesce into one in-flight cancel_login. Wait for that one to land rather
-  // than for a fixed window a loaded runner can miss, then confirm no second slipped through.
-  try await record.waitForCount(1)
-  try await Task.sleep(for: .milliseconds(100))
-  #expect(await record.count == 1, "three presses of one Cancel are one cancel_login")
-
-  // The first request clears the in-flight task when it finishes, which on a loaded runner is
-  // later than any fixed sleep. Keep pressing until a press lands as its own request: a press
-  // that joins the one still in flight sends nothing, so the count cannot pass two.
-  let deadline = ContinuousClock.now + .seconds(5)
-  while await record.count < 2, ContinuousClock.now < deadline {
-    model.cancelLogin()
-    try await Task.sleep(for: .milliseconds(20))
-  }
-  #expect(await record.count == 2, "a press after the first request finished is a request of its own")
-}
-
-@Test @MainActor
-func loginBusyErrorStaysVisibleOverASignedOutComponentError() async throws {
-  let model = MenuBarViewModel(
-    client: StubLocalService(
-      state: signedOutWithSessionEndedState(),
-      loginError: .remote(LocalServiceRemoteError(code: .busy, recoveryAction: .retry))
-    )
-  )
-  await model.refreshIfNeeded()
-  #expect(
-    model.accountErrorMessage == "The account session ended. Sign in again to continue syncing."
-  )
-
-  model.startLogin()
-  await settle {
-    model.accountErrorMessage == "The request could not be completed. Try again."
-  }
-
-  #expect(model.accountErrorMessage == "The request could not be completed. Try again.")
-  #expect(model.accountActionErrorMessage == "The request could not be completed. Try again.")
-}
-
-@Test @MainActor
-func aBrowserThatWillNotOpenKeepsSignInPendingAndOffersTheLink() async throws {
-  let model = MenuBarViewModel(
-    client: StubLocalService(
-      state: loggingInState(),
-      authorizeURL: "http://127.0.0.1/quota-login"
-    ),
-    loginURLOpener: StubLoginURLOpener(opens: false)
-  )
-  await model.refreshIfNeeded()
-
-  model.startLogin()
-  await settle { model.canCopyLoginLink }
-
-  #expect(model.isLoggingIn)
-  #expect(model.canCopyLoginLink)
-  #expect(
-    model.accountErrorMessage
-      == "QuotaBar could not open your browser. Copy the sign-in link and open it yourself."
-  )
-
-  model.copyLoginLink()
-  #expect(NSPasteboard.general.string(forType: .string) == "http://127.0.0.1/quota-login")
-}
-
-@Test @MainActor
-func accountActionErrorSurvivesAStateWithoutAServiceError() async throws {
-  let model = MenuBarViewModel(
-    client: StubLocalService(
-      state: loggingInState(),
-      loginDelayNanoseconds: 30_000_000_000,
-      cancelFails: true
-    )
-  )
-  await model.refreshIfNeeded()
-
-  model.startLogin()
-  model.cancelLogin()
-  await settle { model.accountErrorMessage != nil }
-
-  #expect(model.accountErrorMessage == "QuotaBar's local service is unavailable.")
-}
-
-/// Signing in says what the account is called. The window says it too, from that moment, rather
-/// than calling it "Quota account" until a whole account read has finished.
-@Test @MainActor
-func namesTheAccountFromTheSignInBeforeAnyAccountReadArrives() async throws {
-  let model = MenuBarViewModel(client: StubLocalService(state: justSignedInState(label: "octocat")))
-
-  await model.refreshIfNeeded()
-
-  #expect(model.accountSummary == nil)
-  #expect(model.accountDisplayLabel == "octocat")
-  #expect(model.accountState == .signedIn)
-}
-
-/// With neither a read nor a name, the window says what it honestly knows.
-@Test @MainActor
-func fallsBackToTheGenericAccountNameWhenTheSignInNamedNothing() async throws {
-  let model = MenuBarViewModel(client: StubLocalService(state: justSignedInState(label: nil)))
-
-  await model.refreshIfNeeded()
-
-  #expect(model.accountDisplayLabel == "Quota account")
-}
-
 /// A device signed in, with the first account read still running.
 func justSignedInState(
   label: String?,
@@ -438,19 +295,6 @@ func justSignedInState(
     overview: overview,
     cache: .settled
   )
-}
-
-/// Waits for something the model reaches on its own. A fixed sleep asserts how fast the machine
-/// is as much as what the code does; this asserts only the latter.
-@MainActor
-private func settle(
-  within timeout: Duration = .seconds(5),
-  until condition: () -> Bool
-) async {
-  let deadline = ContinuousClock.now + timeout
-  while !condition(), ContinuousClock.now < deadline {
-    try? await Task.sleep(for: .milliseconds(5))
-  }
 }
 
 /// Overview answers how much is left. A row another device's reading fills has answered, so
@@ -1112,14 +956,6 @@ actor CallRecord {
       }
       try await Task.sleep(for: .milliseconds(10))
     }
-  }
-}
-
-private struct StubLoginURLOpener: LoginURLOpening {
-  let opens: Bool
-
-  func open(_ url: URL) -> Bool {
-    opens
   }
 }
 

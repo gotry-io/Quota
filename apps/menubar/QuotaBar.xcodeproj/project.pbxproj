@@ -76,6 +76,7 @@
 		9C729EDF1662339BD7756104 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C173EE2BE52E0CB7CC206961 /* SwiftUI.framework */; };
 		9F4B70B7744453CB086E2AF8 /* QuotaObservation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F59382948F6BAB2EE8604DF /* QuotaObservation.swift */; };
 		9FFADA620D6D9C9BEFB0CC6A /* CacheRebuildNotice.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD4DC7B395BF3FEE01C12BFC /* CacheRebuildNotice.swift */; };
+		A14E32C2E85BAD9441ED8D34 /* AccountFlowModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4FCBCE79B2E41C285177400 /* AccountFlowModel.swift */; };
 		A164085B29781399BA6D9D2E /* MenuBarShell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 637C855E541E0515228FDF03 /* MenuBarShell.swift */; };
 		A1AB8AEAEA76C19966FC3CEE /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9B410A967029C8BE9D6E8DE2 /* WidgetKit.framework */; };
 		A1FC83FA6A963DA4F52AC903 /* MainWindowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A27FF20D9094D2155D25C1A2 /* MainWindowView.swift */; };
@@ -262,6 +263,7 @@
 		F10EEA1E3E1604D46CBABE83 /* DesktopWidgetPublisher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopWidgetPublisher.swift; sourceTree = "<group>"; };
 		F194A142DA65D8296C0796D1 /* BrowserConnectionModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserConnectionModel.swift; sourceTree = "<group>"; };
 		F453874DB9C6C73240C58F3F /* AppIntents.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppIntents.framework; path = System/Library/Frameworks/AppIntents.framework; sourceTree = SDKROOT; };
+		F4FCBCE79B2E41C285177400 /* AccountFlowModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountFlowModel.swift; sourceTree = "<group>"; };
 		FC43D30461CC4F7B4D59C33A /* QuotaStateViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaStateViews.swift; sourceTree = "<group>"; };
 		FD1A5817AE471128141D72FC /* UsageModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageModel.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -475,6 +477,7 @@
 		6EBA4F1ABFED7229039BB376 /* Features */ = {
 			isa = PBXGroup;
 			children = (
+				E2CF5D23CBB251E78D927E71 /* Account */,
 				4B453FD9AC7F66D30F4CEAF5 /* BrowserConnection */,
 				4EE3FBE6E85C3ABDE8DBB755 /* Dashboard */,
 				8EF9A789DEB8197A15DF5E34 /* MainWindow */,
@@ -599,6 +602,14 @@
 				2D12A2C1B7AB76E6D2D4A92C /* SettingsSection.swift */,
 			);
 			path = Components;
+			sourceTree = "<group>";
+		};
+		E2CF5D23CBB251E78D927E71 /* Account */ = {
+			isa = PBXGroup;
+			children = (
+				F4FCBCE79B2E41C285177400 /* AccountFlowModel.swift */,
+			);
+			path = Account;
 			sourceTree = "<group>";
 		};
 		F030F11EF9792A4C5525CEE2 /* QuotaBar */ = {
@@ -789,6 +800,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A14E32C2E85BAD9441ED8D34 /* AccountFlowModel.swift in Sources */,
 				838F1CFC579E183AE6568CD9 /* AccountSettingsView.swift in Sources */,
 				E90C2030FA84BD3CD0278D6F /* AccountUsageWireModels.swift in Sources */,
 				B68A40F8287D9B065D1D12E0 /* AgentsSettingsView.swift in Sources */,

@@ -55,7 +55,7 @@ struct LocalServiceClientTimings: Sendable {
   var termination: Duration = .seconds(2)
 }
 
-protocol LocalServiceServing: UsageTransport, BrowserConnectionTransport {
+protocol LocalServiceServing: UsageTransport, BrowserConnectionTransport, AccountFlowTransport {
   var events: AsyncStream<LocalServiceEvent> { get }
 
   func state() async throws -> LocalServiceState
@@ -63,9 +63,6 @@ protocol LocalServiceServing: UsageTransport, BrowserConnectionTransport {
   func recheckDiagnostics() async throws -> LocalServiceRefreshResult
   func resetCache() async throws
   func refresh() async throws -> LocalServiceRefreshResult
-  func login() async throws -> LocalServiceLoginResult
-  func cancelLogin() async throws
-  func logout() async throws -> LocalServiceLogoutResult
   func setUsageUpload(enabled: Bool) async throws -> LocalServiceUsageUploadSetting
   func setGroupUsageByProject(enabled: Bool) async throws -> LocalServiceGroupUsageByProjectSetting
   func setQuotaRefreshInterval(seconds: Int) async throws -> LocalServiceQuotaRefreshIntervalSetting

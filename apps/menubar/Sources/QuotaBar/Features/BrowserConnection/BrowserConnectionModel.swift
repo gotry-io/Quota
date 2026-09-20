@@ -39,8 +39,9 @@ private struct QuotaCollectionScanKey: Equatable {
 }
 
 /// Consent, cookie-store reads, reconnect, and the Browser Access grant window. Quota
-/// projection and account login stay on ``MenuBarViewModel``, which hands each accepted
-/// service state through ``acceptState``.
+/// projection stays on ``MenuBarViewModel``, which hands each accepted service state
+/// through ``acceptState``. Account login lives on ``AccountFlowModel``; in-flight scans
+/// carry that session epoch.
 @Observable
 @MainActor
 final class BrowserConnectionModel: BrowserAccessGrantHandling {
@@ -111,6 +112,10 @@ final class BrowserConnectionModel: BrowserAccessGrantHandling {
   @ObservationIgnored
   var onNeedsReload: (@MainActor () async -> Void)?
 
+  /// Session epoch owned by ``AccountFlowModel``; incremented when the account goes away.
+  @ObservationIgnored
+  var sessionEpoch: () -> Int = { 0 }
+
   init(
     transport: (any BrowserConnectionTransport)?,
     importer: any BrowserSessionImporting = BrowserSessionImporter(),
@@ -132,6 +137,13 @@ final class BrowserConnectionModel: BrowserAccessGrantHandling {
 
   func start() {
     grantPresenter?.handler = self
+  }
+
+  /// Invalidates in-flight scans so a replace does not land after the account went away.
+  func accountDidGoAway() {
+    for provider in Set(scanRequestGeneration.keys).union(scanningProviders) {
+      bumpScanGeneration(provider)
+    }
   }
 
   func shutdown() {
@@ -291,6 +303,7 @@ final class BrowserConnectionModel: BrowserAccessGrantHandling {
     guard let transport, let spec = provider.browserSession else { return }
     guard scanningProviders.insert(provider).inserted else { return }
     let generation = bumpScanGeneration(provider)
+    let epoch = sessionEpoch()
     defer {
       scanningProviders.remove(provider)
       lastBrowserScanFinishedAt[provider] = Date()
@@ -311,7 +324,7 @@ final class BrowserConnectionModel: BrowserAccessGrantHandling {
     let deadline = Date().addingTimeInterval(30)
     for browser in BrowserSessionImporter.orderedBrowsers(for: spec) {
       guard !Task.isCancelled, Date() < deadline else { break }
-      guard scanRequestGeneration[provider] == generation else { break }
+      guard scanRequestGeneration[provider] == generation, epoch == sessionEpoch() else { break }
       guard let status = access.status(for: browser) else { continue }
       switch status.state {
       case .readable:
@@ -348,13 +361,13 @@ final class BrowserConnectionModel: BrowserAccessGrantHandling {
         coverage.read.append(browser.displayName)
       }
     }
-    guard scanRequestGeneration[provider] == generation else { return }
+    guard scanRequestGeneration[provider] == generation, epoch == sessionEpoch() else { return }
     coverage.candidates = headers.count
     browserScanCoverage[provider] = coverage
     do {
       try await transport.replaceProviderBrowserSessions(
         provider, cookieHeaders: headers, accessDenials: denials)
-      guard scanRequestGeneration[provider] == generation else { return }
+      guard scanRequestGeneration[provider] == generation, epoch == sessionEpoch() else { return }
       browserSessionScanGeneration += 1
       if denials.isEmpty {
         browserSessionAccessDenials[provider] = nil
@@ -367,7 +380,7 @@ final class BrowserConnectionModel: BrowserAccessGrantHandling {
     } catch is CancellationError {
       return
     } catch {
-      guard scanRequestGeneration[provider] == generation else { return }
+      guard scanRequestGeneration[provider] == generation, epoch == sessionEpoch() else { return }
       browserSessionErrorMessages[provider] = Self.message(for: error)
     }
   }
