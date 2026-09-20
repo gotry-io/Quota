@@ -9,30 +9,9 @@ cd "$root"
 #   QUOTA_IOS_APPEARANCE    light | dark
 #   QUOTA_IOS_SCREENSHOTS_DIR  override output directory
 
-if [ -n "${QUOTA_IOS_SIMULATOR:-}" ]; then
-  simulator_name="$QUOTA_IOS_SIMULATOR"
-else
-  simulator_name="$(
-    xcrun simctl list devices available -j | node -e '
-const fs = require("fs");
-const data = JSON.parse(fs.readFileSync(0, "utf8"));
-for (const devices of Object.values(data.devices || {})) {
-  for (const device of devices) {
-    if (device.isAvailable === false) continue;
-    const name = device.name || "";
-    if (!name.includes("iPhone")) continue;
-    process.stdout.write(name);
-    process.exit(0);
-  }
-}
-process.exit(1);
-'
-  )" || simulator_name=""
-  if [ -z "$simulator_name" ]; then
-    echo "No available iPhone simulator found." >&2
-    exit 1
-  fi
-fi
+# One selection for the whole repo: the screenshot and the test that audits the same screen
+# are taken on the same device. QUOTA_IOS_SIMULATOR still pins the model.
+simulator_name="$(python3 scripts/ios-simulator.py name)"
 
 result="dist/ios-ui.xcresult"
 if [ -n "${QUOTA_IOS_SCREENSHOTS_DIR:-}" ]; then

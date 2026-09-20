@@ -28,20 +28,11 @@ process.exit(1);
 }
 
 first_iphone() {
-  xcrun simctl list devices available -j | node -e '
-const fs = require("fs");
-const data = JSON.parse(fs.readFileSync(0, "utf8"));
-for (const devices of Object.values(data.devices || {})) {
-  for (const device of devices) {
-    if (device.isAvailable === false) continue;
-    const name = device.name || "";
-    if (!name.includes("iPhone")) continue;
-    process.stdout.write((device.udid || "") + "\t" + name);
-    process.exit(0);
-  }
-}
-process.exit(1);
-'
+  # The repo's one simulator selection, so a slot with no named device still lands on the device
+  # the tests and the other screenshots use.
+  udid="$(python3 scripts/ios-simulator.py udid 2>/dev/null)" || return 1
+  name="$(QUOTA_IOS_SIMULATOR= python3 scripts/ios-simulator.py name 2>/dev/null)" || return 1
+  printf "%s\t%s" "$udid" "$name"
 }
 
 visual_fixture_known() {

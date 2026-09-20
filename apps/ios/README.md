@@ -203,11 +203,12 @@ QUOTA_IOS_TEXT_SIZE=accessibilityExtraLarge ./scripts/ios-ui-screenshots.sh
 
 That script runs only `QuotaUITests/QuotaScreenUITests` (the census class), writes
 `dist/ios-ui.xcresult`, and exports PNG attachments to
-`dist/ios-ui-screenshots/`. It uses `QUOTA_IOS_SIMULATOR` when set, otherwise the newest
-available iOS runtime and, on it, the first model in `scripts/test-ios.sh`'s preference list
-(iPhone 17 Pro downwards) — the model and runtime change what the auditor reports, so the choice is
-declared rather than whatever `simctl` listed first. Every run prints the simulator, its runtime and
-the Xcode version it used. `QUOTA_IOS_TEXT_SIZE` (SwiftUI `DynamicTypeSize`
+`dist/ios-ui-screenshots/`. Which simulator it uses is `scripts/ios-simulator.py`, the one
+selection `test-ios.sh` and the store screenshots share: `QUOTA_IOS_SIMULATOR` pins a model,
+otherwise the newest available iOS runtime and, on it, the first model in that script's preference
+list (iPhone 17 Pro downwards). The model and the runtime change what the auditor reports, so the
+choice is declared rather than whatever `simctl` listed first, and every run prints the simulator,
+its runtime and the Xcode version it used. `QUOTA_IOS_TEXT_SIZE` (SwiftUI `DynamicTypeSize`
 name or a `UICTContentSizeCategory*` value) and `QUOTA_IOS_APPEARANCE` (`light` or `dark`) are
 forwarded to the UI tests; variant runs write a subdirectory. Screenshot artifacts are for local
 visual QA; `ios-screens` captures the same class in CI, advisory.

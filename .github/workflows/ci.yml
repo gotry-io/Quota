@@ -152,13 +152,21 @@ jobs:
       - name: Say what this run decided
         run: |
           set -euo pipefail
-          if [ "${{ needs.changes.outputs.swift }}" = "true" ]; then
-            echo "Rust and Swift: running on $RUNNER_OS, attempt ${{ github.run_attempt }}." \
-              | tee -a "$GITHUB_STEP_SUMMARY"
-          else
-            echo "Rust and Swift: nothing they depend on changed; answered on $RUNNER_OS." \
-              | tee -a "$GITHUB_STEP_SUMMARY"
-          fi
+          decided="${{ needs.changes.outputs.swift }}"
+          case "$decided" in
+            true)
+              echo "Rust and Swift: running on $RUNNER_OS, attempt ${{ github.run_attempt }}." \
+                | tee -a "$GITHUB_STEP_SUMMARY" ;;
+            false)
+              echo "Rust and Swift: nothing they depend on changed; answered on $RUNNER_OS." \
+                | tee -a "$GITHUB_STEP_SUMMARY" ;;
+            *)
+              # Neither answer means the selection did not reach this job, which is not a reason to
+              # call a required check green.
+              echo "The change selection produced '$decided', which is not an answer." \
+                | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 1 ;;
+          esac
 
       - uses: dtolnay/rust-toolchain@stable
         if: ${{ needs.changes.outputs.swift == 'true' }}
@@ -230,13 +238,21 @@ jobs:
       - name: Say what this run decided
         run: |
           set -euo pipefail
-          if [ "${{ needs.changes.outputs.ios }}" = "true" ]; then
-            echo "iOS unit tests: running on $RUNNER_OS, attempt ${{ github.run_attempt }}." \
-              | tee -a "$GITHUB_STEP_SUMMARY"
-          else
-            echo "iOS unit tests: nothing they depend on changed; answered on $RUNNER_OS." \
-              | tee -a "$GITHUB_STEP_SUMMARY"
-          fi
+          decided="${{ needs.changes.outputs.ios }}"
+          case "$decided" in
+            true)
+              echo "iOS unit tests: running on $RUNNER_OS, attempt ${{ github.run_attempt }}." \
+                | tee -a "$GITHUB_STEP_SUMMARY" ;;
+            false)
+              echo "iOS unit tests: nothing they depend on changed; answered on $RUNNER_OS." \
+                | tee -a "$GITHUB_STEP_SUMMARY" ;;
+            *)
+              # Neither answer means the selection did not reach this job, which is not a reason to
+              # call a required check green.
+              echo "The change selection produced '$decided', which is not an answer." \
+                | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 1 ;;
+          esac
 
       - uses: actions/setup-node@v6
         if: ${{ needs.changes.outputs.ios == 'true' }}
@@ -288,7 +304,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ios-unit-xcresult-attempt-${{ github.run_attempt }}
-          path: dist/ios-unit.xcresult
+          path: |
+            dist/ios-unit.xcresult
+            dist/ios-unit.log
           if-no-files-found: warn
           retention-days: 5
 
@@ -307,13 +325,21 @@ jobs:
       - name: Say what this run decided
         run: |
           set -euo pipefail
-          if [ "${{ needs.changes.outputs.ios }}" = "true" ]; then
-            echo "iOS journeys: running on $RUNNER_OS, attempt ${{ github.run_attempt }}." \
-              | tee -a "$GITHUB_STEP_SUMMARY"
-          else
-            echo "iOS journeys: nothing they depend on changed; answered on $RUNNER_OS." \
-              | tee -a "$GITHUB_STEP_SUMMARY"
-          fi
+          decided="${{ needs.changes.outputs.ios }}"
+          case "$decided" in
+            true)
+              echo "iOS journeys: running on $RUNNER_OS, attempt ${{ github.run_attempt }}." \
+                | tee -a "$GITHUB_STEP_SUMMARY" ;;
+            false)
+              echo "iOS journeys: nothing they depend on changed; answered on $RUNNER_OS." \
+                | tee -a "$GITHUB_STEP_SUMMARY" ;;
+            *)
+              # Neither answer means the selection did not reach this job, which is not a reason to
+              # call a required check green.
+              echo "The change selection produced '$decided', which is not an answer." \
+                | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 1 ;;
+          esac
 
       - uses: actions/setup-node@v6
         if: ${{ needs.changes.outputs.ios == 'true' }}
@@ -331,42 +357,48 @@ jobs:
 
       - name: Test Quota iOS UI journeys
         if: ${{ needs.changes.outputs.ios == 'true' }}
+        env:
+          BUNDLE: dist/ios-smoke.xcresult
         run: >
           QUOTA_IOS_ONLY_TESTING=QuotaUITests/QuotaSmokeUITests
           QUOTA_IOS_SKIP_PACKAGE_TESTS=1
-          QUOTA_IOS_RESULT_BUNDLE=dist/ios-smoke.xcresult
+          QUOTA_IOS_RESULT_BUNDLE="$BUNDLE"
           ./scripts/test-ios.sh
 
       # A journey failure needs the frames and hierarchy of the attempt that failed, and the
       # selection itself is a contract: an empty or misspelled selection must not read as green.
       - name: Summarize the journey run
         if: ${{ always() && needs.changes.outputs.ios == 'true' }}
+        env:
+          BUNDLE: dist/ios-smoke.xcresult
         run: |
           set -euo pipefail
-          if [ ! -d dist/ios-smoke.xcresult ]; then
-            echo "No dist/ios-smoke.xcresult; the journey run produced no result bundle." | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ ! -d "$BUNDLE" ]; then
+            echo "No $BUNDLE; the journey run produced no result bundle." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
-          node scripts/ios-ui-run-summary.mjs dist/ios-smoke.xcresult \
+          node scripts/ios-ui-run-summary.mjs "$BUNDLE" \
             --title "iOS journey run" --expect-class QuotaSmokeUITests --min-tests 10 \
             | tee -a "$GITHUB_STEP_SUMMARY"
-          # A journey that needed a second tap passed, but not on its first attempt. Say so: these
-          # retries are a workaround for dropped events and are meant to be removed, not inherited.
-          recovered=$(grep -c "recovered-on-retry:" dist/ios-smoke.log 2>/dev/null || true)
-          if [ "${recovered:-0}" -gt 0 ]; then
-            {
-              echo ""
-              echo "### Recovered on retry: $recovered"
-              echo ""
-              grep "recovered-on-retry:" dist/ios-smoke.log | sed 's/^/- /'
-            } | tee -a "$GITHUB_STEP_SUMMARY"
-          fi
+          # A journey that needed a second tap passed, but not on its first attempt. The count is
+          # printed whether or not it is zero, so "no retries" and "nobody counted" look different.
+          log="${BUNDLE%.xcresult}.log"
+          test -f "$log" || { echo "No $log to count retries in." | tee -a "$GITHUB_STEP_SUMMARY"; exit 1; }
+          recovered=$(grep -c "recovered-on-retry:" "$log" || true)
+          {
+            echo ""
+            echo "Interactions recovered on retry: ${recovered:-0}"
+            grep "recovered-on-retry:" "$log" | sed 's/^/- /' || true
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the journey result bundle
         if: ${{ failure() && needs.changes.outputs.ios == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: ios-smoke-xcresult-attempt-${{ github.run_attempt }}
-          path: dist/ios-smoke.xcresult
+          path: |
+            dist/ios-smoke.xcresult
+            dist/ios-smoke.log
           if-no-files-found: warn
           retention-days: 5

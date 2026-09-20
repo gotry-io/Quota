@@ -22,6 +22,7 @@ class QuotaUITestCase: XCTestCase {
   }
 
   override func tearDownWithError() throws {
+    try super.tearDownWithError()
     guard !recoveries.isEmpty else { return }
     let name = self.name
     let lines = recoveries.map { "recovered-on-retry: \(name) — \($0)" }
@@ -34,8 +35,11 @@ class QuotaUITestCase: XCTestCase {
     add(attachment)
   }
 
-  /// Records that an interaction had to be repeated. Call it at the moment of the second attempt.
-  func recordRecovery(_ what: String) {
+  /// Records that an interaction worked only because it was repeated. Call it after the extra
+  /// attempt succeeded: a test that tapped twice and still failed did not recover, and a summary
+  /// that counted it would be claiming the opposite of what happened.
+  func recordRecovery(_ what: String, recovered: Bool, attempts: Int) {
+    guard recovered, attempts > 1 else { return }
     recoveries.append(what)
   }
 
@@ -209,10 +213,10 @@ class QuotaUITestCase: XCTestCase {
       let settings = app.tabBars.buttons["Settings"]
       XCTAssertTrue(settings.waitForExistence(timeout: 10), "Settings tab")
       settingsTaps += 1
-      if settingsTaps > 1 { recordRecovery("the Settings tab dropped a tap") }
       settings.tap()
       _ = root.waitForExistence(timeout: 6)
     }
+    recordRecovery("the Settings tab dropped a tap", recovered: root.exists, attempts: settingsTaps)
     XCTAssertTrue(root.exists, "settings.root")
     openSettingsDestination(app, link: "settings.devices", root: "devices.root")
   }
@@ -313,7 +317,6 @@ class QuotaUITestCase: XCTestCase {
     var attempts = 0
     for _ in 0..<2 where !target.exists {
       attempts += 1
-      if attempts > 1 { recordRecovery("\(link) dropped a tap") }
       if control.exists, control.isHittable {
         control.tap()
       } else {
@@ -323,6 +326,7 @@ class QuotaUITestCase: XCTestCase {
       }
       _ = target.waitForExistence(timeout: 5)
     }
+    recordRecovery("\(link) dropped a tap", recovered: target.exists, attempts: attempts)
     XCTAssertTrue(target.exists, root)
   }
 
@@ -333,15 +337,13 @@ class QuotaUITestCase: XCTestCase {
     let back = app.navigationBars.buttons[backTitle]
     let target = app.descendants(matching: .any)[root]
     XCTAssertTrue(back.waitForExistence(timeout: 5), "back to \(backTitle)")
-    var backTaps = 0
+    var rounds = 0
     for _ in 0..<2 where !target.exists {
-      if back.exists {
-        backTaps += 1
-        if backTaps > 1 { recordRecovery("back to \(backTitle) dropped a tap") }
-        back.tap()
-      }
+      rounds += 1
+      if back.exists { back.tap() }
       _ = target.waitForExistence(timeout: 5)
     }
+    recordRecovery("back to \(backTitle) dropped a tap", recovered: target.exists, attempts: rounds)
     XCTAssertTrue(target.exists, "\(root) after back")
   }
 

@@ -159,6 +159,7 @@ jobs:
             dist/ios-screens-shots/
             dist/ios-screens-outcomes/
             dist/ios-screens-status
+            dist/ios-screens-*.log
           if-no-files-found: error
           retention-days: 14
 
