@@ -3,7 +3,14 @@ set -eu
 root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$root"
 
-swift test --package-path packages/apple-client
+# The app embeds packages/apple-client, so a local run tests it first. In CI the macOS `verify`
+# job already runs every Swift package once (scripts/test-swift.sh); QUOTA_IOS_SKIP_PACKAGE_TESTS=1
+# lets the two iOS jobs skip that second and third compile of the same package.
+if [ "${QUOTA_IOS_SKIP_PACKAGE_TESTS:-}" = "1" ]; then
+  echo "test-ios: skipping packages/apple-client tests (QUOTA_IOS_SKIP_PACKAGE_TESTS=1)"
+else
+  swift test --package-path packages/apple-client
+fi
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "Quota iOS tests require python3 to select an iOS Simulator." >&2
