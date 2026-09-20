@@ -131,7 +131,7 @@ const wanted = [
   "overview-empty",
   "overview-cached-error",
   "overview-scrolled",
-  "sign-in",
+  "connect-sign-in",
   "connect-connecting",
   "connect-error",
   "connect-expired",

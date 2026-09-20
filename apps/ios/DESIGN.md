@@ -439,7 +439,10 @@ Body, in order:
    `Color.primary.opacity(0.85)`. Empty and unpriced days follow **An empty day is a tick, not a
    bar** in [Shared product vocabulary](../../docs/design.md#shared-product-vocabulary) — a
    missing day keeps its slot as a gap, never a zero bar. A caption legend of three 8pt squares
-   (Cached, Fresh, Output) sits under the chart in Tokens mode. Tap or drag selects a day and
+   (Cached, Fresh, Output) sits under the chart in Tokens mode; the squares scale with the caption
+   (capped at 1.75×) and the row reflows into a column when three of them stop fitting on one line,
+   because a legend that cannot grow reads to the auditor as unsupported Dynamic Type. The legend
+   is accessibility-hidden — `section.footer.daily` carries the same words for VoiceOver. Tap or drag selects a day and
    opens that day's sheet. `usage.daily.chart` stays. The All period has no Daily chart.
 4. Three destination rows:
    - **By provider / By model** (`usage.open-breakdown` → `usage.breakdown`): secondary token

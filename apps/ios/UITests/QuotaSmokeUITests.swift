@@ -250,6 +250,10 @@ final class QuotaSmokeUITests: QuotaUITestCase {
       app.navigationBars["octocat"].exists,
       "account identity is not the Overview title"
     )
+    XCTAssertFalse(
+      app.navigationBars.buttons["Log Out"].exists,
+      "Log Out belongs on Settings, not the Overview toolbar"
+    )
     revealIdentifier(app, "overview.today")
     XCTAssertTrue(
       app.descendants(matching: .any)["overview.today.tokens"].exists,
@@ -278,6 +282,27 @@ final class QuotaSmokeUITests: QuotaUITestCase {
     card.tap()
     let detail = app.descendants(matching: .any)["subscription.detail"]
     XCTAssertTrue(detail.waitForExistence(timeout: 5), "subscription.detail")
+    // The detail is two groups: what the quota is, and what read it.
+    if !app.staticTexts["Quota"].exists {
+      scrollToIdentifier(app, "section.header.quota", attempts: 8)
+    }
+    XCTAssertTrue(
+      app.staticTexts["Quota"].exists
+        || app.descendants(matching: .any)["section.header.quota"].exists,
+      "Quota"
+    )
+    let reporting = app.descendants(matching: .any)["subscription.reporting"]
+    if !reporting.waitForExistence(timeout: 2) {
+      revealSources(app)
+      scrollToIdentifier(app, "subscription.reporting", attempts: 12)
+    }
+    XCTAssertTrue(reporting.waitForExistence(timeout: 5), "Reporting")
+    XCTAssertTrue(
+      app.staticTexts["Readings"].exists
+        || app.descendants(matching: .any)["section.header.readings"].exists
+        || app.descendants(matching: .any)["subscription.sources"].exists,
+      "Readings"
+    )
     popBack(app, to: "overview.root", backTitle: "Quota")
     XCTAssertFalse(detail.exists, "subscription detail is dismissed after back")
   }
@@ -297,26 +322,125 @@ final class QuotaSmokeUITests: QuotaUITestCase {
     ] {
       openSettingsDestination(app, link: link, root: root)
       XCTAssertTrue(app.descendants(matching: .any)[root].exists, root)
+      assertDestinationControls(app, root: root)
       popSettingsDestination(app)
       XCTAssertFalse(
         app.descendants(matching: .any)[root].exists,
         "\(root) is dismissed after back"
       )
     }
+    // Both account actions are on the hub, and Log Out is the button it says it is: an identifier
+    // on a row whose title moved elsewhere would otherwise pass.
+    let deleteAccount = app.descendants(matching: .any)["settings.delete-account"]
+    if !deleteAccount.waitForExistence(timeout: 2) {
+      scrollToIdentifier(app, "settings.delete-account", attempts: 12)
+    }
+    XCTAssertTrue(
+      deleteAccount.exists || app.buttons["Delete Account…"].exists,
+      "Delete Account…"
+    )
     scrollToIdentifier(app, "settings.logout", attempts: 12)
     XCTAssertTrue(
       app.descendants(matching: .any)["settings.logout"].waitForExistence(timeout: 5),
       "Log Out stays on the hub"
     )
+    XCTAssertTrue(app.buttons["Log Out"].exists, "Log Out")
   }
 
-  /// A stored provider session whose collection was refused offers the way back in. The whole
-  /// provider matrix is advisory.
-  func testProvidersRefusedSessionOffersSignInAgain() throws {
+  /// What each Settings destination promises once it is open. Copy and pictures are the census's
+  /// job; these are the controls the destination exists for.
+  private func assertDestinationControls(_ app: XCUIApplication, root: String) {
+    switch root {
+    case "settings.notifications.root":
+      XCTAssertTrue(
+        app.switches["Enable Notifications"].waitForExistence(timeout: 5),
+        "Enable Notifications"
+      )
+      XCTAssertTrue(app.switches["Reset Reminders"].exists, "Reset Reminders")
+      XCTAssertTrue(app.staticTexts["Alert at"].exists, "Alert at")
+    case "settings.appearance.root":
+      XCTAssertTrue(
+        app.descendants(matching: .any)["settings.appearance.system"].waitForExistence(timeout: 5),
+        "System"
+      )
+      XCTAssertTrue(app.descendants(matching: .any)["settings.appearance.light"].exists, "Light")
+      XCTAssertTrue(app.descendants(matching: .any)["settings.appearance.dark"].exists, "Dark")
+    case "settings.about.root":
+      // Longer than the 128 characters a string-identifier query accepts, so it is matched by
+      // predicate rather than trimmed to fit the test.
+      let productSentence =
+        "Quota shows remaining quota this iPhone reads from the providers you connect, and the "
+        + "quota and usage QuotaBar reports from your Macs."
+      XCTAssertTrue(
+        app.staticTexts.matching(NSPredicate(format: "label == %@", productSentence))
+          .firstMatch.exists,
+        "product sentence"
+      )
+      XCTAssertTrue(
+        app.staticTexts[
+          "This iPhone never uploads its sign-ins. Only the readings it takes reach your Account."
+        ].exists,
+        "privacy sentence"
+      )
+      if !app.descendants(matching: .any)["settings.about.version"].waitForExistence(timeout: 2) {
+        scrollToIdentifier(app, "settings.about.version", attempts: 8)
+      }
+      XCTAssertTrue(
+        app.staticTexts["Version"].exists
+          || app.descendants(matching: .any)["settings.about.version"].exists,
+        "Version"
+      )
+      XCTAssertTrue(app.descendants(matching: .any)["Website"].exists, "Website")
+      XCTAssertTrue(app.descendants(matching: .any)["GitHub"].exists, "GitHub")
+      if !app.descendants(matching: .any)["settings.about.license"].waitForExistence(timeout: 2) {
+        scrollToIdentifier(app, "settings.about.license", attempts: 6)
+      }
+      XCTAssertTrue(
+        app.descendants(matching: .any)["settings.about.license"].exists
+          || app.staticTexts["License"].exists,
+        "License MIT"
+      )
+    default:
+      XCTFail("no controls named for \(root)")
+    }
+  }
+
+  /// The Providers group in its three states: two accounts on one provider, one on another, and a
+  /// third with nothing connected. Each state offers a different action, and which action a row
+  /// offers is the contract — the pictures are the census's job.
+  func testProvidersMatrixOffersConnectRemoveAndSignInAgain() throws {
     let app = launch(fixture: "providers", route: "settings")
     XCTAssertTrue(
       app.descendants(matching: .any)["settings.root"].waitForExistence(timeout: 10),
       "settings.root"
+    )
+    let header = app.descendants(matching: .any)["section.header.providers"]
+    if !header.waitForExistence(timeout: 2) {
+      scrollToIdentifierOnce(app, "section.header.providers")
+    }
+    XCTAssertTrue(header.waitForExistence(timeout: 5), "Providers header")
+    // The header can be on screen while the first connected row is still below the fold and not
+    // yet built by the lazy List, so each row is scrolled to rather than merely asserted.
+    for identifier in [
+      "providers.session.codex:codex_work",
+      "providers.session.claude:claude_team",
+    ] {
+      if !app.descendants(matching: .any)[identifier].waitForExistence(timeout: 2) {
+        scrollToIdentifier(app, identifier, attempts: 12)
+      }
+      XCTAssertTrue(
+        app.descendants(matching: .any)[identifier].waitForExistence(timeout: 5),
+        identifier
+      )
+    }
+    // Remove and Sign in again sit on the session rows; assert them before scrolling to Grok,
+    // which drops those rows from a lazy List.
+    if !app.descendants(matching: .any)["providers.remove.codex:codex_work"].exists {
+      scrollToIdentifier(app, "providers.remove.codex:codex_work", attempts: 8)
+    }
+    XCTAssertTrue(
+      app.descendants(matching: .any)["providers.remove.codex:codex_work"].exists,
+      "Remove"
     )
     // The refused session in this fixture is the second Codex account.
     scrollToIdentifier(app, "providers.session.codex:codex_personal", attempts: 12)
@@ -335,6 +459,25 @@ final class QuotaSmokeUITests: QuotaUITestCase {
     XCTAssertTrue(
       app.staticTexts["Sign in again to keep reading this account."].exists,
       "refused session says what to do"
+    )
+    // The last Providers row starts off screen. A provider with nothing connected offers Connect;
+    // one that already has an account offers another.
+    let grokConnect = app.descendants(matching: .any)["providers.connect.grok"]
+    if !grokConnect.waitForExistence(timeout: 2) {
+      scrollToIdentifier(app, "providers.connect.grok", attempts: 12)
+    }
+    XCTAssertTrue(grokConnect.waitForExistence(timeout: 5), "Grok Connect row")
+    XCTAssertTrue(
+      grokConnect.label.contains("Connect"),
+      "a provider with nothing connected offers Connect, got \(grokConnect.label)"
+    )
+    let codexConnect = app.descendants(matching: .any)["providers.connect.codex"]
+    if !codexConnect.waitForExistence(timeout: 2) {
+      scrollToIdentifier(app, "providers.connect.codex", attempts: 8)
+    }
+    XCTAssertTrue(
+      codexConnect.label.contains("Add Account"),
+      "a provider already connected offers another account, got \(codexConnect.label)"
     )
   }
 
@@ -355,6 +498,28 @@ final class QuotaSmokeUITests: QuotaUITestCase {
       app.descendants(matching: .any)["overview.today"].exists,
       "no managed Today without an account"
     )
+    XCTAssertFalse(
+      app.descendants(matching: .any)["overview.empty"].exists,
+      "not the empty state"
+    )
+    XCTAssertFalse(app.staticTexts["No quota yet"].exists, "not the empty state")
+
+    // What this phone read for itself has samples behind it, so remaining history plots them.
+    app.descendants(matching: .any)["overview.subscription"].firstMatch.tap()
+    XCTAssertTrue(
+      app.descendants(matching: .any)["subscription.detail"].waitForExistence(timeout: 5),
+      "subscription.detail"
+    )
+    let localHistory = app.descendants(matching: .any)["subscription.history"].firstMatch
+    if !localHistory.waitForExistence(timeout: 2) {
+      scrollToIdentifier(app, "subscription.history", attempts: 12)
+    }
+    XCTAssertTrue(localHistory.waitForExistence(timeout: 5), "subscription.history")
+    XCTAssertTrue(
+      app.staticTexts["Remaining history"].waitForExistence(timeout: 5),
+      "history title"
+    )
+    XCTAssertTrue(app.staticTexts["This iPhone"].exists, "This iPhone beside remaining history")
   }
 
   /// The seven essential values at the standard text size: they exist, are hittable, carry their

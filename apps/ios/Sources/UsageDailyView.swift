@@ -9,6 +9,8 @@ struct UsageDailySection: View {
   var onSelectDay: (String) -> Void = { _ in }
 
   @State private var mode: Mode = .tokens
+  /// The swatch grows with the caption beside it, capped so it stays a swatch (#247's rule).
+  @ScaledMetric(relativeTo: .caption) private var swatchSize: Double = 8
   @State private var selectedDate: String?
 
   enum Mode: String, CaseIterable, Identifiable {
@@ -59,24 +61,38 @@ struct UsageDailySection: View {
   }
 
   private var legend: some View {
-    HStack(spacing: 12) {
-      legendItem(QuotaTheme.cachedFill, "Cached")
-      legendItem(QuotaTheme.emerald, "Fresh")
-      legendItem(Color.primary.opacity(0.85), "Output")
+    // Three swatches on one line stop fitting as the caption grows, and the auditor reads a
+    // legend that cannot grow as Dynamic Type partially unsupported. Reflow into a column
+    // rather than clip, the same rule the provider rows follow.
+    ViewThatFits(in: .horizontal) {
+      HStack(spacing: 12) {
+        legendItems
+      }
+      VStack(alignment: .leading, spacing: 4) {
+        legendItems
+      }
     }
     .font(.caption)
     .foregroundStyle(.primary)
     .frame(maxWidth: .infinity, alignment: .leading)
   }
 
+  @ViewBuilder private var legendItems: some View {
+    legendItem(QuotaTheme.cachedFill, "Cached")
+    legendItem(QuotaTheme.emerald, "Fresh")
+    legendItem(Color.primary.opacity(0.85), "Output")
+  }
+
   private func legendItem(_ color: Color, _ label: String) -> some View {
     HStack(spacing: 6) {
       RoundedRectangle(cornerRadius: 1, style: .continuous)
         .fill(color)
-        .frame(width: 8, height: 8)
+        .frame(width: swatch, height: swatch)
       Text(label)
     }
   }
+
+  private var swatch: Double { min(swatchSize, 8 * 1.75) }
 
   private var chart: some View {
     Chart {

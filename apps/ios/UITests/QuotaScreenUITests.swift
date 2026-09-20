@@ -477,15 +477,27 @@ final class QuotaScreenUITests: QuotaUITestCase {
 
   /// Notifications, Appearance and About, each opened directly.
   func testSettingsNotificationsScreen() throws {
-    try captureSettingsDestination(route: "settings.notifications", root: "settings.notifications.root", name: "settings-notifications")
+    try captureSettingsDestination(
+      route: "settings.notifications",
+      root: "settings.notifications.root",
+      name: "settings-notifications"
+    )
   }
 
   func testSettingsAppearanceScreen() throws {
-    try captureSettingsDestination(route: "settings.appearance", root: "settings.appearance.root", name: "settings-appearance")
+    try captureSettingsDestination(
+      route: "settings.appearance",
+      root: "settings.appearance.root",
+      name: "settings-appearance"
+    )
   }
 
   func testSettingsAboutScreen() throws {
-    try captureSettingsDestination(route: "settings.about", root: "settings.about.root", name: "settings-about")
+    try captureSettingsDestination(
+      route: "settings.about",
+      root: "settings.about.root",
+      name: "settings-about"
+    )
   }
 
   /// Every provider connection state on one screen: two Codex accounts, a refused session, a
@@ -595,6 +607,28 @@ final class QuotaScreenUITests: QuotaUITestCase {
   /// A phone with only its own providers: the Overview it does have, and its Settings hub.
   func testLocalOnlyOverviewScreen() throws {
     try captureRoot(fixture: "local-only", root: "overview.root", name: "overview-local-only")
+  }
+
+  /// What this phone read for itself, in detail: its own remaining history and sources.
+  func testLocalOnlySubscriptionDetailScreen() throws {
+    let app = launch(fixture: "local-only")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["overview.root"].waitForExistence(timeout: 10),
+      "overview.root"
+    )
+    app.descendants(matching: .any)["overview.subscription"].firstMatch.tap()
+    XCTAssertTrue(
+      app.descendants(matching: .any)["subscription.detail"].waitForExistence(timeout: 5),
+      "subscription.detail"
+    )
+    let history = app.descendants(matching: .any)["subscription.history"].firstMatch
+    if !history.waitForExistence(timeout: 2) {
+      scrollToIdentifier(app, "subscription.history", attempts: 12)
+    }
+    XCTAssertTrue(history.waitForExistence(timeout: 5), "subscription.history")
+    attachScreenshot(app, name: "subscription-detail-local")
+    settle(app)
+    try audit(app)
   }
 
   func testLocalOnlySettingsScreen() throws {
