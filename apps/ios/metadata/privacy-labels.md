@@ -57,7 +57,7 @@ categories to `PrivacyInfo.xcprivacy`.
 | Last-good Account cache | Decoded summary, fetch time, ETag | No upload; offered only for the Account the current session owns; cleared on mismatch, orphan, or Log Out. |
 | App Group widget snapshot | Non-secret remaining quota and compact Today fields | Extension reads the file only. No network, Keychain, or account modules. Cleared on Log Out. |
 | UI preferences | Appearance and similar, when present. Alert rules and the budget amount are a local copy of the Account settings document (opaque selectors, thresholds, a budget amount) and stay after sign-out. | The local copy is not uploaded as its own payload; signed-in writes go to `PUT /api/v2/account/settings`. |
-| Quota sample journal | Remaining-quota samples this iPhone took, keyed by the local subscription selector, kept 30 days in the app's Application Support container. | Default: no. Uploaded only while the Account's history switch is on, as downsampled remaining-percent buckets named by provider and fingerprint — no credential, no label. |
+| Quota sample journal | Remaining-quota samples this iPhone took, keyed by the local subscription selector, kept 30 days in the app's Application Support container. | Default: no. Uploaded only while the Account's history switch is on, as downsampled remaining-percent buckets named by provider and an opaque subscription identifier — no credential, no label. |
 
 ## Required Reason APIs
 

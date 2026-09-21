@@ -18,11 +18,11 @@ and is not in force until review removes the Draft label.
   pace switches, an optional monthly budget amount, and whether quota history follows the Account.
   Retained until the Account is deleted.
 - Downsampled remaining-quota history, only while the Account's history switch is on: buckets of
-  remaining-percent readings named by provider and fingerprint, no credential and no label. Kept
-  as long as the chart for that window shows — two days for a five-hour window, up to thirty days
-  for weekly and monthly ones. Deleted when the switch is turned off, when the Device is deleted,
-  or when the Account is deleted. Default is on the device; nothing is uploaded until the switch
-  is on.
+  remaining-percent readings named by provider and an opaque subscription identifier, no credential
+  and no label. Kept as long as the chart for that window shows — two days for a five-hour window,
+  up to thirty days for weekly and monthly ones. Deleted when the switch is turned off, when the
+  Device is deleted, or when the Account is deleted. Default is on the device; nothing is uploaded
+  until the switch is on.
 
 ## What Quota does not collect
 
