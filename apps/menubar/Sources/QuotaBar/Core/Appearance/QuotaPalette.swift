@@ -21,6 +21,10 @@ enum QuotaPalette {
   static let panelWash = Color(nsColor: adaptivePanelWash)
   /// Group surface: related rows and read-only modules.
   static let settingsGroupFill = Color(nsColor: adaptiveSettingsGroupFill)
+  /// Opaque Quota / Usage card fill (`surface.content`).
+  static let cardFill = Color(nsColor: adaptiveCardFill)
+  /// Card hairline (`border.subtle`).
+  static let cardHairline = Color(nsColor: adaptiveCardHairline)
   /// Light material wash for transient menus; z-order, not opacity, covers page content.
   static let floatingMenuFill = Color(nsColor: adaptiveFloatingMenuFill)
   /// Adaptive ambient shadow used only by transient menus.
@@ -121,6 +125,28 @@ enum QuotaPalette {
   private static let adaptiveSettingsGroupFill = adaptiveColor(
     light: NSColor.white.withAlphaComponent(0.16),
     dark: NSColor.white.withAlphaComponent(0.045)
+  )
+
+  private static let adaptiveCardFill = NSColor(
+    name: nil,
+    dynamicProvider: { appearance in
+      nsColor(
+        isDark(appearance)
+          ? DesignTokens.Color.surfaceContent.dark
+          : DesignTokens.Color.surfaceContent.light
+      )
+    }
+  )
+
+  private static let adaptiveCardHairline = NSColor(
+    name: nil,
+    dynamicProvider: { appearance in
+      nsColor(
+        isDark(appearance)
+          ? DesignTokens.Color.borderSubtle.dark
+          : DesignTokens.Color.borderSubtle.light
+      )
+    }
   )
 
   private static let adaptiveFloatingMenuFill = adaptiveColor(
