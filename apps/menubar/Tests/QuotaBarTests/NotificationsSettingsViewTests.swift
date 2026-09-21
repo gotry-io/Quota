@@ -24,6 +24,18 @@ struct NotificationsSettingsViewTests {
     #expect(NotificationsSettingsCopy.homeTrailing(enabled: true) == "On")
     #expect(NotificationsSettingsCopy.homeTrailing(enabled: false) == "Off")
     #expect(NotificationsSettingsCopy.thresholdLabel(20) == "20%")
+    #expect(NotificationsSettingsCopy.accountSpendThisMonth == "Account spend this month")
+    #expect(NotificationsSettingsCopy.thisMacBasis == "This Mac")
+    #expect(
+      NotificationsSettingsCopy.budgetFooter(signedIn: true)
+        == "Quota says once each month when 80% and then all of the budget has been spent. "
+          + "Measured against Account spend this month."
+    )
+    #expect(
+      NotificationsSettingsCopy.budgetFooter(signedIn: false)
+        == "Quota says once each month when 80% and then all of the budget has been spent. "
+          + "Measured against This Mac."
+    )
   }
 
   @Test @MainActor

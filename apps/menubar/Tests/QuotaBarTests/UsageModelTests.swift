@@ -270,6 +270,51 @@ struct UsageModelTests {
   }
 
   @Test
+  func budgetMonthUsesAccountWhenSignedInAndThisMacWhenSignedOut() async throws {
+    let calendar = Calendar.current
+    let now = try #require(
+      calendar.date(from: DateComponents(year: 2026, month: 2, day: 10, hour: 12)))
+    let range = try #require(UsagePeriodSelection.thisMonth.range(today: now))
+    let transport = GatedUsageTransport()
+    let (model, defaults) = makeUsageModel(transport: transport, now: { now })
+    defer { defaults.tearDown() }
+
+    model.setBudget(UsageBudget(amountUSD: 50, alerts: false))
+    try await waitUntil {
+      await transport.pendingCount(UsageModel.periodKey(source: .local, range)) == 1
+    }
+    #expect(model.budgetMeasuringBasis == NotificationsSettingsCopy.thisMacBasis)
+
+    await transport.complete(
+      from: range.from, to: range.to,
+      with: periodDetail(from: range.from, to: range.to, tokens: 1),
+      source: .local
+    )
+    try await waitUntil { model.budgetMonthDetail != nil }
+
+    model.acceptState(accountSummaryState())
+    try await waitUntil {
+      await transport.pendingCount(UsageModel.periodKey(source: .account, range)) == 1
+    }
+    #expect(model.hasAccountSession)
+    #expect(model.budgetMeasuringBasis == NotificationsSettingsCopy.accountSpendThisMonth)
+
+    await transport.complete(
+      from: range.from, to: range.to,
+      with: periodDetail(from: range.from, to: range.to, tokens: 9),
+      source: .account
+    )
+    try await waitUntil { model.budgetMonthDetail?.usage.totals.totalTokens == 9 }
+
+    model.accountDidGoAway()
+    try await waitUntil {
+      await transport.pendingCount(UsageModel.periodKey(source: .local, range)) == 1
+    }
+    #expect(!model.hasAccountSession)
+    #expect(model.budgetMeasuringBasis == NotificationsSettingsCopy.thisMacBasis)
+  }
+
+  @Test
   func acceptStateDiscardsCustomPeriodsEvenWhenUsageDidNotChange() async throws {
     let transport = GatedUsageTransport()
     let (model, defaults) = makeUsageModel(transport: transport)

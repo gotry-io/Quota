@@ -270,6 +270,25 @@ pub trait LocalBackend: Send + Sync {
         let _ = since;
         Err(BackendError::unavailable())
     }
+    fn set_account_settings(
+        &self,
+        document: &crate::protocol::AccountSettingsWriteDocument,
+        if_match: &str,
+    ) -> Result<crate::protocol::AccountSettingsMutationResult, BackendError> {
+        let _ = (document, if_match);
+        Err(BackendError::new(IpcError::new(
+            ErrorCode::AuthenticationRequired,
+            RecoveryAction::Login,
+        )))
+    }
+    fn refresh_account_settings(
+        &self,
+    ) -> Result<crate::protocol::AccountSettingsState, BackendError> {
+        Err(BackendError::new(IpcError::new(
+            ErrorCode::AuthenticationRequired,
+            RecoveryAction::Login,
+        )))
+    }
     fn diagnose(&self) -> Result<DiagnosticReport, BackendError>;
     fn complete_diagnostics(&self) -> Result<DiagnosticReport, BackendError> {
         self.diagnose()
@@ -339,6 +358,60 @@ impl LocalBackend for UnavailableBackend {
         _: &str,
     ) -> Result<crate::providers::ValidatedBrowserSession, BackendError> {
         Err(BackendError::unavailable())
+    }
+}
+
+#[cfg(test)]
+struct SettingsBackend {
+    write: Mutex<Option<AccountSettingsMutationResult>>,
+    refresh: Mutex<Option<AccountSettingsState>>,
+}
+
+#[cfg(test)]
+impl LocalBackend for SettingsBackend {
+    fn refresh(&self, _: Arc<AtomicBool>, _: &dyn RefreshSink, _: bool) -> RefreshOutcome {
+        let unavailable = || Err(BackendError::unavailable());
+        RefreshOutcome {
+            quota: unavailable(),
+            usage: unavailable(),
+            account: unavailable(),
+            pricing: unavailable(),
+            overview: None,
+        }
+    }
+    fn diagnose(&self) -> Result<DiagnosticReport, BackendError> {
+        Err(BackendError::unavailable())
+    }
+    fn login(&self, _: &str, _: Arc<AtomicBool>) -> Result<LoginOutcome, BackendError> {
+        Err(BackendError::unavailable())
+    }
+    fn logout(&self, _: &Value) -> Result<(), BackendError> {
+        Err(BackendError::unavailable())
+    }
+    fn validate_provider_browser_session(
+        &self,
+        _: crate::catalog::ProviderId,
+        _: &str,
+    ) -> Result<crate::providers::ValidatedBrowserSession, BackendError> {
+        Err(BackendError::unavailable())
+    }
+    fn set_account_settings(
+        &self,
+        _: &AccountSettingsWriteDocument,
+        _: &str,
+    ) -> Result<AccountSettingsMutationResult, BackendError> {
+        self.write
+            .lock()
+            .map_err(|_| BackendError::unavailable())?
+            .take()
+            .ok_or_else(BackendError::unavailable)
+    }
+    fn refresh_account_settings(&self) -> Result<AccountSettingsState, BackendError> {
+        self.refresh
+            .lock()
+            .map_err(|_| BackendError::unavailable())?
+            .take()
+            .ok_or_else(BackendError::unavailable)
     }
 }
 
@@ -668,6 +741,10 @@ impl LocalService {
             Operation::CancelLogin => self.cancel_login(&request).map(as_json),
             Operation::Logout => self.logout(&request).map(as_json),
             Operation::SetUsageUpload => self.set_usage_upload(&request).map(as_json),
+            Operation::SetAccountSettings => self.set_account_settings(&request).map(as_json),
+            Operation::RefreshAccountSettings => {
+                self.refresh_account_settings(&request).map(as_json)
+            }
             Operation::SetGroupUsageByProject => {
                 self.set_group_usage_by_project(&request).map(as_json)
             }
@@ -1051,6 +1128,35 @@ impl LocalService {
         Ok(UsageUploadSetting {
             enabled: payload.enabled,
         })
+    }
+
+    fn set_account_settings(
+        &self,
+        request: &IpcRequest,
+    ) -> Result<AccountSettingsMutationResult, IpcError> {
+        let payload: SetAccountSettingsPayload = request.decode_payload()?;
+        payload.validate()?;
+        let result = self
+            .inner
+            .backend
+            .set_account_settings(&payload.document, &payload.if_match)
+            .map_err(|error| error.error)?;
+        self.emit(vec![ComponentName::Account]);
+        Ok(result)
+    }
+
+    fn refresh_account_settings(
+        &self,
+        request: &IpcRequest,
+    ) -> Result<AccountSettingsState, IpcError> {
+        request.decode_payload::<EmptyPayload>()?;
+        let result = self
+            .inner
+            .backend
+            .refresh_account_settings()
+            .map_err(|error| error.error)?;
+        self.emit(vec![ComponentName::Account]);
+        Ok(result)
     }
 
     fn set_group_usage_by_project(
@@ -3644,6 +3750,170 @@ mod tests {
                 .iter()
                 .any(|event| event.changed_components == [ComponentName::Usage])
         );
+        service.shutdown();
+        drop(service);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    fn account_settings_document() -> Value {
+        serde_json::json!({
+            "protocol_version": 2,
+            "revision": 1,
+            "updated_at": "2026-09-21T10:00:00Z",
+            "alerts": {
+                "reset_reminders": true,
+                "pace_alerts": true,
+                "thresholds": { "a1b2c3d4e5f6": [20, 10] }
+            },
+            "budget": { "amount_usd": "250.00", "alerts": true }
+        })
+    }
+
+    #[test]
+    fn set_account_settings_round_trips_written_and_conflict_and_refuses_unknown_fields() {
+        let document = account_settings_document();
+        let root =
+            std::env::temp_dir().join(format!("quota-account-settings-ipc-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let sink = Arc::new(RecordingSink::default());
+        let backend = Arc::new(SettingsBackend {
+            write: Mutex::new(Some(AccountSettingsMutationResult {
+                outcome: AccountSettingsWriteOutcome::Written,
+                document: document.clone(),
+                revision: 1,
+            })),
+            refresh: Mutex::new(Some(AccountSettingsState {
+                document: document.clone(),
+                revision: 1,
+            })),
+        });
+        let service = LocalService::new(state.clone(), sink.clone(), backend);
+
+        let written: IpcRequest = serde_json::from_value(serde_json::json!({
+            "type": "request",
+            "request_id": "write",
+            "operation": "set_account_settings",
+            "payload": {
+                "document": {
+                    "alerts": {
+                        "reset_reminders": true,
+                        "pace_alerts": true,
+                        "thresholds": { "a1b2c3d4e5f6": [20, 10] }
+                    },
+                    "budget": { "amount_usd": "250.00", "alerts": true }
+                },
+                "if_match": "\"0\""
+            }
+        }))
+        .expect("request");
+        let response = service.handle(written);
+        assert!(response.error.is_none(), "{response:?}");
+        let result = response.result.expect("result");
+        assert_eq!(result["outcome"], "written");
+        assert_eq!(result["revision"], 1);
+        assert_eq!(result["document"], document);
+        assert!(
+            sink.0
+                .lock()
+                .expect("events")
+                .iter()
+                .any(|event| event.changed_components == [ComponentName::Account])
+        );
+
+        let extra: IpcRequest = serde_json::from_value(serde_json::json!({
+            "type": "request",
+            "request_id": "extra",
+            "operation": "set_account_settings",
+            "payload": {
+                "document": {
+                    "alerts": {
+                        "reset_reminders": true,
+                        "pace_alerts": true,
+                        "thresholds": {}
+                    },
+                    "budget": { "amount_usd": null, "alerts": true }
+                },
+                "if_match": "\"0\"",
+                "seed": true
+            }
+        }))
+        .expect("envelope");
+        let refused = service.handle(extra);
+        assert_eq!(
+            refused.error.as_ref().map(|error| error.code),
+            Some(ErrorCode::InvalidRequest)
+        );
+
+        let refresh: IpcRequest = serde_json::from_value(serde_json::json!({
+            "type": "request",
+            "request_id": "refresh",
+            "operation": "refresh_account_settings",
+            "payload": {}
+        }))
+        .expect("refresh");
+        let refreshed = service.handle(refresh);
+        assert!(refreshed.error.is_none(), "{refreshed:?}");
+        assert_eq!(refreshed.result.expect("result")["revision"], 1);
+
+        service.shutdown();
+        drop(service);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn account_settings_operations_without_a_session_are_the_typed_refusal() {
+        let root = std::env::temp_dir().join(format!(
+            "quota-account-settings-signed-out-{}",
+            Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        let service = LocalService::new(
+            state.clone(),
+            Arc::new(RecordingSink::default()),
+            Arc::new(UnavailableBackend),
+        );
+        let write: IpcRequest = serde_json::from_value(serde_json::json!({
+            "type": "request",
+            "request_id": "write",
+            "operation": "set_account_settings",
+            "payload": {
+                "document": {
+                    "alerts": {
+                        "reset_reminders": true,
+                        "pace_alerts": true,
+                        "thresholds": {}
+                    },
+                    "budget": { "amount_usd": null, "alerts": true }
+                },
+                "if_match": "\"0\""
+            }
+        }))
+        .expect("request");
+        let response = service.handle(write);
+        assert_eq!(
+            response.error.as_ref().map(|error| error.code),
+            Some(ErrorCode::AuthenticationRequired)
+        );
+        let refresh: IpcRequest = serde_json::from_value(serde_json::json!({
+            "type": "request",
+            "request_id": "refresh",
+            "operation": "refresh_account_settings",
+            "payload": {}
+        }))
+        .expect("refresh");
+        let refreshed = service.handle(refresh);
+        assert_eq!(
+            refreshed.error.as_ref().map(|error| error.code),
+            Some(ErrorCode::AuthenticationRequired)
+        );
+        let snapshot = state.snapshot().expect("snapshot");
+        assert!(snapshot.account_settings.is_none());
+        assert_eq!(snapshot.ipc_version, IPC_VERSION);
+
         service.shutdown();
         drop(service);
         drop(state);

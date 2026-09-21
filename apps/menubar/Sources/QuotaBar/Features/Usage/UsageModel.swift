@@ -36,10 +36,12 @@ final class UsageModel {
   private(set) var quotaHistorySamples: LocalServiceQuotaHistory?
   /// Why the last `quota_history` read failed. Dashboard's line, not the panel's.
   private(set) var quotaHistoryErrorMessage: String?
-  /// This Mac's monthly budget, and how far into it this month's local spend has gone.
+  /// The monthly budget, and how far into it this month's spend has gone.
   private(set) var budget: UsageBudget
   private(set) var budgetMonthDetail: LocalServiceUsageDetail?
   private(set) var usageRefreshing = false
+  /// Signed in, the bar measures Account spend this month; signed out, This Mac.
+  private(set) var hasAccountSession = false
 
   @ObservationIgnored
   private let transport: (any UsageTransport)?
@@ -55,6 +57,9 @@ final class UsageModel {
 
   @ObservationIgnored
   var onRequestError: (@MainActor (String) -> Void)?
+
+  @ObservationIgnored
+  var onLocalBudgetEdit: (@MainActor (UsageBudget) -> Void)?
 
   /// Session epoch owned by ``AccountFlowModel``; incremented when the account goes away.
   @ObservationIgnored
@@ -120,6 +125,8 @@ final class UsageModel {
     accountRefreshing = state.account.refreshing
     usageUploadEnabled = state.usageUploadEnabled
     hasAccountSummary = state.account.value?.accountSummary != nil
+    let auth = state.account.value?.authStatus
+    hasAccountSession = auth == .signedIn || auth == .logoutPending
     historyOverview = state.overview
     customUsagePeriods = [:]
     loadCustomUsagePeriod()
@@ -145,6 +152,7 @@ final class UsageModel {
     self.budget = budget
     self.usageUploadEnabled = usageUploadEnabled
     self.hasAccountSummary = hasAccountSummary
+    self.hasAccountSession = hasAccountSummary
     historyOverview = overview
     if let quotaHistorySamples {
       self.quotaHistorySamples = quotaHistorySamples
@@ -192,19 +200,21 @@ final class UsageModel {
   }
 
   /// Dashboard's Account / This Mac picker. Reloads a custom range for the source that is on
-  /// screen; the monthly budget stays This Mac's hours.
+  /// screen. The monthly budget follows sign-in, not this picker.
   func setUsageSource(_ source: UsageSource) {
     guard source != customPeriodSource else { return }
     customPeriodSource = source
     loadCustomUsagePeriod()
   }
 
-  /// Drops in-flight account-bound loads. Local history and the This Mac budget stay.
+  /// Drops in-flight account-bound loads. The budget re-measures against This Mac.
   func accountDidGoAway() {
     customUsageGeneration += 1
     customUsageTask?.cancel()
     customUsageTask = nil
     customUsageLoading = false
+    hasAccountSession = false
+    refreshBudgetMonth()
   }
 
   /// Asks the service for this Mac's stored samples since the retention horizon, then folds
@@ -300,7 +310,7 @@ final class UsageModel {
     }
   }
 
-  /// How far into this month's budget this Mac's own spend has gone.
+  /// How far into this month's budget the measuring source's spend has gone.
   var budgetProgress: UsageBudgetProgress? {
     guard let amount = budget.amountUSD, let detail = budgetMonthDetail else { return nil }
     let spent = UsageBudgetProgress.dollars(microusd: detail.usage.cost.amountMicrousd) ?? 0
@@ -311,7 +321,20 @@ final class UsageModel {
     )
   }
 
+  /// Signed in: Account spend this month. Signed out: This Mac.
+  var budgetMeasuringBasis: String {
+    hasAccountSession
+      ? NotificationsSettingsCopy.accountSpendThisMonth : NotificationsSettingsCopy.thisMacBasis
+  }
+
   func setBudget(_ next: UsageBudget) {
+    replaceBudget(next)
+    onLocalBudgetEdit?(budget)
+  }
+
+  /// Saves the budget without treating it as a local edit to sync. Account settings apply uses
+  /// this so a remote document does not bounce back as a write of its own.
+  func replaceBudget(_ next: UsageBudget) {
     budget = budgetStore.save(next)
     refreshBudgetMonth()
   }
@@ -327,17 +350,21 @@ final class UsageModel {
       budgetMonthDetail = nil
       return
     }
-    let key = Self.periodKey(range)
+    let source: UsageSource = hasAccountSession ? .account : .local
+    let key = Self.periodKey(source: source, range)
+    let epoch = sessionEpoch()
     budgetMonthTask = Task { @MainActor [weak self] in
       let detail: LocalServiceUsageDetail
       do {
         detail = try await transport.usagePeriod(
-          from: range.from, to: range.to, source: .local, timezone: TimeZone.current.identifier)
+          from: range.from, to: range.to, source: source, timezone: TimeZone.current.identifier)
       } catch {
         return
       }
       guard let self else { return }
-      guard self.budgetMonthGeneration == generation, Self.periodKey(range) == key else { return }
+      guard self.budgetMonthGeneration == generation, epoch == self.sessionEpoch(),
+        Self.periodKey(source: source, range) == key
+      else { return }
       budgetMonthDetail = detail
       evaluateBudgetNotifications(now: now())
     }

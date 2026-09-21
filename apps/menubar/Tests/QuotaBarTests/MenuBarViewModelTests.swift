@@ -260,6 +260,66 @@ func aRebuildingCacheShowsTheCatchUpNoticeAndASettledOneDoesNot() async throws {
   #expect(model.cache.resetAt == Date(timeIntervalSince1970: 1_786_300_000))
 }
 
+func accountSettingsDocument(
+  revision: Int,
+  resetReminders: Bool = true,
+  paceAlerts: Bool = true,
+  thresholds: [String: [Int]] = [:],
+  amountUSD: Decimal? = nil,
+  budgetAlerts: Bool = true
+) -> AccountSettingsDocument {
+  AccountSettingsDocument(
+    revision: revision,
+    updatedAt: ISO8601DateFormatter().date(from: "2026-09-21T10:00:00Z"),
+    alerts: AccountSettingsDocument.Alerts(
+      resetReminders: resetReminders,
+      paceAlerts: paceAlerts,
+      thresholds: thresholds
+    ),
+    budget: AccountSettingsDocument.Budget(amountUSD: amountUSD, alerts: budgetAlerts)
+  )
+}
+
+func signedInSettingsState(
+  accountID: String = "account_1",
+  label: String? = "octocat",
+  settings: LocalServiceAccountSettingsState,
+  overview: [LocalServiceOverviewItem] = [],
+  revision: Int = 2
+) -> LocalServiceState {
+  LocalServiceState(
+    ipcVersion: LocalServiceState.supportedIPCVersion,
+    revision: revision,
+    usageUploadEnabled: true,
+    groupUsageByProject: true,
+    quotaRefreshIntervalSeconds: 300,
+    usagePeriods: emptyUsagePeriods(),
+    quota: emptyComponent(),
+    usage: emptyComponent(),
+    account: LocalServiceComponent(
+      status: .ready,
+      value: LocalServiceAccountState(
+        authStatus: .signedIn,
+        accountID: accountID,
+        displayLabel: label,
+        deviceID: "device_1",
+        deviceGeneration: 1,
+        accountSummary: nil
+      ),
+      updatedAt: Date(timeIntervalSince1970: 1_786_300_000),
+      lastError: nil,
+      refreshing: false
+    ),
+    accountSettings: settings,
+    pricing: emptyComponent(),
+    providers: [],
+    providerBrowserSessions: [],
+    browserScanEnabled: [],
+    overview: overview,
+    cache: .settled
+  )
+}
+
 /// A device signed in, with the first account read still running.
 func justSignedInState(
   label: String?,
@@ -956,6 +1016,40 @@ private func unavailableUsage(now: Date) -> LocalUsageReport {
   )
 }
 
+actor AccountSettingsWriteRecord {
+  private(set) var calls: [(document: AccountSettingsDocument, ifMatch: String)] = []
+  var results: [Result<LocalServiceAccountSettingsWriteResult, Error>] = []
+  var refreshValue: LocalServiceAccountSettingsState?
+  var gate: TestGate?
+
+  func queue(_ result: Result<LocalServiceAccountSettingsWriteResult, Error>) {
+    results.append(result)
+  }
+
+  func setGate(_ gate: TestGate) {
+    self.gate = gate
+  }
+
+  func record(document: AccountSettingsDocument, ifMatch: String) async throws
+    -> LocalServiceAccountSettingsWriteResult
+  {
+    calls.append((document, ifMatch))
+    if let gate {
+      await gate.wait()
+    }
+    if results.isEmpty {
+      return .written(document)
+    }
+    let next = results.removeFirst()
+    return try next.get()
+  }
+
+  func refresh() async throws -> LocalServiceAccountSettingsState {
+    if let refreshValue { return refreshValue }
+    throw LocalServiceClientError.invalidMessage
+  }
+}
+
 actor PinCallRecord {
   private(set) var identitySourceID: String?
   private(set) var identityKey: String?
@@ -1037,6 +1131,7 @@ struct StubLocalService: LocalServiceServing {
   let customPeriod: LocalServiceUsageDetail?
   /// What `quota_history` answers, for the tests that load 30-day samples on demand.
   let quotaHistoryValue: LocalServiceQuotaHistory?
+  let accountSettingsWriteRecord: AccountSettingsWriteRecord?
 
   init(
     state: LocalServiceState,
@@ -1050,7 +1145,8 @@ struct StubLocalService: LocalServiceServing {
     authorizeURL: String? = nil,
     pinRecord: PinCallRecord? = nil,
     customPeriod: LocalServiceUsageDetail? = nil,
-    quotaHistoryValue: LocalServiceQuotaHistory? = nil
+    quotaHistoryValue: LocalServiceQuotaHistory? = nil,
+    accountSettingsWriteRecord: AccountSettingsWriteRecord? = nil
   ) {
     stateValue = state
     events = AsyncStream { $0.finish() }
@@ -1065,6 +1161,7 @@ struct StubLocalService: LocalServiceServing {
     self.pinRecord = pinRecord
     self.customPeriod = customPeriod
     self.quotaHistoryValue = quotaHistoryValue
+    self.accountSettingsWriteRecord = accountSettingsWriteRecord
   }
 
   func state() async throws -> LocalServiceState { stateValue }
@@ -1195,6 +1292,23 @@ struct StubLocalService: LocalServiceServing {
     cookieHeaders: [String],
     accessDenials: [BrowserAccessDenial]
   ) async throws {}
+
+  func setAccountSettings(document: AccountSettingsDocument, ifMatch: String) async throws
+    -> LocalServiceAccountSettingsWriteResult
+  {
+    if let accountSettingsWriteRecord {
+      return try await accountSettingsWriteRecord.record(document: document, ifMatch: ifMatch)
+    }
+    return .written(document)
+  }
+
+  func refreshAccountSettings() async throws -> LocalServiceAccountSettingsState {
+    if let accountSettingsWriteRecord {
+      return try await accountSettingsWriteRecord.refresh()
+    }
+    throw LocalServiceClientError.invalidMessage
+  }
+
   func shutdown() async {
     await shutdownGate?.wait()
     await shutdownRecord?.record()

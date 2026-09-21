@@ -2,7 +2,8 @@ import QuotaPresentation
 import QuotaWire
 import SwiftUI
 
-/// Main window → Settings → Notifications: local remaining-quota rules this Mac evaluates itself.
+/// Main window → Settings → Notifications: remaining-quota rules this Mac evaluates. Policy
+/// follows the Account when signed in; delivery and the master switch stay on this Mac.
 struct NotificationsSettingsView: View {
   @Bindable var model: MenuBarViewModel
   /// The amount as it is being typed, which is only a budget once it parses.
@@ -70,7 +71,7 @@ struct NotificationsSettingsView: View {
     .onAppear { budgetDraft = model.usage.budget.amountUSD.map(UsageBudgetProgress.plain) ?? "" }
   }
 
-  /// The monthly spend budget this Mac keeps for itself. It is never uploaded.
+  /// The monthly spend budget. Signed in it follows the Account; signed out it stays on this Mac.
   private var budgetSection: some View {
     SwiftUI.Section {
       TextField("Amount (USD)", text: $budgetDraft, prompt: Text("No budget"))
@@ -91,7 +92,7 @@ struct NotificationsSettingsView: View {
     } header: {
       Text("Monthly budget")
     } footer: {
-      Text(NotificationsSettingsCopy.budgetFooter)
+      Text(NotificationsSettingsCopy.budgetFooter(signedIn: model.accountFlow.hasAccountSession))
     }
   }
 

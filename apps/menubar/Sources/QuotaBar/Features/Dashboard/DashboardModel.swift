@@ -238,6 +238,7 @@ final class DashboardModel {
       title: usage.usagePeriodTitle(now: now),
       available: usage.usagePeriodIsAvailable(source: source, selection: selection),
       budget: usage.budgetProgress,
+      budgetBasis: usage.budget.isSet ? usage.budgetMeasuringBasis : nil,
       showsProjects: showsUsageProjects
     )
   }
@@ -505,6 +506,7 @@ struct DashboardUsagePresentation: Equatable {
   let title: String
   let available: Bool
   let budget: UsageBudgetProgress?
+  let budgetBasis: String?
   let showsProjects: Bool
 }
 

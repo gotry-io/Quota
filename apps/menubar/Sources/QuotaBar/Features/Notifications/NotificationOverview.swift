@@ -66,9 +66,17 @@ struct NotificationSettingsSubscription: Equatable, Identifiable, Sendable {
 
 enum NotificationsSettingsCopy {
   static let footer = "Quota reminds you when a refresh brings new data."
-  static let budgetFooter =
+  static let accountSpendThisMonth = "Account spend this month"
+  static let thisMacBasis = "This Mac"
+
+  static func budgetFooter(signedIn: Bool) -> String {
     "Quota says once each month when 80% and then all of the budget has been spent. "
-      + "The budget stays on this Mac."
+      + "Measured against \(budgetBasis(signedIn: signedIn))."
+  }
+
+  static func budgetBasis(signedIn: Bool) -> String {
+    signedIn ? accountSpendThisMonth : thisMacBasis
+  }
   static let permissionDenied =
     "Allow notifications for QuotaBar in System Settings."
   static let openSystemSettings = "Open System Settings"

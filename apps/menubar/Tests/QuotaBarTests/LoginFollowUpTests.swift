@@ -1,4 +1,5 @@
 import Foundation
+import QuotaAlerts
 import QuotaWire
 import Testing
 
@@ -98,6 +99,14 @@ final class ScriptedLocalService: LocalServiceServing, @unchecked Sendable {
   func replaceProviderBrowserSessions(
     _ provider: ProviderID, cookieHeaders: [String], accessDenials: [BrowserAccessDenial]
   ) async throws {}
+  func setAccountSettings(document: AccountSettingsDocument, ifMatch: String) async throws
+    -> LocalServiceAccountSettingsWriteResult
+  {
+    try await base.setAccountSettings(document: document, ifMatch: ifMatch)
+  }
+  func refreshAccountSettings() async throws -> LocalServiceAccountSettingsState {
+    try await base.refreshAccountSettings()
+  }
   func shutdown() async {}
 }
 
