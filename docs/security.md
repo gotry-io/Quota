@@ -56,7 +56,7 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   rustls. Certificate validation is the platform's in both cases.
 - Provider status-page polls are unauthenticated GET of public JSON (`/api/v2/status.json` where
   the catalog says `statuspage_v2`). They send `User-Agent: Quota/<version>` on the device (or
-  `QuotaRelay` from the Worker), follow no redirects, time out at ten seconds locally and five
+  `QuotaRelay` from the origin), follow no redirects, time out at ten seconds locally and five
   seconds on Relay, cap the body at 64 KiB, store only `status.indicator`,
   `status.description`, and the time this check ran, and never send a cookie, API key, or
   account identifier. A failed poll keeps the last reading. Quota iOS fetches the same URLs on the
@@ -147,7 +147,7 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   Account the presented iOS session names and to no other.
 - Email sign-in is a one-time link, not a password and not a handoff cookie. `POST
   /api/auth/email/start` always answers 202 so it does not say whether the address is an identity.
-  The mailed token is the credential: D1 stores only hashes of the address and of the token, the
+  The mailed token is the credential: Relay stores only hashes of the address and of the token, the
   row lasts fifteen minutes, spending it twice is a refusal, and expired rows leave with the grant
   sweep. Opening a `sign_in` on another device is allowed. Completing a `link` still requires the
   opening browser to hold the Account that asked, so a mailed link cannot bind the addressee to
@@ -205,9 +205,10 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   `HttpOnly; Secure; SameSite=Lax; Path=/`, and is stored only as an HMAC under its own label, so it
   cannot be presented as a Bearer token nor a native token as a cookie. JavaScript never reads it,
   and it appears in no log or response body but its own `Set-Cookie`.
-- A document navigation carrying no cookie of that shape is answered without reaching D1, SvelteKit
-  never receives `env.DB` or Relay secrets, and every document and load response is `Cache-Control:
-  private, no-store`. The one document that reaches D1 with no cookie is `/u/<handle>`, whose whole
+- A document navigation carrying no cookie of that shape is answered without reaching storage,
+  SvelteKit never receives the database or Relay secrets, and every document and load response is
+  `Cache-Control:
+  private, no-store`. The one document that reaches storage with no cookie is `/u/<handle>`, whose whole
   address is the handle; it still carries `private, no-store` like every other document, and only
   the API answer behind it is cacheable ([ADR 0037](decisions/0037-a-public-profile-shows-usage-not-quota.md)).
 - `POST /api/auth/logout` revokes that row and clears the cookie, and requires an exact same-origin
@@ -249,8 +250,8 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
 - `GET /api/v6/public/<handle>/usage` and `GET /api/v6/public/leaderboard` are the two routes
   answered `Cache-Control: public, max-age=300`, because their answers are the same for every
   reader. Both are rate limited per caller address after the Relay entry has decided what to
-  trust (Workers: Cloudflare's `CF-Connecting-IP`; Node: only `RELAY_CLIENT_ADDRESS_HEADER`
-  from `RELAY_TRUSTED_PROXIES`, otherwise the socket peer), and both compute
+  trust (only `RELAY_CLIENT_ADDRESS_HEADER` from `RELAY_TRUSTED_PROXIES`, otherwise the
+  socket peer; production reads `CF-Connecting-IP` from Caddy), and both compute
   their `ETag` before any Usage row is read. The leaderboard takes no principal and no handle, and
   `period` accepts only `30d`. `PUT /api/v2/account/profile` writes all five owner values, and
   requires `account:manage`, an exact same-origin `Origin` with same-origin Fetch Metadata when
@@ -400,13 +401,13 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
 
 ## Relay storage and operations
 
-- Keep D1 migrations explicit, never rewrite an applied one, and review lifecycle, retention, and
+- Keep Relay migrations explicit, never rewrite an applied one, and review lifecycle, retention, and
   new retained fields as security-sensitive. Protocol routing is a trust boundary: v6 writes pass
   the closed v6 provider and agent schemas, and one managed contract is served, so a read excludes
   nothing a retired one could not carry.
 - Persist identity subjects, installation identities, token and grant secrets, session-store keys, and
   rate-limit subjects only as keyed hashes where equality is required. Plaintext native tokens
-  appear only in the one successful issuance response, never in D1, and browser session tokens only
+  appear only in the one successful issuance response, never in Relay storage, and browser session tokens only
   in their `Set-Cookie`.
 - Retained business data is limited to Account and Device lifecycle metadata, one optional
   public profile row per Account, normalized quota observations, sparse hourly Usage rows, the
@@ -414,9 +415,8 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   to recognize a retry: an hour's `scan_version` is the check. Cost is derived from the canonical
   catalog, never persisted as an invoice.
 - Rate limits use fixed-window counters keyed by hashes of action and subject. An anonymous
-  network subject is the caller address after the entry has decided what to trust: on Workers,
-  Cloudflare's `CF-Connecting-IP` (clients cannot forge it there) and never `X-Forwarded-For`;
-  on Node, only the one header `RELAY_CLIENT_ADDRESS_HEADER` names (`x-forwarded-for` by
+  network subject is the caller address after the entry has decided what to trust:
+  only the one header `RELAY_CLIENT_ADDRESS_HEADER` names (`x-forwarded-for` by
   default, or `cf-connecting-ip`) and only when the socket peer is listed in
   `RELAY_TRUSTED_PROXIES` (loopback, RFC1918, and unique-local IPv6 when unset), taking
   `CF-Connecting-IP` or the right-most `X-Forwarded-For` hop that is not itself a trusted
@@ -430,8 +430,8 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   eligible at once; expired or revoked sessions remain seven days so logout retries stay
   diagnosable.
 - Production keys (`GITHUB_CLIENT_SECRET`, `APPLE_SIGNIN_PRIVATE_KEY`, and the subject,
-  installation, and session HMAC keys) are
-  Cloudflare secrets, are never tracked, and are never reused across purposes.
+  installation, and session HMAC keys) live in the operator's `relay.env` / Portainer stack Env,
+  are never tracked, and are never reused across purposes.
   `QUOTA_SESSION_HASH_KEY` covers every credential Relay stores by equality — browser session token
   and `__Host-quota_oauth` signature included — each under its own domain label.
 - Production keys (`GITHUB_CLIENT_SECRET`, `RESEND_API_KEY`, and the subject, installation, and

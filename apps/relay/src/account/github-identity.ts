@@ -45,8 +45,8 @@ export class GitHubIdentityProvider implements IdentityProvider {
 
   constructor(private readonly environment: GitHubIdentityEnvironment) {
     // `fetch` is a global that refuses to run as anyone's method: stored on this object and
-    // called as `this.#fetch(...)`, workerd throws "Illegal invocation". Call it with the
-    // global as its receiver, which is also what a test double is happy to receive.
+    // called as `this.#fetch(...)` it throws "Illegal invocation". Call it with the global as
+    // its receiver, which is also what a test double is happy to receive.
     const implementation = environment.fetch ?? fetch;
     this.#fetch = (input, init) => implementation.call(globalThis, input, init);
   }

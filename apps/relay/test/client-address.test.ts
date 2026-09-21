@@ -4,7 +4,6 @@ import { createRelayApp } from "../src/app.ts";
 import {
   addressIsTrusted,
   applyNodeForwardedTrust,
-  applyWorkersForwardedTrust,
   clientAddress,
   DEFAULT_CLIENT_ADDRESS_HEADER,
   DEFAULT_TRUSTED_PROXIES,
@@ -141,26 +140,6 @@ describe("parseClientAddressHeader", () => {
         /invalid RELAY_CLIENT_ADDRESS_HEADER/,
       );
     }
-  });
-});
-
-describe("applyWorkersForwardedTrust", () => {
-  it("keeps CF-Connecting-IP and drops X-Forwarded-For", () => {
-    const request = applyWorkersForwardedTrust(
-      new Request(`${origin}/healthz`, {
-        headers: {
-          "CF-Connecting-IP": "203.0.113.10",
-          "X-Forwarded-For": "198.51.100.1",
-          "X-Real-IP": "198.51.100.1",
-          Forwarded: "for=198.51.100.1",
-        },
-      }),
-    );
-    expect(request.headers.get("CF-Connecting-IP")).toBe("203.0.113.10");
-    expect(request.headers.get("X-Forwarded-For")).toBeNull();
-    expect(request.headers.get("X-Real-IP")).toBeNull();
-    expect(request.headers.get("Forwarded")).toBeNull();
-    expect(clientAddress(request.headers)).toBe("203.0.113.10");
   });
 });
 

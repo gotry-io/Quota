@@ -1,11 +1,10 @@
 /**
- * The database surface Relay's SQL speaks, which is D1's.
+ * The database surface Relay's SQL speaks, which is D1's shape.
  *
- * Every statement in `src/state/` is written against these three types and nothing else, so the
- * same SQL runs against Cloudflare D1 and against a local SQLite file
- * ([ADR 0049](../../../../docs/decisions/0049-one-relay-two-runtimes.md)). Cloudflare's
- * `D1Database` satisfies it structurally: this is the intersection the business code already
- * used, written down, not a wrapper D1 has to be adapted to.
+ * Every statement in `src/state/` is written against these three types and nothing else.
+ * `SqliteDatabase` implements them over a local SQLite file
+ * ([ADR 0058](../../../../docs/decisions/0058-relay-runs-on-node-only.md)). The names stay
+ * `D1AccountState` / `D1UsageState` because they are that data model, stored in SQLite.
  */
 export interface RelayDatabase {
   prepare(sql: string): RelayStatement;

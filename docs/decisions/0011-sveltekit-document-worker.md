@@ -1,8 +1,15 @@
 # ADR 0011: Quota Web document SSR via SvelteKit on the existing Relay Worker
 
-- Status: Accepted
+> Partially superseded by [ADR 0058](0058-relay-runs-on-node-only.md): documents still render
+> through SvelteKit `Server.respond` inside Relay, now the Node process, not a Worker. Wrangler
+> `main`, Static Assets `run_worker_first`, and the Workers Vitest pool no longer apply.
+
+- Status: Partially superseded
 - Date: 2026-08-14
+- Superseded by: 0058
 - Amended: 2026-08-26 by [ADR 0025](./0025-one-session-system.md)
+- Amended: 2026-09-21 by [ADR 0058](0058-relay-runs-on-node-only.md): the host is Node, not a
+  Worker. The `WebDocumentPort` boundary and the no-Usage document rule stand.
 
 ## Context
 
