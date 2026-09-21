@@ -69,7 +69,7 @@ struct SettingsNotificationsView: View {
           .fixedSize(horizontal: false, vertical: true)
       }
     } footer: {
-      Text(SettingsCopy.footer)
+      Text(model.phase == .signedIn ? SettingsCopy.footerSignedIn : SettingsCopy.footer)
         .accessibilityIdentifier("section.footer.notifications")
     }
   }

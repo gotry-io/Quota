@@ -1,5 +1,6 @@
 import Foundation
 import QuotaAccount
+import QuotaAlerts
 import QuotaRelay
 import QuotaWire
 import Testing
@@ -777,5 +778,81 @@ struct AccountClientTests {
       Issue.record("expected failure, got \(result)")
       return
     }
+  }
+
+  @Test
+  func settingsReadCachesTheDocumentAndAnswers304FromIt() async throws {
+    let body = Fixtures.accountSettingsJSON(revision: 1, amountUSD: "250.00")
+    let transport = ScriptedTransport([
+      .init(status: 200, body: body, headers: ["ETag": "\"1\""]),
+      .init(status: 304, body: Data(), headers: ["ETag": "\"1\""]),
+    ])
+    let settings = MemoryAccountSettingsStore()
+    let client = AccountClient(
+      relay: RelayClient(transport: transport),
+      sessionStore: MemoryAccountSessionStore(session: Fixtures.session()),
+      summaryStore: MemoryAccountSummaryStore(),
+      settingsStore: settings
+    )
+
+    let first = try await client.fetchAccountSettings()
+    #expect(first.document.revision == 1)
+    #expect(first.etag == "\"1\"")
+    #expect(try settings.load()?.etag == "\"1\"")
+    #expect(try settings.load()?.accountID == "account_01")
+
+    let second = try await client.fetchAccountSettings()
+    #expect(second.document.budget.amountUSD == Decimal(250))
+    #expect(second.etag == "\"1\"")
+    #expect(transport.recordedIfNoneMatch == [nil, "\"1\""])
+  }
+
+  @Test
+  func settingsWriteStoresThe412DocumentAndLogoutClearsIt() async throws {
+    let current = Fixtures.accountSettingsJSON(revision: 2, amountUSD: "75.50")
+    let transport = ScriptedTransport([
+      .init(status: 412, body: current, headers: ["ETag": "\"2\""]),
+      .init(status: 204),
+    ])
+    let settings = MemoryAccountSettingsStore()
+    let sessions = MemoryAccountSessionStore(session: Fixtures.session())
+    let client = AccountClient(
+      relay: RelayClient(transport: transport),
+      sessionStore: sessions,
+      summaryStore: MemoryAccountSummaryStore(),
+      settingsStore: settings
+    )
+    let write = try AccountSettingsDocument.decode(Fixtures.accountSettingsJSON(amountUSD: "250.00"))
+    let result = try await client.writeAccountSettings(write, ifMatch: "\"0\"")
+    guard case .conflict(let document, let etag) = result else {
+      Issue.record("expected conflict, got \(result)")
+      return
+    }
+    #expect(document.revision == 2)
+    #expect(etag == "\"2\"")
+    #expect(try settings.load()?.document.revision == 2)
+
+    await client.logout()
+    #expect(try settings.load() == nil)
+    #expect(try sessions.load() == nil)
+  }
+
+  @Test
+  func settingsReadRefreshesTheSessionOn401() async throws {
+    let body = Fixtures.accountSettingsJSON(revision: 1)
+    let transport = ScriptedTransport([
+      .init(status: 401, body: try Fixtures.errorBody(code: "unauthorized")),
+      .init(status: 200, body: try Fixtures.refreshResponse()),
+      .init(status: 200, body: body, headers: ["ETag": "\"1\""]),
+    ])
+    let sessions = MemoryAccountSessionStore(session: Fixtures.session())
+    let client = AccountClient(
+      relay: RelayClient(transport: transport),
+      sessionStore: sessions,
+      summaryStore: MemoryAccountSummaryStore()
+    )
+    let result = try await client.fetchAccountSettings()
+    #expect(result.document.revision == 1)
+    #expect(try sessions.load()?.accessToken == Fixtures.rotatedAccess)
   }
 }

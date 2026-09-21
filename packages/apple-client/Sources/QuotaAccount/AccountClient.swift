@@ -1,4 +1,5 @@
 import Foundation
+import QuotaAlerts
 import QuotaRelay
 import QuotaWire
 
@@ -65,6 +66,7 @@ public actor AccountClient {
   private let relay: RelayClient
   private let sessionStore: any AccountSessionStore
   private let summaryStore: any AccountSummaryStore
+  private let settingsStore: any AccountSettingsStore
   private let calendar: Calendar
   private let now: @Sendable () -> Date
   private var refreshWaiters: [CheckedContinuation<AccountSession, Error>] = []
@@ -76,12 +78,14 @@ public actor AccountClient {
     relay: RelayClient = RelayClient(),
     sessionStore: any AccountSessionStore,
     summaryStore: any AccountSummaryStore,
+    settingsStore: any AccountSettingsStore = MemoryAccountSettingsStore(),
     calendar: Calendar = .current,
     now: @escaping @Sendable () -> Date = { Date() }
   ) {
     self.relay = relay
     self.sessionStore = sessionStore
     self.summaryStore = summaryStore
+    self.settingsStore = settingsStore
     self.calendar = calendar
     self.now = now
   }
@@ -107,6 +111,11 @@ public actor AccountClient {
     try loadBoundCachedSummary()
   }
 
+  /// The last settings document this session's Account answered, when one is stored.
+  public func loadCachedSettings() throws -> CachedAccountSettings? {
+    try loadBoundCachedSettings()
+  }
+
   /// Finish a browser sign-in, presenting this device's installation when it has one.
   ///
   /// A phone that presents one gets a session naming a Device and may upload what it reads; one
@@ -130,7 +139,7 @@ public actor AccountClient {
         device: device
       )
       let session = AccountSession(tokens)
-      periodCache.removeAll()
+      clearVolatileCaches()
       try persist(session)
       return session
     } catch let error as RelayClientError {
@@ -154,7 +163,7 @@ public actor AccountClient {
         device: device
       )
       let session = AccountSession(tokens)
-      periodCache.removeAll()
+      clearVolatileCaches()
       try persist(session)
       return session
     } catch let error as RelayClientError {
@@ -266,6 +275,61 @@ public actor AccountClient {
     }
   }
 
+  /// Reads the Account settings document. Offers If-None-Match when this Account's last-good
+  /// copy is stored. A 304 answers that copy.
+  public func fetchAccountSettings() async throws -> (document: AccountSettingsDocument, etag: String?) {
+    try await withAuthorizedSession { session in
+      let held = try loadBoundCachedSettings()
+      let read = try await relay.fetchAccountSettings(
+        accessToken: session.accessToken,
+        etag: held?.etag
+      )
+      switch read {
+      case .modified(let document, let etag):
+        try persistSettings(
+          CachedAccountSettings(accountID: session.accountID, etag: etag, document: document)
+        )
+        return (document, etag)
+      case .unchanged(let etag):
+        guard let held else { throw AccountClientError.relay(.invalidResponse) }
+        if let etag, etag != held.etag {
+          try persistSettings(
+            CachedAccountSettings(
+              accountID: session.accountID, etag: etag, document: held.document
+            )
+          )
+        }
+        return (held.document, etag ?? held.etag)
+      }
+    }
+  }
+
+  /// Writes the Account settings document under `If-Match`. A 412 is `conflict` with the
+  /// current document, which this client also stores as last-good.
+  public func writeAccountSettings(
+    _ document: AccountSettingsDocument,
+    ifMatch: String
+  ) async throws -> AccountSettingsWrite {
+    try await withAuthorizedSession { session in
+      let result = try await relay.writeAccountSettings(
+        document,
+        accessToken: session.accessToken,
+        ifMatch: ifMatch
+      )
+      switch result {
+      case .written(let written, let etag):
+        try persistSettings(
+          CachedAccountSettings(accountID: session.accountID, etag: etag, document: written)
+        )
+      case .conflict(let current, let etag):
+        try persistSettings(
+          CachedAccountSettings(accountID: session.accountID, etag: etag, document: current)
+        )
+      }
+      return result
+    }
+  }
+
   /// Reads UTC activity days. Does not write the summary cache.
   public func fetchUsageActivity(
     from: String,
@@ -325,15 +389,38 @@ public actor AccountClient {
     guard let cached else { return nil }
     guard let session = try sessionStore.load() else {
       try? summaryStore.clear()
-      periodCache.removeAll()
+      clearVolatileCaches()
       return nil
     }
     guard cached.summary.account.accountID == session.accountID else {
       try? summaryStore.clear()
-      periodCache.removeAll()
+      clearVolatileCaches()
       return nil
     }
     return cached
+  }
+
+  private func loadBoundCachedSettings() throws -> CachedAccountSettings? {
+    let cached = try settingsStore.load()
+    guard let cached else { return nil }
+    guard let session = try sessionStore.load() else {
+      try? settingsStore.clear()
+      return nil
+    }
+    guard cached.accountID == session.accountID else {
+      try? settingsStore.clear()
+      return nil
+    }
+    return cached
+  }
+
+  private func persistSettings(_ value: CachedAccountSettings) throws {
+    try settingsStore.save(value)
+  }
+
+  private func clearVolatileCaches() {
+    periodCache.removeAll()
+    try? settingsStore.clear()
   }
 
   private func failureResult(
@@ -353,7 +440,7 @@ public actor AccountClient {
     let refreshToken = try? sessionStore.load()?.refreshToken
     try? sessionStore.clear()
     try? summaryStore.clear()
-    periodCache.removeAll()
+    clearVolatileCaches()
     if let refreshToken {
       try? await relay.revokeSession(refreshToken: refreshToken)
     }
@@ -469,12 +556,12 @@ public actor AccountClient {
     } catch RelayClientError.invalidGrant {
       try? sessionStore.clear()
       try? summaryStore.clear()
-      periodCache.removeAll()
+      clearVolatileCaches()
       throw AccountClientError.sessionExpired
     } catch RelayClientError.unauthorized {
       try? sessionStore.clear()
       try? summaryStore.clear()
-      periodCache.removeAll()
+      clearVolatileCaches()
       throw AccountClientError.sessionExpired
     } catch let error as RelayClientError {
       throw AccountClientError(error)

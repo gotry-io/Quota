@@ -31,6 +31,12 @@ enum SettingsCopy {
   static let resetReminders = "Reset Reminders"
   static let paceAlerts = "Pace Warnings"
   static let footer = "Alerts are checked when Quota refreshes."
+  static let footerSignedIn =
+    "Reset reminders, pace warnings, and thresholds follow the Account. Enable Notifications stays on this iPhone. Alerts are checked when Quota refreshes."
+  static let budgetFollowsAccount =
+    "The monthly budget follows the Account. Signed in, it measures Account spend this month."
+  static let budgetStaysOnThisIPhone = "The monthly budget stays on this iPhone."
+  static let accountSpendThisMonth = "Account spend this month"
   static let permissionDenied = "Allow notifications for Quota in Settings."
   static let openSettings = "Open Settings"
   static let openSettingsURL = URL(string: UIApplication.openSettingsURLString)!
@@ -204,6 +210,8 @@ final class SettingsModel {
   private let rulesStore: AlertRulesStore
   private let notificationCenter: any NotificationAuthorizing
   private let appearanceDefaults: UserDefaults
+  /// Policy edits go through the Account settings owner when Settings is showing.
+  weak var accountSettings: AccountSettingsSync?
 
   var rules: AlertRules
   var appearance: AppearancePreference
@@ -212,13 +220,19 @@ final class SettingsModel {
   init(
     rulesStore: AlertRulesStore = AlertRulesStore(keyPrefix: AlertCoordinator.rulesKeyPrefix),
     notificationCenter: any NotificationAuthorizing = SystemNotificationAuthorizer(),
-    appearanceDefaults: UserDefaults = .standard
+    appearanceDefaults: UserDefaults = .standard,
+    accountSettings: AccountSettingsSync? = nil
   ) {
     self.rulesStore = rulesStore
     self.notificationCenter = notificationCenter
     self.appearanceDefaults = appearanceDefaults
+    self.accountSettings = accountSettings
     self.rules = rulesStore.load()
     self.appearance = AppearancePreference.load(from: appearanceDefaults)
+  }
+
+  func reload() {
+    rules = rulesStore.load()
   }
 
   static func isValidThreshold(_ value: Int) -> Bool {
@@ -288,10 +302,12 @@ final class SettingsModel {
 
   func setResetReminders(_ enabled: Bool) {
     persist { $0.resetReminders = enabled }
+    propagate(.setResetReminders(enabled))
   }
 
   func setPaceAlerts(_ enabled: Bool) {
     persist { $0.paceAlerts = enabled }
+    propagate(.setPaceAlerts(enabled))
   }
 
   func setFirstThreshold(_ value: Int, for selector: String) {
@@ -302,6 +318,7 @@ final class SettingsModel {
       next.append(current[1])
     }
     persist { $0.setThresholds(next, for: selector) }
+    propagate(.setThresholds(selector: selector, rules.thresholds(for: selector)))
   }
 
   func setSecondThreshold(_ value: Int?, for selector: String) {
@@ -312,6 +329,7 @@ final class SettingsModel {
     } else {
       persist { $0.setThresholds([first], for: selector) }
     }
+    propagate(.setThresholds(selector: selector, rules.thresholds(for: selector)))
   }
 
   func setAppearance(_ value: AppearancePreference) {
@@ -340,5 +358,10 @@ final class SettingsModel {
     guard next != rules else { return }
     rulesStore.save(next)
     rules = next
+  }
+
+  private func propagate(_ edit: AccountSettingsEdit) {
+    guard let accountSettings else { return }
+    Task { await accountSettings.apply(edit) }
   }
 }

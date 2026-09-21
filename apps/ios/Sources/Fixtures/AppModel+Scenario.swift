@@ -35,11 +35,15 @@ import QuotaWidgetData
     ) -> AppModel {
       let instant = now()
       let scenario = VisualScenario.make(fixture, now: instant)
+      let settingsDefaults = UserDefaults(
+        suiteName: "Quota.VisualSettings.\(UUID().uuidString)"
+      )!
       let model = AppModel(
         account: AccountClient(
           relay: RelayClient(transport: FixtureBlockedHTTPTransport()),
           sessionStore: MemoryAccountSessionStore(),
           summaryStore: MemoryAccountSummaryStore(),
+          settingsStore: MemoryAccountSettingsStore(),
           now: now
         ),
         authenticator: FixtureBlockedAuthenticator(),
@@ -59,6 +63,8 @@ import QuotaWidgetData
           now: now
         ),
         budgetStore: budgetStore,
+        settingsDefaults: settingsDefaults,
+        syncAccountSettings: true,
         now: now
       )
       scenario.apply(to: model, clockIsFixed: clockIsFixed)

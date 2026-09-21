@@ -68,8 +68,9 @@ struct UsageBudgetDetail: View {
 
 /// This month's spend against the budget.
 ///
-/// The budget is a preference of this iPhone and is never uploaded. Usage shows this only when
-/// a budget is set; **Set a monthly budget** lives in Settings.
+/// Signed in, the amount follows the Account and the meter is Account spend this month. Signed
+/// out, the last amount stays on this iPhone. Usage shows this only when a budget is set;
+/// **Set a monthly budget** lives in Settings.
 struct UsageBudgetSection: View {
   @Bindable var model: AppModel
   @Binding var editing: Bool
@@ -92,6 +93,12 @@ struct UsageBudgetSection: View {
             .font(QuotaDesign.Typography.support.monospacedDigit())
             .foregroundStyle(.primary)
             .fixedSize(horizontal: false, vertical: true)
+          if model.phase == .signedIn {
+            Text(SettingsCopy.accountSpendThisMonth)
+              .font(QuotaDesign.Typography.support)
+              .foregroundStyle(QuotaTheme.secondary)
+              .fixedSize(horizontal: false, vertical: true)
+          }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Monthly budget")
@@ -154,6 +161,11 @@ struct UsageBudgetEditorPage: View {
         Toggle("Tell me at 80% and 100%", isOn: $alerts)
           .tint(.primary)
           .accessibilityIdentifier("usage.budget.alerts")
+      } footer: {
+        Text(
+          model.phase == .signedIn
+            ? SettingsCopy.budgetFollowsAccount : SettingsCopy.budgetStaysOnThisIPhone
+        )
       }
     }
     .navigationTitle("Monthly budget")

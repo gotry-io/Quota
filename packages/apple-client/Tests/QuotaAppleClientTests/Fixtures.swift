@@ -1,5 +1,6 @@
 import Foundation
 import QuotaAccount
+import QuotaAlerts
 import QuotaRelay
 import QuotaWire
 import os
@@ -32,6 +33,39 @@ enum Fixtures {
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime]
     return formatter.date(from: value)!
+  }
+
+  /// GET / PUT `/api/v2/account/settings` body. Keys stay snake_case because this document
+  /// is not decoded by `WireCodec`.
+  static func accountSettingsJSON(
+    revision: Int = 0,
+    updatedAt: String = "1970-01-01T00:00:00Z",
+    resetReminders: Bool = true,
+    paceAlerts: Bool = true,
+    thresholds: [String: [Int]] = [:],
+    amountUSD: String? = nil,
+    budgetAlerts: Bool = true
+  ) -> Data {
+    var object: [String: Any] = [
+      "protocol_version": 2,
+      "revision": revision,
+      "updated_at": updatedAt,
+      "alerts": [
+        "reset_reminders": resetReminders,
+        "pace_alerts": paceAlerts,
+        "thresholds": thresholds,
+      ],
+      "budget": [
+        "amount_usd": amountUSD as Any,
+        "alerts": budgetAlerts,
+      ],
+    ]
+    if amountUSD == nil {
+      var budget = object["budget"] as! [String: Any]
+      budget["amount_usd"] = NSNull()
+      object["budget"] = budget
+    }
+    return try! JSONSerialization.data(withJSONObject: object)
   }
 
   static func summaryTotals(
@@ -480,6 +514,10 @@ final class ScriptedTransport: HTTPTransport, @unchecked Sendable {
 
   var recordedIfNoneMatch: [String?] {
     lock.withLock { $0.requests.map { $0.value(forHTTPHeaderField: "If-None-Match") } }
+  }
+
+  var recordedIfMatch: [String?] {
+    lock.withLock { $0.requests.map { $0.value(forHTTPHeaderField: "If-Match") } }
   }
 }
 

@@ -1,4 +1,5 @@
 import Foundation
+import QuotaAlerts
 import QuotaWire
 
 public enum RelayClientError: Error, Equatable, Sendable {
@@ -27,6 +28,8 @@ public enum RelayRoute: CaseIterable, Sendable {
   case revoke
   case accountIdentities
   case accountSummary
+  case accountSettings
+  case updateAccountSettings
   case accountUsageActivity(from: String, to: String, detail: ActivityDetail?, timeZone: String?)
   case accountUsagePeriod(from: String, to: String, timezone: String, breakdown: Bool)
   case deviceSync
@@ -39,6 +42,8 @@ public enum RelayRoute: CaseIterable, Sendable {
       .revoke,
       .accountIdentities,
       .accountSummary,
+      .accountSettings,
+      .updateAccountSettings,
       .accountUsageActivity(from: "1970-01-01", to: "1970-01-01", detail: nil, timeZone: nil),
       .accountUsagePeriod(from: "1970-01-01", to: "1970-01-01", timezone: "UTC", breakdown: false),
       .deviceSync,
@@ -49,10 +54,10 @@ public enum RelayRoute: CaseIterable, Sendable {
   public var method: String {
     switch self {
     case .token, .appleSignIn, .revoke: "POST"
-    case .accountIdentities, .accountSummary, .accountUsageActivity, .accountUsagePeriod,
-      .deviceSync:
+    case .accountIdentities, .accountSummary, .accountSettings, .accountUsageActivity,
+      .accountUsagePeriod, .deviceSync:
       "GET"
-    case .deviceSnapshots: "PUT"
+    case .updateAccountSettings, .deviceSnapshots: "PUT"
     }
   }
 
@@ -63,6 +68,7 @@ public enum RelayRoute: CaseIterable, Sendable {
     case .revoke: "/oauth/v2/revoke"
     case .accountIdentities: "/api/v2/account"
     case .accountSummary: "/api/v6/account/summary"
+    case .accountSettings, .updateAccountSettings: "/api/v2/account/settings"
     case .accountUsageActivity: "/api/v6/account/usage/activity"
     case .accountUsagePeriod: "/api/v6/account/usage/period"
     case .deviceSync: "/api/v2/device/sync"
@@ -90,8 +96,8 @@ public enum RelayRoute: CaseIterable, Sendable {
         items.append(("breakdown", "1"))
       }
       return items
-    case .token, .appleSignIn, .revoke, .accountIdentities, .accountSummary, .deviceSync,
-      .deviceSnapshots:
+    case .token, .appleSignIn, .revoke, .accountIdentities, .accountSummary, .accountSettings,
+      .updateAccountSettings, .deviceSync, .deviceSnapshots:
       return []
     }
   }
@@ -110,6 +116,20 @@ public enum AccountSummaryRead: Sendable {
 public enum AccountUsagePeriodRead: Sendable {
   case modified(AccountUsagePeriodResponse, etag: String?)
   case unchanged(etag: String?)
+}
+
+/// The outcome of a conditional Account settings read. `unchanged` keeps the cached document.
+public enum AccountSettingsRead: Sendable {
+  case modified(AccountSettingsDocument, etag: String?)
+  case unchanged(etag: String?)
+}
+
+/// The outcome of `PUT /api/v2/account/settings`. A 412 body is the current document, not an
+/// error envelope, so the caller can re-apply its one edit
+/// ([ADR 0061](../../../../docs/decisions/0061-alert-policy-and-the-budget-follow-the-account.md)).
+public enum AccountSettingsWrite: Sendable {
+  case written(AccountSettingsDocument, etag: String?)
+  case conflict(AccountSettingsDocument, etag: String?)
 }
 
 public struct RelayClient: Sendable {
@@ -354,6 +374,80 @@ public struct RelayClient: Sendable {
     }
   }
 
+  /// Reads the Account settings document, offering the validator the caller already holds.
+  ///
+  /// Passing `etag` turns the read conditional: an unchanged document answers 304 and sends no
+  /// body. Decoding uses `AccountSettingsDocument.decode`, not `WireCodec` — this type's keys
+  /// are the wire's own snake_case, and the package coder would fail them.
+  public func fetchAccountSettings(
+    accessToken: String,
+    etag: String? = nil
+  ) async throws -> AccountSettingsRead {
+    guard WireValidation.isIOSAccessToken(accessToken) else {
+      throw RelayClientError.unauthorized
+    }
+    let (data, response) = try await perform(
+      route: .accountSettings,
+      query: [],
+      body: nil,
+      bearer: accessToken,
+      expectedStatus: 200,
+      ifNoneMatch: etag
+    )
+    let nextETag = Self.entityTag(response)
+    if response.statusCode == 304 {
+      return .unchanged(etag: nextETag ?? etag)
+    }
+    do {
+      return .modified(try AccountSettingsDocument.decode(data), etag: nextETag)
+    } catch {
+      throw RelayClientError.invalidResponse
+    }
+  }
+
+  /// Writes the Account settings document under `If-Match`.
+  ///
+  /// The body is `updateRequestJSON()`: `protocol_version`, `alerts`, and `budget`, and nothing
+  /// else. A stale validator is `conflict` with the current document, not an error envelope.
+  public func writeAccountSettings(
+    _ document: AccountSettingsDocument,
+    accessToken: String,
+    ifMatch: String
+  ) async throws -> AccountSettingsWrite {
+    guard WireValidation.isIOSAccessToken(accessToken) else {
+      throw RelayClientError.unauthorized
+    }
+    guard Self.isValidator(ifMatch) else {
+      throw RelayClientError.invalidResponse
+    }
+    let body: Data
+    do {
+      body = try document.updateRequestJSON()
+    } catch {
+      throw RelayClientError.invalidResponse
+    }
+    let (data, response) = try await perform(
+      route: .updateAccountSettings,
+      query: [],
+      body: body,
+      bearer: accessToken,
+      expectedStatus: 200,
+      acceptedStatuses: [412],
+      ifMatch: ifMatch
+    )
+    let nextETag = Self.entityTag(response)
+    let decoded: AccountSettingsDocument
+    do {
+      decoded = try AccountSettingsDocument.decode(data)
+    } catch {
+      throw RelayClientError.invalidResponse
+    }
+    if response.statusCode == 412 {
+      return .conflict(decoded, etag: nextETag)
+    }
+    return .written(decoded, etag: nextETag)
+  }
+
   /// The Device's control document, and the first half of an upload.
   ///
   /// It answers the generation the envelope must name. It is also the boundary that says paid
@@ -423,14 +517,17 @@ public struct RelayClient: Sendable {
     body: Data?,
     bearer: String?,
     expectedStatus: Int,
-    ifNoneMatch: String? = nil
+    acceptedStatuses: Set<Int> = [],
+    ifNoneMatch: String? = nil,
+    ifMatch: String? = nil
   ) async throws -> (Data, HTTPURLResponse) {
     let request = try makeRequest(
       route: route,
       query: query,
       body: body,
       bearer: bearer,
-      ifNoneMatch: ifNoneMatch
+      ifNoneMatch: ifNoneMatch,
+      ifMatch: ifMatch
     )
     let data: Data
     let response: HTTPURLResponse
@@ -454,21 +551,25 @@ public struct RelayClient: Sendable {
       throw RelayClientError.responseTooLarge
     }
 
-    if response.statusCode == expectedStatus || notModified {
+    if response.statusCode == expectedStatus || notModified
+      || acceptedStatuses.contains(response.statusCode)
+    {
       return (data, response)
     }
     throw mapStatus(response.statusCode, body: data)
   }
 
   private static func entityTag(_ response: HTTPURLResponse) -> String? {
-    guard let value = response.value(forHTTPHeaderField: "ETag"),
-      !value.isEmpty,
-      value.count <= 256,
-      value == value.trimmingCharacters(in: .whitespacesAndNewlines)
-    else {
+    guard let value = response.value(forHTTPHeaderField: "ETag"), isValidator(value) else {
       return nil
     }
     return value
+  }
+
+  /// An ETag / If-Match / If-None-Match value this client will send or keep.
+  static func isValidator(_ value: String) -> Bool {
+    !value.isEmpty && value.count <= 256
+      && value == value.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
   private func makeRequest(
@@ -476,7 +577,8 @@ public struct RelayClient: Sendable {
     query: [(String, String)],
     body: Data?,
     bearer: String?,
-    ifNoneMatch: String? = nil
+    ifNoneMatch: String? = nil,
+    ifMatch: String? = nil
   ) throws -> URLRequest {
     guard var components = URLComponents(url: Self.origin, resolvingAgainstBaseURL: false) else {
       throw RelayClientError.invalidOrigin
@@ -498,8 +600,11 @@ public struct RelayClient: Sendable {
     request.httpBody = body
     request.cachePolicy = .reloadIgnoringLocalCacheData
     request.httpShouldHandleCookies = false
-    if let ifNoneMatch, !ifNoneMatch.isEmpty, ifNoneMatch.count <= 256 {
+    if let ifNoneMatch, Self.isValidator(ifNoneMatch) {
       request.setValue(ifNoneMatch, forHTTPHeaderField: "If-None-Match")
+    }
+    if let ifMatch, Self.isValidator(ifMatch) {
+      request.setValue(ifMatch, forHTTPHeaderField: "If-Match")
     }
 
     if let bearer {

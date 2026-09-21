@@ -13,8 +13,10 @@ links to it rather than restating it.
   ([ADR 0034](decisions/0034-ios-collects-for-itself.md)). Its tabs are Quota, Usage, and Settings;
   Devices lives under Settings. It is usable with no Quota account at all: Overview then shows what
   the phone read for itself. With an account it also signs in with the
-  registered `quota-ios` public client and reads Account remaining quota and Today Usage, and the
-  two are merged into one row per subscription by the rule below. Either way it publishes the
+  registered `quota-ios` public client and reads Account remaining quota and Today Usage, and
+  writes the Account settings document (alert policy and the budget;
+  [ADR 0061](decisions/0061-alert-policy-and-the-budget-follow-the-account.md)). The two quota
+  sources are merged into one row per subscription by the rule below. Either way it publishes the
   non-secret App Group snapshot its widgets render. Signing in presents this phone's installation,
   so its session names a Device on platform `ios` and its own readings are uploaded on each
   refresh; the provider sessions behind them stay in this device's
@@ -519,9 +521,12 @@ readings for ten minutes, and answers `unknown` when a poll fails with nothing s
   `QuotaProviderWeb`, which must stay free of Security and Keychain, and not QuotaAccount, which
   owns a different credential. `QuotaKeychain` is the generic-password seam both session stores
   inject, and owns no policy of its own: the store that writes an item decides its accessibility.
-- `packages/apple-client` owns iOS account-read wire models, PKCE values, the fixed-origin Relay
-  client, account session refresh/revoke, the last-good Account summary cache, the activity
-  read (not cached), the Foundation-only `QuotaWidgetData` snapshot types and store, and
+- `packages/apple-client` owns iOS Account wire models, PKCE values, the fixed-origin Relay
+  client, account session refresh/revoke, the last-good Account summary cache, the Account
+  settings document (`GET` / `PUT /api/v2/account/settings` under `account:settings`,
+  [ADR 0061](decisions/0061-alert-policy-and-the-budget-follow-the-account.md) — this is the one
+  write `quota-ios` may make; identities, Delete Account, and profile stay the browser's),
+  the activity read (not cached), the Foundation-only `QuotaWidgetData` snapshot types and store, and
   `QuotaProviderStatus`, which polls catalog Statuspage v2 URLs on the device. `apps/ios`
   owns SwiftUI, `ASWebAuthenticationSession`, the provider sign-in sheet's `WKWebView` and its
   non-persistent data store, the local collection pass over its stored provider sessions and the

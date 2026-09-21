@@ -127,6 +127,9 @@ final class FixtureActivityLoader: ActivityLoading, @unchecked Sendable {
 }
 
 /// Transport that fails if any network call is attempted during a visual fixture session.
+///
+/// Visual fixtures share this for every Relay route, including `GET`/`PUT
+/// /api/v2/account/settings`, so DEBUG screenshots never hit the network.
 final class FixtureBlockedHTTPTransport: HTTPTransport, @unchecked Sendable {
   func perform(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
     throw HTTPTransportError.unavailable
