@@ -8,6 +8,11 @@ on:
   # merges only what passed there, so a pull request no longer has to be re-synced and re-run every
   # time something else lands first.
   merge_group:
+  # For a pull request whose checks never started: GitHub starts none while a pull request is in
+  # conflict, and none when the conflict later clears because main moved. `kick-unchecked-prs`
+  # dispatches this workflow on that branch so the required checks report on its head commit. With
+  # no base to diff against, `changes` answers that everything runs.
+  workflow_dispatch:
 
 permissions:
   contents: read

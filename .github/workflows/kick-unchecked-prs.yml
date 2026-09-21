@@ -1,0 +1,42 @@
+name: kick-unchecked-prs
+
+# GitHub starts no `pull_request` workflow for a pull request it cannot merge. When the conflict
+# then clears because main moved — not because anyone pushed to the pull request — nothing starts
+# them either, and the pull request waits on required checks that will never report. Every time
+# main moves, this starts `ci` by `workflow_dispatch` on the branch of any open pull request whose
+# head commit has no check run at all. See scripts/kick-unchecked-prs.mjs for the rule.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kick-unchecked-prs
+  cancel-in-progress: false
+
+jobs:
+  kick:
+    runs-on: ubuntu-24.04
+    # `actions: write` is what `gh workflow run` needs; `GITHUB_TOKEN` may raise a
+    # `workflow_dispatch`, which is why this needs neither the automation app nor a push to anyone's
+    # branch. `pull-requests: write` is for the one comment a still-conflicting pull request gets.
+    permissions:
+      actions: write
+      checks: read
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Start ci where it never started
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/kick-unchecked-prs.mjs
