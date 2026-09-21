@@ -67,3 +67,4 @@ instructions. Stable ADR URLs stay.
 | [0054](./0054-quotabar-is-resident-in-the-menu-bar.md) | QuotaBar is resident in the menu bar | Accepted |  |  |
 | [0055](./0055-an-account-period-is-a-local-date-range.md) | An Account period is a local-date range on the hour grid | Accepted |  |  |
 | [0056](./0056-a-period-export-is-the-period-on-screen.md) | A period export is the period on screen | Accepted |  |  |
+| [0057](./0057-content-is-opaque-glass-is-chrome.md) | Content is opaque; glass is chrome | Accepted |  |  |
