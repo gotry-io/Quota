@@ -1,11 +1,19 @@
-import type { UsageCostOutcomeRead } from "@gotry-io/quota-protocol";
+import {
+  type FirstSyncAccountDocument,
+  type FirstSyncPlan,
+  planFirstSync,
+} from "@gotry-io/quota-model";
+import {
+  type AccountSettings,
+  type AccountSettingsResponseRead,
+  DEFAULT_ACCOUNT_SETTINGS,
+  type UsageCostOutcomeRead,
+} from "@gotry-io/quota-protocol";
 
 /**
- * A monthly API-equivalent spend budget, which is this browser's own preference.
- *
- * It is never uploaded: a budget says what someone wants to be warned about, which is not a fact
- * about their Account. The website keeps it in `localStorage`; both Apple apps keep the same two
- * fields in `UserDefaults`. A crossing is announced once per month per threshold, keyed the way
+ * A monthly API-equivalent spend budget. The amount and the 80%/100% switch follow the Account
+ * (`GET`/`PUT /api/v2/account/settings`). This browser keeps only the "already told you" crossings
+ * in `localStorage`. A crossing is announced once per month per threshold, keyed the way
  * `QuotaAlerts` keys a fired alert: the month is the window and the share is the threshold.
  */
 export interface UsageBudget {
@@ -72,6 +80,67 @@ export function writeBudget(storage: Storage | null, budget: UsageBudget): Usage
     storage.setItem(ALERTS_KEY, normalized.alerts ? "on" : "off");
   }
   return normalized;
+}
+
+/** Drop the two local policy keys after the Account document is the source of truth. */
+export function clearLocalBudgetPolicy(storage: Storage | null): void {
+  storage?.removeItem(AMOUNT_KEY);
+  storage?.removeItem(ALERTS_KEY);
+}
+
+/** The wire's decimal string, two fraction digits, or `null` for no budget. */
+export function budgetAmountToWire(amountUSD: number | null): string | null {
+  const normalized = normalizedBudgetAmount(amountUSD);
+  return normalized === null ? null : normalized.toFixed(2);
+}
+
+export function usageBudgetFromDocument(budget: {
+  amount_usd: string | null;
+  alerts: boolean;
+}): UsageBudget {
+  return {
+    amountUSD:
+      budget.amount_usd === null ? null : normalizedBudgetAmount(Number(budget.amount_usd)),
+    alerts: budget.alerts,
+  };
+}
+
+/**
+ * Local policy as an Account settings document: the website has no alert-rules UI, so alerts
+ * are the stored defaults and only the budget comes from this browser's leftover keys.
+ */
+export function localAccountSettingsFromStorage(storage: Storage | null): AccountSettings {
+  const budget = readBudget(storage);
+  return {
+    alerts: {
+      reset_reminders: DEFAULT_ACCOUNT_SETTINGS.alerts.reset_reminders,
+      pace_alerts: DEFAULT_ACCOUNT_SETTINGS.alerts.pace_alerts,
+      thresholds: { ...DEFAULT_ACCOUNT_SETTINGS.alerts.thresholds },
+    },
+    budget: {
+      amount_usd: budgetAmountToWire(budget.amountUSD),
+      alerts: budget.alerts,
+    },
+  };
+}
+
+/** First sync for this browser's leftover budget. Does not reimplement `planFirstSync`. */
+export function planBudgetAdoption(
+  account: FirstSyncAccountDocument | AccountSettingsResponseRead,
+  storage: Storage | null,
+): FirstSyncPlan {
+  return planFirstSync(localAccountSettingsFromStorage(storage), {
+    revision: account.revision,
+    alerts: {
+      reset_reminders: account.alerts.reset_reminders,
+      pace_alerts: account.alerts.pace_alerts,
+      thresholds: { ...account.alerts.thresholds },
+    },
+    budget: {
+      amount_usd: account.budget.amount_usd,
+      alerts: account.budget.alerts,
+    },
+  });
 }
 
 /** The dollars an `amount_microusd` names, which is how every Usage cost is carried. */

@@ -5,6 +5,7 @@ import { expect, type Page, test } from "@playwright/test";
 import {
   accountReadFromSummary,
   accountUsagePeriod,
+  mockAccountSettings,
   screenshotAccountActivity,
   screenshotAccountActivityDay,
   screenshotAccountRhythm,
@@ -21,6 +22,7 @@ test.skip(!enabled, "gated by SCREENSHOTS=1");
 mkdirSync(outputDir, { recursive: true });
 
 async function mockV6(page: Page): Promise<void> {
+  await mockAccountSettings(page);
   await page.route(
     (url) => new URL(url).pathname === "/api/v2/providers/status",
     async (route) => {

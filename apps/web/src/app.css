@@ -2538,6 +2538,12 @@ button.usage-activity-cell[aria-pressed="true"] {
   font-weight: 600;
 }
 
+.usage-budget-note {
+  margin: 8px 0 0;
+  color: var(--mute);
+  font-size: var(--fs-caption);
+}
+
 .usage-budget-form {
   display: flex;
   align-items: flex-end;

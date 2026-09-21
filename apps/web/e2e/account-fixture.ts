@@ -6,7 +6,12 @@ import {
   AccountUsagePeriodResponseReadSchema,
   USAGE_HOUR_GRID_RULE,
 } from "@gotry-io/quota-protocol";
+import type { Page } from "@playwright/test";
 import { parseAccountResponse, parseAccountSummaryBody } from "../src/lib/account-reads.ts";
+import {
+  ACCOUNT_SETTINGS_PATH,
+  defaultAccountSettingsResponse,
+} from "../src/lib/account-settings-client.ts";
 
 type WireCase = { name: string; accepted: boolean; payload: unknown };
 type WireConformance = { contracts: { account_summary: WireCase[] } };
@@ -113,6 +118,57 @@ function retoken(
 }
 
 export const accountSummary = structuredClone(accepted.payload) as AccountSummary;
+
+export { defaultAccountSettingsResponse };
+
+/** Same-origin Account settings document the Usage budget reads. */
+export async function mockAccountSettings(
+  page: Page,
+  document: ReturnType<typeof defaultAccountSettingsResponse> = defaultAccountSettingsResponse(),
+): Promise<void> {
+  await page.route(
+    (url) => new URL(url).pathname === ACCOUNT_SETTINGS_PATH,
+    async (route) => {
+      const method = route.request().method();
+      if (method === "GET") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          headers: {
+            ETag: `"${document.revision}"`,
+            "Cache-Control": "private, no-cache",
+          },
+          body: JSON.stringify(document),
+        });
+        return;
+      }
+      if (method === "PUT") {
+        const posted = JSON.parse(route.request().postData() ?? "{}") as {
+          alerts: (typeof document)["alerts"];
+          budget: (typeof document)["budget"];
+        };
+        const next = {
+          protocol_version: 2,
+          revision: document.revision + 1,
+          updated_at: "2026-09-21T10:00:00.000Z",
+          alerts: posted.alerts,
+          budget: posted.budget,
+        };
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          headers: {
+            ETag: `"${next.revision}"`,
+            "Cache-Control": "private, no-cache",
+          },
+          body: JSON.stringify(next),
+        });
+        return;
+      }
+      await route.fallback();
+    },
+  );
+}
 
 export function accountReadFromSummary(summary: unknown = accountSummary): {
   protocol_version: 2;

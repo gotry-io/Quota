@@ -54,6 +54,7 @@ function save(event: SubmitEvent): void {
       {budget.amountUSD === null ? "Set budget" : "Edit"}
     </button>
   </div>
+  <p class="usage-budget-note">This budget follows your Account.</p>
 
   {#if editing}
     <form class="usage-budget-form" onsubmit={save}>

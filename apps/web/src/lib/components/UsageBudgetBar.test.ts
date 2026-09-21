@@ -30,6 +30,7 @@ it("meters this month against the budget and says when there is none", () => {
   const meter = screen.getByRole("progressbar");
   expect(meter.getAttribute("aria-valuenow")).toBe("10");
   expect(screen.getByText("$5.39 / $50.00 · 10%")).toBeTruthy();
+  expect(screen.getByText("This budget follows your Account.")).toBeTruthy();
 
   cleanup();
   mount({ amountUSD: null, alerts: true }, null);

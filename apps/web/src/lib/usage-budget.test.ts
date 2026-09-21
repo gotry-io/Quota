@@ -2,12 +2,17 @@ import { expect, it } from "vitest";
 import {
   budgetAlertKey,
   budgetAlertText,
+  budgetAmountToWire,
   budgetMonth,
   budgetProgress,
+  clearLocalBudgetPolicy,
+  localAccountSettingsFromStorage,
   normalizedBudgetAmount,
   pendingBudgetAlerts,
+  planBudgetAdoption,
   readBudget,
   readFiredBudgetAlerts,
+  usageBudgetFromDocument,
   writeBudget,
   writeFiredBudgetAlerts,
 } from "./usage-budget.ts";
@@ -85,4 +90,58 @@ it("remembers which crossings were already announced", () => {
 it("writes what a crossing says", () => {
   expect(budgetAlertText(80, 50)).toBe("80% of $50.00 spent");
   expect(budgetAlertText(100, 50)).toBe("$50.00 budget spent");
+});
+
+it("formats the amount as the wire's decimal string", () => {
+  expect(budgetAmountToWire(null)).toBeNull();
+  expect(budgetAmountToWire(50)).toBe("50.00");
+  expect(budgetAmountToWire(75.5)).toBe("75.50");
+  expect(usageBudgetFromDocument({ amount_usd: "250.00", alerts: false })).toEqual({
+    amountUSD: 250,
+    alerts: false,
+  });
+  expect(usageBudgetFromDocument({ amount_usd: null, alerts: true })).toEqual({
+    amountUSD: null,
+    alerts: true,
+  });
+});
+
+it("seeds an empty Account from this browser's leftover budget, and otherwise the Account wins", () => {
+  const storage = memoryStorage();
+  const emptyAccount = {
+    revision: 0,
+    alerts: { reset_reminders: true, pace_alerts: true, thresholds: {} },
+    budget: { amount_usd: null, alerts: true },
+  };
+
+  expect(planBudgetAdoption(emptyAccount, storage)).toEqual({
+    action: "adopt",
+    local: localAccountSettingsFromStorage(null),
+    write: null,
+  });
+
+  writeBudget(storage, { amountUSD: 50, alerts: false });
+  writeFiredBudgetAlerts(storage, ["budget:2026-09:80"]);
+  const seed = planBudgetAdoption(emptyAccount, storage);
+  expect(seed.action).toBe("seed");
+  expect(seed.write).toEqual({
+    alerts: { reset_reminders: true, pace_alerts: true, thresholds: {} },
+    budget: { amount_usd: "50.00", alerts: false },
+  });
+
+  const adopt = planBudgetAdoption(
+    {
+      revision: 1,
+      alerts: { reset_reminders: true, pace_alerts: true, thresholds: {} },
+      budget: { amount_usd: "250.00", alerts: true },
+    },
+    storage,
+  );
+  expect(adopt.action).toBe("adopt");
+  expect(adopt.write).toBeNull();
+  expect(adopt.local.budget).toEqual({ amount_usd: "250.00", alerts: true });
+
+  clearLocalBudgetPolicy(storage);
+  expect(readBudget(storage)).toEqual({ amountUSD: null, alerts: true });
+  expect(readFiredBudgetAlerts(storage)).toEqual(["budget:2026-09:80"]);
 });

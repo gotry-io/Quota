@@ -13,6 +13,7 @@ import {
   clearStoredPeriods,
   clearStoredSummary,
 } from "$lib/account-reads.ts";
+import { clearStoredAccountSettings } from "$lib/account-settings-client.ts";
 import { activityRangeKey, createAccountStore } from "$lib/account-store.svelte.ts";
 import { formatUtcDateRange } from "$lib/format.ts";
 import UsagePageHarness from "./usage-page-harness.svelte";
@@ -24,6 +25,7 @@ afterEach(() => {
   vi.useRealTimers();
   clearStoredSummary();
   clearStoredPeriods();
+  clearStoredAccountSettings();
 });
 
 type WireCase = { accepted: boolean; payload: unknown };
@@ -158,19 +160,52 @@ function periodFromSummary(url: string, summary: AccountSummaryRead) {
   return periodBody({ from, to, timezone, usage, breakdown });
 }
 
-function jsonResponse(body: unknown, status = 200): Response {
+function jsonResponse(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...headers },
   });
 }
 
-function mockFetch(handler: (url: string) => Response | Promise<Response>): { calls: string[] } {
+function settingsBody(
+  budget: { amount_usd: string | null; alerts: boolean } = { amount_usd: null, alerts: true },
+  revision = budget.amount_usd === null ? 0 : 1,
+) {
+  return {
+    protocol_version: 2,
+    revision,
+    updated_at: revision === 0 ? "1970-01-01T00:00:00Z" : "2026-09-21T10:00:00.000Z",
+    alerts: { reset_reminders: true, pace_alerts: true, thresholds: {} },
+    budget,
+  };
+}
+
+function mockFetch(
+  handler: (url: string, init?: RequestInit) => Response | Promise<Response>,
+  settings: ReturnType<typeof settingsBody> = settingsBody(),
+): { calls: string[] } {
   const calls: string[] = [];
-  vi.stubGlobal("fetch", (async (input: RequestInfo | URL) => {
+  vi.stubGlobal("fetch", (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     calls.push(url);
-    return handler(url);
+    if (url.includes("/account/settings")) {
+      if ((init?.method ?? "GET") === "PUT") {
+        const posted = JSON.parse(String(init?.body ?? "{}")) as {
+          alerts: (typeof settings)["alerts"];
+          budget: (typeof settings)["budget"];
+        };
+        const next = {
+          ...settings,
+          revision: settings.revision + 1,
+          updated_at: "2026-09-21T10:00:00.000Z",
+          alerts: posted.alerts,
+          budget: posted.budget,
+        };
+        return jsonResponse(next, 200, { ETag: `"${next.revision}"` });
+      }
+      return jsonResponse(settings, 200, { ETag: `"${settings.revision}"` });
+    }
+    return handler(url, init);
   }) as typeof fetch);
   return { calls };
 }
@@ -426,4 +461,31 @@ it("offers Export for a loaded period that has days", async () => {
   expect(exportTrigger).not.toBeNull();
   expect(exportTrigger?.getAttribute("aria-disabled")).toBeNull();
   expect(exportTrigger?.textContent?.trim()).toBe("Export");
+});
+
+it("meters the monthly budget from the Account document", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-08-12T12:00:00Z"));
+  const payload = acceptedSummary();
+  mockFetch(
+    (url) => {
+      if (url.includes("/account/summary")) return jsonResponse(payload);
+      if (url.includes("/account/usage/period"))
+        return jsonResponse(periodFromSummary(url, payload));
+      const to = new URL(url, "https://quota.test").searchParams.get("to") ?? "2026-08-12";
+      return jsonResponse(activityBody(to));
+    },
+    settingsBody({ amount_usd: "50.00", alerts: true }, 1),
+  );
+
+  const store = createAccountStore();
+  await store.ensureSummary();
+  const view = render(UsagePageHarness, { store });
+  await waitFor(() => {
+    expect(view.container.querySelector("#usage-budget-value")?.textContent).toContain("$50.00");
+  });
+  expect(view.container.textContent).toContain("This budget follows your Account.");
+  expect(view.container.querySelector("#usage-budget-value")?.textContent).toMatch(
+    /\/ \$50\.00 · /,
+  );
 });

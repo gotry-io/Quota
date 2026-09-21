@@ -289,11 +289,15 @@ print **some hours incomplete**; a range that retention cuts prints **some of th
 longer kept** and **This range goes past what Quota still keeps.**
 
 Above the totals is a **Monthly budget** card: an amount in USD, a **Tell me at 80% and 100%**
-switch, and a meter reading `spent / budget · percent` against this browser's `YYYY-MM` local
-month from the same period read. Both fields live
-in `localStorage` and never reach Relay. Crossing 80% and then 100% shows one `role="status"` line
-each per calendar month with a **Got it** button that records the crossing, because a browser page
-posts no notification. With no budget set the card reads **No budget is set for this month.**
+switch, and a meter reading `spent / budget · percent` against Account spend this month
+(the same period read for this browser's `YYYY-MM` local month). The amount and the switch follow
+the Account (`GET`/`PUT /api/v2/account/settings`); the card says **This budget follows your
+Account.** This browser keeps only the "already told you" crossings in `localStorage`. Crossing
+80% and then 100% shows one `role="status"` line each per calendar month with a **Got it** button
+that records the crossing, because a browser page posts no notification. With no budget set the
+card reads **No budget is set for this month.** A leftover local amount seeds the Account only
+when the document is still empty; otherwise the Account wins and the local policy keys are
+removed.
 
 At 1024 px and above the model tree and Activity
 sit side by side; below 1024 px they stack, tree first. User-facing dates, numbers, units, and
