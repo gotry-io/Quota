@@ -1446,6 +1446,7 @@ export {
   type FirstSyncPlan,
   isDefaultAccountSettings,
   type NormalizeAccountSettingsResult,
+  canonicalAmountUSD,
   normalizeAccountSettings,
   planFirstSync,
   reapplyEdit,

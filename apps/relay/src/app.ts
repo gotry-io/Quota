@@ -1,4 +1,5 @@
 import {
+  canonicalAmountUSD,
   mergeQuotaObservations,
   quotaSubscriptionKey,
   validateModelCatalog,
@@ -1435,7 +1436,16 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     const written = await options.state.writeAccountSettings({
       account_id: principal.account_id,
       expected_revision: matched,
-      settings: { alerts: update.alerts, budget: update.budget },
+      // Stored in one spelling whoever wrote it: "0.5", "0.50" and "00.5" are the same budget, and
+      // a document that kept its writer's text would differ by which client saved last.
+      settings: {
+        alerts: update.alerts,
+        budget: {
+          amount_usd:
+            update.budget.amount_usd === null ? null : canonicalAmountUSD(update.budget.amount_usd),
+          alerts: update.budget.alerts,
+        },
+      },
       written_at: now().toISOString(),
     });
     if (written.outcome === "conflict") {

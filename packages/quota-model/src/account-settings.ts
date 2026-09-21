@@ -6,10 +6,33 @@ import {
 
 export type NormalizeAccountSettingsResult = { ok: AccountSettings } | { refused: true };
 
+/**
+ * One spelling per amount: no leading zeros and exactly two fraction digits.
+ *
+ * The wire accepts `"0.5"`, `"0.50"` and `"00.5"` for the same fifty cents, and three runtimes write
+ * this field. Swift can only write cents, because `Decimal` does not keep a scale; a writer that
+ * passed the text through would make the stored document depend on who wrote it last. Text in, text
+ * out — never through a float.
+ */
+export function canonicalAmountUSD(amount: string): string {
+  const [whole = "0", fraction = ""] = amount.split(".");
+  return `${whole.replace(/^0+(?=\d)/, "")}.${fraction.padEnd(2, "0")}`;
+}
+
 /** The stored document, or a refusal when the input is not that document. */
 export function normalizeAccountSettings(input: unknown): NormalizeAccountSettingsResult {
   const parsed = AccountSettingsSchema.safeParse(input);
-  return parsed.success ? { ok: parsed.data } : { refused: true };
+  if (!parsed.success) return { refused: true };
+  const amount = parsed.data.budget.amount_usd;
+  return {
+    ok: {
+      alerts: parsed.data.alerts,
+      budget: {
+        amount_usd: amount === null ? null : canonicalAmountUSD(amount),
+        alerts: parsed.data.budget.alerts,
+      },
+    },
+  };
 }
 
 export type FirstSyncAction = "seed" | "adopt" | "adopt_and_merge";

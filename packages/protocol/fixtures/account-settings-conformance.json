@@ -7,31 +7,55 @@
         "alerts": {
           "reset_reminders": true,
           "pace_alerts": true,
-          "thresholds": { "a1b2c3d4e5f6": [20, 10] }
+          "thresholds": {
+            "a1b2c3d4e5f6": [20, 10]
+          }
         },
-        "budget": { "amount_usd": "250.00", "alerts": true }
+        "budget": {
+          "amount_usd": "250.00",
+          "alerts": true
+        }
       },
       "expected": {
         "ok": {
           "alerts": {
             "reset_reminders": true,
             "pace_alerts": true,
-            "thresholds": { "a1b2c3d4e5f6": [20, 10] }
+            "thresholds": {
+              "a1b2c3d4e5f6": [20, 10]
+            }
           },
-          "budget": { "amount_usd": "250.00", "alerts": true }
+          "budget": {
+            "amount_usd": "250.00",
+            "alerts": true
+          }
         }
       }
     },
     {
       "name": "an empty thresholds map is the stored default, and no budget is null",
       "input": {
-        "alerts": { "reset_reminders": true, "pace_alerts": true, "thresholds": {} },
-        "budget": { "amount_usd": null, "alerts": true }
+        "alerts": {
+          "reset_reminders": true,
+          "pace_alerts": true,
+          "thresholds": {}
+        },
+        "budget": {
+          "amount_usd": null,
+          "alerts": true
+        }
       },
       "expected": {
         "ok": {
-          "alerts": { "reset_reminders": true, "pace_alerts": true, "thresholds": {} },
-          "budget": { "amount_usd": null, "alerts": true }
+          "alerts": {
+            "reset_reminders": true,
+            "pace_alerts": true,
+            "thresholds": {}
+          },
+          "budget": {
+            "amount_usd": null,
+            "alerts": true
+          }
         }
       }
     },
@@ -41,18 +65,28 @@
         "alerts": {
           "reset_reminders": false,
           "pace_alerts": false,
-          "thresholds": { "112233445566": [15] }
+          "thresholds": {
+            "112233445566": [15]
+          }
         },
-        "budget": { "amount_usd": "0.01", "alerts": false }
+        "budget": {
+          "amount_usd": "0.01",
+          "alerts": false
+        }
       },
       "expected": {
         "ok": {
           "alerts": {
             "reset_reminders": false,
             "pace_alerts": false,
-            "thresholds": { "112233445566": [15] }
+            "thresholds": {
+              "112233445566": [15]
+            }
           },
-          "budget": { "amount_usd": "0.01", "alerts": false }
+          "budget": {
+            "amount_usd": "0.01",
+            "alerts": false
+          }
         }
       }
     },
@@ -62,11 +96,18 @@
         "alerts": {
           "reset_reminders": true,
           "pace_alerts": true,
-          "thresholds": { "a1b2c3d4e5f6": [10, 20] }
+          "thresholds": {
+            "a1b2c3d4e5f6": [10, 20]
+          }
         },
-        "budget": { "amount_usd": null, "alerts": true }
+        "budget": {
+          "amount_usd": null,
+          "alerts": true
+        }
       },
-      "expected": { "refused": true }
+      "expected": {
+        "refused": true
+      }
     },
     {
       "name": "an equal pair is not descending and is refused",
@@ -74,11 +115,18 @@
         "alerts": {
           "reset_reminders": true,
           "pace_alerts": true,
-          "thresholds": { "a1b2c3d4e5f6": [20, 20] }
+          "thresholds": {
+            "a1b2c3d4e5f6": [20, 20]
+          }
         },
-        "budget": { "amount_usd": null, "alerts": true }
+        "budget": {
+          "amount_usd": null,
+          "alerts": true
+        }
       },
-      "expected": { "refused": true }
+      "expected": {
+        "refused": true
+      }
     },
     {
       "name": "more than two thresholds are refused",
@@ -86,11 +134,18 @@
         "alerts": {
           "reset_reminders": true,
           "pace_alerts": true,
-          "thresholds": { "a1b2c3d4e5f6": [30, 20, 10] }
+          "thresholds": {
+            "a1b2c3d4e5f6": [30, 20, 10]
+          }
         },
-        "budget": { "amount_usd": null, "alerts": true }
+        "budget": {
+          "amount_usd": null,
+          "alerts": true
+        }
       },
-      "expected": { "refused": true }
+      "expected": {
+        "refused": true
+      }
     },
     {
       "name": "an uppercase selector is refused",
@@ -98,36 +153,151 @@
         "alerts": {
           "reset_reminders": true,
           "pace_alerts": true,
-          "thresholds": { "A1B2C3D4E5F6": [20, 10] }
+          "thresholds": {
+            "A1B2C3D4E5F6": [20, 10]
+          }
         },
-        "budget": { "amount_usd": null, "alerts": true }
+        "budget": {
+          "amount_usd": null,
+          "alerts": true
+        }
       },
-      "expected": { "refused": true }
+      "expected": {
+        "refused": true
+      }
     },
     {
       "name": "a budget of zero is refused",
       "input": {
-        "alerts": { "reset_reminders": true, "pace_alerts": true, "thresholds": {} },
-        "budget": { "amount_usd": "0", "alerts": true }
+        "alerts": {
+          "reset_reminders": true,
+          "pace_alerts": true,
+          "thresholds": {}
+        },
+        "budget": {
+          "amount_usd": "0",
+          "alerts": true
+        }
       },
-      "expected": { "refused": true }
+      "expected": {
+        "refused": true
+      }
     },
     {
       "name": "a budget above one million is refused",
       "input": {
-        "alerts": { "reset_reminders": true, "pace_alerts": true, "thresholds": {} },
-        "budget": { "amount_usd": "1000000.01", "alerts": true }
+        "alerts": {
+          "reset_reminders": true,
+          "pace_alerts": true,
+          "thresholds": {}
+        },
+        "budget": {
+          "amount_usd": "1000000.01",
+          "alerts": true
+        }
       },
-      "expected": { "refused": true }
+      "expected": {
+        "refused": true
+      }
     },
     {
       "name": "an unknown field is refused",
       "input": {
-        "alerts": { "reset_reminders": true, "pace_alerts": true, "thresholds": {} },
-        "budget": { "amount_usd": null, "alerts": true },
+        "alerts": {
+          "reset_reminders": true,
+          "pace_alerts": true,
+          "thresholds": {}
+        },
+        "budget": {
+          "amount_usd": null,
+          "alerts": true
+        },
         "enabled": false
       },
-      "expected": { "refused": true }
+      "expected": {
+        "refused": true
+      }
+    },
+    {
+      "name": "one fraction digit is stored as cents",
+      "input": {
+        "alerts": {
+          "reset_reminders": true,
+          "pace_alerts": true,
+          "thresholds": {}
+        },
+        "budget": {
+          "amount_usd": "0.5",
+          "alerts": true
+        }
+      },
+      "expected": {
+        "ok": {
+          "alerts": {
+            "reset_reminders": true,
+            "pace_alerts": true,
+            "thresholds": {}
+          },
+          "budget": {
+            "amount_usd": "0.50",
+            "alerts": true
+          }
+        }
+      }
+    },
+    {
+      "name": "a whole amount is stored as cents",
+      "input": {
+        "alerts": {
+          "reset_reminders": true,
+          "pace_alerts": true,
+          "thresholds": {}
+        },
+        "budget": {
+          "amount_usd": "1000000",
+          "alerts": true
+        }
+      },
+      "expected": {
+        "ok": {
+          "alerts": {
+            "reset_reminders": true,
+            "pace_alerts": true,
+            "thresholds": {}
+          },
+          "budget": {
+            "amount_usd": "1000000.00",
+            "alerts": true
+          }
+        }
+      }
+    },
+    {
+      "name": "leading zeros are not part of an amount",
+      "input": {
+        "alerts": {
+          "reset_reminders": true,
+          "pace_alerts": true,
+          "thresholds": {}
+        },
+        "budget": {
+          "amount_usd": "0250.5",
+          "alerts": true
+        }
+      },
+      "expected": {
+        "ok": {
+          "alerts": {
+            "reset_reminders": true,
+            "pace_alerts": true,
+            "thresholds": {}
+          },
+          "budget": {
+            "amount_usd": "250.50",
+            "alerts": true
+          }
+        }
+      }
     }
   ],
   "first_sync": [
@@ -137,14 +307,26 @@
         "alerts": {
           "reset_reminders": false,
           "pace_alerts": true,
-          "thresholds": { "a1b2c3d4e5f6": [30, 5] }
+          "thresholds": {
+            "a1b2c3d4e5f6": [30, 5]
+          }
         },
-        "budget": { "amount_usd": "250.00", "alerts": false }
+        "budget": {
+          "amount_usd": "250.00",
+          "alerts": false
+        }
       },
       "account": {
         "revision": 0,
-        "alerts": { "reset_reminders": true, "pace_alerts": true, "thresholds": {} },
-        "budget": { "amount_usd": null, "alerts": true }
+        "alerts": {
+          "reset_reminders": true,
+          "pace_alerts": true,
+          "thresholds": {}
+        },
+        "budget": {
+          "amount_usd": null,
+          "alerts": true
+        }
       },
       "expected": {
         "action": "seed",
@@ -152,36 +334,67 @@
           "alerts": {
             "reset_reminders": false,
             "pace_alerts": true,
-            "thresholds": { "a1b2c3d4e5f6": [30, 5] }
+            "thresholds": {
+              "a1b2c3d4e5f6": [30, 5]
+            }
           },
-          "budget": { "amount_usd": "250.00", "alerts": false }
+          "budget": {
+            "amount_usd": "250.00",
+            "alerts": false
+          }
         },
         "write": {
           "alerts": {
             "reset_reminders": false,
             "pace_alerts": true,
-            "thresholds": { "a1b2c3d4e5f6": [30, 5] }
+            "thresholds": {
+              "a1b2c3d4e5f6": [30, 5]
+            }
           },
-          "budget": { "amount_usd": "250.00", "alerts": false }
+          "budget": {
+            "amount_usd": "250.00",
+            "alerts": false
+          }
         }
       }
     },
     {
       "name": "an empty Account and default local values write nothing",
       "local": {
-        "alerts": { "reset_reminders": true, "pace_alerts": true, "thresholds": {} },
-        "budget": { "amount_usd": null, "alerts": true }
+        "alerts": {
+          "reset_reminders": true,
+          "pace_alerts": true,
+          "thresholds": {}
+        },
+        "budget": {
+          "amount_usd": null,
+          "alerts": true
+        }
       },
       "account": {
         "revision": 0,
-        "alerts": { "reset_reminders": true, "pace_alerts": true, "thresholds": {} },
-        "budget": { "amount_usd": null, "alerts": true }
+        "alerts": {
+          "reset_reminders": true,
+          "pace_alerts": true,
+          "thresholds": {}
+        },
+        "budget": {
+          "amount_usd": null,
+          "alerts": true
+        }
       },
       "expected": {
         "action": "adopt",
         "local": {
-          "alerts": { "reset_reminders": true, "pace_alerts": true, "thresholds": {} },
-          "budget": { "amount_usd": null, "alerts": true }
+          "alerts": {
+            "reset_reminders": true,
+            "pace_alerts": true,
+            "thresholds": {}
+          },
+          "budget": {
+            "amount_usd": null,
+            "alerts": true
+          }
         },
         "write": null
       }
@@ -192,18 +405,28 @@
         "alerts": {
           "reset_reminders": false,
           "pace_alerts": true,
-          "thresholds": { "a1b2c3d4e5f6": [30, 5] }
+          "thresholds": {
+            "a1b2c3d4e5f6": [30, 5]
+          }
         },
-        "budget": { "amount_usd": "250.00", "alerts": false }
+        "budget": {
+          "amount_usd": "250.00",
+          "alerts": false
+        }
       },
       "account": {
         "revision": 3,
         "alerts": {
           "reset_reminders": true,
           "pace_alerts": false,
-          "thresholds": { "112233445566": [15] }
+          "thresholds": {
+            "112233445566": [15]
+          }
         },
-        "budget": { "amount_usd": "100.00", "alerts": true }
+        "budget": {
+          "amount_usd": "100.00",
+          "alerts": true
+        }
       },
       "expected": {
         "action": "adopt_and_merge",
@@ -216,7 +439,10 @@
               "a1b2c3d4e5f6": [30, 5]
             }
           },
-          "budget": { "amount_usd": "100.00", "alerts": true }
+          "budget": {
+            "amount_usd": "100.00",
+            "alerts": true
+          }
         },
         "write": {
           "alerts": {
@@ -227,7 +453,10 @@
               "a1b2c3d4e5f6": [30, 5]
             }
           },
-          "budget": { "amount_usd": "100.00", "alerts": true }
+          "budget": {
+            "amount_usd": "100.00",
+            "alerts": true
+          }
         }
       }
     },
@@ -237,18 +466,28 @@
         "alerts": {
           "reset_reminders": false,
           "pace_alerts": true,
-          "thresholds": { "112233445566": [40, 10] }
+          "thresholds": {
+            "112233445566": [40, 10]
+          }
         },
-        "budget": { "amount_usd": "10.00", "alerts": false }
+        "budget": {
+          "amount_usd": "10.00",
+          "alerts": false
+        }
       },
       "account": {
         "revision": 4,
         "alerts": {
           "reset_reminders": true,
           "pace_alerts": false,
-          "thresholds": { "112233445566": [15] }
+          "thresholds": {
+            "112233445566": [15]
+          }
         },
-        "budget": { "amount_usd": "100.00", "alerts": true }
+        "budget": {
+          "amount_usd": "100.00",
+          "alerts": true
+        }
       },
       "expected": {
         "action": "adopt",
@@ -256,9 +495,14 @@
           "alerts": {
             "reset_reminders": true,
             "pace_alerts": false,
-            "thresholds": { "112233445566": [15] }
+            "thresholds": {
+              "112233445566": [15]
+            }
           },
-          "budget": { "amount_usd": "100.00", "alerts": true }
+          "budget": {
+            "amount_usd": "100.00",
+            "alerts": true
+          }
         },
         "write": null
       }
@@ -276,9 +520,14 @@
         "alerts": {
           "reset_reminders": true,
           "pace_alerts": true,
-          "thresholds": { "112233445566": [20, 10] }
+          "thresholds": {
+            "112233445566": [20, 10]
+          }
         },
-        "budget": { "amount_usd": "100.00", "alerts": true }
+        "budget": {
+          "amount_usd": "100.00",
+          "alerts": true
+        }
       },
       "expected": {
         "alerts": {
@@ -289,47 +538,78 @@
             "a1b2c3d4e5f6": [30, 5]
           }
         },
-        "budget": { "amount_usd": "100.00", "alerts": true }
+        "budget": {
+          "amount_usd": "100.00",
+          "alerts": true
+        }
       }
     },
     {
       "name": "a reset-reminder edit keeps selectors the editor does not recognise",
-      "edit": { "kind": "set_reset_reminders", "value": false },
+      "edit": {
+        "kind": "set_reset_reminders",
+        "value": false
+      },
       "fresh": {
         "alerts": {
           "reset_reminders": true,
           "pace_alerts": false,
-          "thresholds": { "112233445566": [15], "deadbeef0001": [5] }
+          "thresholds": {
+            "112233445566": [15],
+            "deadbeef0001": [5]
+          }
         },
-        "budget": { "amount_usd": null, "alerts": true }
+        "budget": {
+          "amount_usd": null,
+          "alerts": true
+        }
       },
       "expected": {
         "alerts": {
           "reset_reminders": false,
           "pace_alerts": false,
-          "thresholds": { "112233445566": [15], "deadbeef0001": [5] }
+          "thresholds": {
+            "112233445566": [15],
+            "deadbeef0001": [5]
+          }
         },
-        "budget": { "amount_usd": null, "alerts": true }
+        "budget": {
+          "amount_usd": null,
+          "alerts": true
+        }
       }
     },
     {
       "name": "a budget-amount edit overwrites only the amount",
-      "edit": { "kind": "set_budget_amount", "value": "75.50" },
+      "edit": {
+        "kind": "set_budget_amount",
+        "value": "75.50"
+      },
       "fresh": {
         "alerts": {
           "reset_reminders": true,
           "pace_alerts": true,
-          "thresholds": { "aabbccddeeff": [20, 10] }
+          "thresholds": {
+            "aabbccddeeff": [20, 10]
+          }
         },
-        "budget": { "amount_usd": "250.00", "alerts": false }
+        "budget": {
+          "amount_usd": "250.00",
+          "alerts": false
+        }
       },
       "expected": {
         "alerts": {
           "reset_reminders": true,
           "pace_alerts": true,
-          "thresholds": { "aabbccddeeff": [20, 10] }
+          "thresholds": {
+            "aabbccddeeff": [20, 10]
+          }
         },
-        "budget": { "amount_usd": "75.50", "alerts": false }
+        "budget": {
+          "amount_usd": "75.50",
+          "alerts": false
+        }
       }
     }
   ]
