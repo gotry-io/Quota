@@ -2,7 +2,11 @@
 import type { UsagePeriodRead } from "@gotry-io/quota-protocol";
 import { goto } from "$app/navigation";
 import { page } from "$app/state";
-import { accountNoticeActionLabel, accountNoticeRetry } from "$lib/account-errors";
+import {
+  type AccountError,
+  accountNoticeActionLabel,
+  accountNoticeRetry,
+} from "$lib/account-errors";
 import { usageStatusLine } from "$lib/account-overview";
 import {
   accountActivityRange,
@@ -11,6 +15,12 @@ import {
   browserTimezone,
   usagePeriodResourceKey,
 } from "$lib/account-reads.ts";
+import {
+  type BudgetEdit,
+  fetchAccountSettings,
+  saveBudget as saveAccountBudget,
+  writeAccountSettings,
+} from "$lib/account-settings-client";
 import { activityRangeKey, getAccountStore } from "$lib/account-store.svelte.ts";
 import LoadingBlock from "$lib/components/LoadingBlock.svelte";
 import RetryNotice from "$lib/components/RetryNotice.svelte";
@@ -24,14 +34,17 @@ import UsageRhythm from "$lib/components/UsageRhythm.svelte";
 import { costBasisLabel, formatCost, formatCount, formatUtcDateRange } from "$lib/format";
 import { usageActivityDayFromQuery, usageActivityDayHref } from "$lib/usage-activity";
 import {
+  budgetAmountToWire,
   budgetMonth,
   budgetProgress,
+  clearLocalBudgetPolicy,
   costDollars,
-  readBudget,
+  NO_BUDGET,
+  planBudgetAdoption,
   readFiredBudgetAlerts,
   type UsageBudget,
+  usageBudgetFromDocument,
   usageBudgetStorage,
-  writeBudget,
   writeFiredBudgetAlerts,
 } from "$lib/usage-budget";
 import {
@@ -56,7 +69,8 @@ import {
 } from "$lib/usage-period";
 
 const store = getAccountStore();
-let budget = $state<UsageBudget>(readBudget(usageBudgetStorage()));
+let budget = $state<UsageBudget>(NO_BUDGET);
+let budgetError = $state<AccountError | null>(null);
 let firedBudgetAlerts = $state<string[]>(readFiredBudgetAlerts(usageBudgetStorage()));
 const utcDate = $derived(store.now.toISOString().slice(0, 10));
 const activityRange = $derived(accountActivityRange(new Date(`${utcDate}T00:00:00Z`)));
@@ -197,8 +211,58 @@ function writeDay(day: string | null): void {
   });
 }
 
-function saveBudget(next: UsageBudget): void {
-  budget = writeBudget(usageBudgetStorage(), next);
+$effect(() => {
+  void loadBudget();
+});
+
+async function loadBudget(): Promise<void> {
+  budgetError = null;
+  const fetched = await fetchAccountSettings();
+  if (fetched.status === "error") {
+    budgetError = fetched.error;
+    return;
+  }
+  const storage = usageBudgetStorage();
+  const plan = planBudgetAdoption(fetched.settings, storage);
+  if (plan.write) {
+    const written = await writeAccountSettings(plan.write);
+    if (written.status === "error") {
+      budgetError = written.error;
+      return;
+    }
+    if (written.status === "ok" || written.status === "stale" || written.status === "conflict") {
+      budget = usageBudgetFromDocument(written.settings.budget);
+    }
+  } else {
+    budget = usageBudgetFromDocument(plan.local.budget);
+  }
+  clearLocalBudgetPolicy(storage);
+}
+
+function changeBudget(next: UsageBudget): void {
+  const edit: BudgetEdit =
+    next.alerts !== budget.alerts
+      ? { kind: "set_budget_alerts", value: next.alerts }
+      : { kind: "set_budget_amount", value: budgetAmountToWire(next.amountUSD) };
+  budget = next;
+  void persistBudget(edit);
+}
+
+async function persistBudget(edit: BudgetEdit): Promise<void> {
+  budgetError = null;
+  const result = await saveAccountBudget(edit);
+  if (result.status === "ok") {
+    budget = usageBudgetFromDocument(result.settings.budget);
+    return;
+  }
+  if (result.status === "conflict") {
+    budget = usageBudgetFromDocument(result.settings.budget);
+    budgetError = { status: "unavailable", message: result.message, action: { type: "retry" } };
+    return;
+  }
+  if (result.status === "error") {
+    budgetError = result.error;
+  }
 }
 
 function acknowledgeBudgetAlerts(keys: readonly string[]): void {
@@ -235,9 +299,17 @@ function acknowledgeBudgetAlerts(keys: readonly string[]): void {
   progress={budgetView}
   {month}
   fired={firedBudgetAlerts}
-  onChangeBudget={saveBudget}
+  onChangeBudget={changeBudget}
   onAcknowledge={acknowledgeBudgetAlerts}
 />
+
+{#if budgetError}
+  <RetryNotice
+    message={budgetError.message}
+    actionLabel={accountNoticeActionLabel(budgetError)}
+    onRetry={accountNoticeRetry(budgetError, () => void loadBudget())}
+  />
+{/if}
 
 {#if store.loadError}
   <RetryNotice

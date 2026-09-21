@@ -7,10 +7,12 @@ import {
   accountReadFromSummary,
   accountSummary,
   accountUsagePeriod,
+  mockAccountSettings,
   screenshotAccountRhythm,
 } from "./account-fixture.ts";
 
 async function mockV6(page: Page): Promise<void> {
+  await mockAccountSettings(page);
   await page.route(
     (url) => new URL(url).pathname === "/api/v2/account",
     async (route) => {

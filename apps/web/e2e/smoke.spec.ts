@@ -7,6 +7,7 @@ import {
   accountReadFromSummary,
   accountSummary,
   accountUsagePeriod,
+  mockAccountSettings,
   screenshotAccountRhythm,
   screenshotAccountSummary,
 } from "./account-fixture.ts";
@@ -62,6 +63,7 @@ async function mockAccountRead(page: Page, summary: unknown = accountSummary): P
 
 async function mockV6(page: Page, summary: unknown = accountSummary): Promise<void> {
   await mockAccountRead(page, summary);
+  await mockAccountSettings(page);
   await page.route("**/api/v6/**", async (route) => {
     const url = route.request().url();
     if (url.includes("/api/v6/account/summary")) {
@@ -171,6 +173,7 @@ test("switching account tabs does not refetch summary or activity", async ({ pag
   let summaryRequests = 0;
   let activityListRequests = 0;
   await mockAccountRead(page);
+  await mockAccountSettings(page);
   await page.route("**/api/v6/**", async (route) => {
     const url = route.request().url();
     if (url.includes("/api/v6/account/summary")) {

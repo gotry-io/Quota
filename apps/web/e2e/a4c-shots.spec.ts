@@ -5,6 +5,8 @@ import { expect, type Page, test } from "@playwright/test";
 import {
   accountReadFromSummary,
   accountUsagePeriod,
+  defaultAccountSettingsResponse,
+  mockAccountSettings,
   screenshotAccountActivity,
   screenshotAccountActivityDay,
   screenshotAccountRhythm,
@@ -21,6 +23,7 @@ test.skip(!enabled, "gated by SCREENSHOTS=1");
 mkdirSync(outputDir, { recursive: true });
 
 async function mockV6(page: Page): Promise<void> {
+  await mockAccountSettings(page);
   await page.route(
     (url) => new URL(url).pathname === "/api/v2/account",
     async (route) => {
@@ -131,11 +134,12 @@ test("Usage custom range", async ({ page }) => {
 });
 
 test("Usage budget row", async ({ page }) => {
+  const settings = defaultAccountSettingsResponse();
+  settings.revision = 1;
+  settings.updated_at = "2026-09-21T10:00:00.000Z";
+  settings.budget = { amount_usd: "50.00", alerts: true };
   await mockV6(page);
-  await page.addInitScript(() => {
-    localStorage.setItem("quota.usage.budget.amount", "50");
-    localStorage.setItem("quota.usage.budget.alerts", "on");
-  });
+  await mockAccountSettings(page, settings);
   await page.goto("/my/usage");
   await expect(page.getByRole("heading", { name: "Monthly budget" })).toBeVisible();
   await expect(page.locator("#usage-budget-value")).toBeVisible();
