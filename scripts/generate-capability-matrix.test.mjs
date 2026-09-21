@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -11,23 +12,34 @@ const generated = join(root, "docs/providers/README.md");
 const catalogPath = join(root, "packages/provider/catalog.json");
 const catalog = JSON.parse(readFileSync(catalogPath, "utf8"));
 
+let catalogOverride;
+
 function run(args = []) {
   return spawnSync(process.execPath, ["--experimental-strip-types", script, ...args], {
     cwd: root,
     encoding: "utf8",
+    env: catalogOverride
+      ? { ...process.env, QUOTA_CAPABILITY_CATALOG: catalogOverride }
+      : process.env,
   });
 }
 
-/** Rewrite the catalog, run the generator, and put the original back whatever happens. */
+/**
+ * Run the generator against a changed copy of the catalog. The real file is never written:
+ * `generate-reference` reads it too, `node --test` runs the two files side by side, and a write is
+ * a truncate followed by a write — the reader in between parsed an empty catalog and failed main.
+ */
 function withCatalog(mutate, body) {
-  const original = readFileSync(catalogPath, "utf8");
-  const document = JSON.parse(original);
+  const document = JSON.parse(readFileSync(catalogPath, "utf8"));
+  const directory = mkdtempSync(join(tmpdir(), "quota-capability-catalog-"));
   try {
     mutate(document);
-    writeFileSync(catalogPath, `${JSON.stringify(document, null, 2)}\n`);
+    catalogOverride = join(directory, "catalog.json");
+    writeFileSync(catalogOverride, `${JSON.stringify(document, null, 2)}\n`);
     body();
   } finally {
-    writeFileSync(catalogPath, original);
+    catalogOverride = undefined;
+    rmSync(directory, { recursive: true, force: true });
   }
 }
 
