@@ -81,7 +81,11 @@ const ANCHORS = [
 const MARKS = { fixture: "F", live: "L", test: "T", unverified: "U" };
 
 const catalogPath = "packages/provider/catalog.json";
-const catalog = JSON.parse(readFileSync(join(root, catalogPath), "utf8"));
+// A test that wants a catalog with something wrong in it points here at a copy. It must not rewrite
+// the real file: other generators read it, their tests run beside this one, and a reader that
+// arrives between the truncate and the write sees an empty catalog.
+const catalogSource = process.env.QUOTA_CAPABILITY_CATALOG ?? join(root, catalogPath);
+const catalog = JSON.parse(readFileSync(catalogSource, "utf8"));
 const schema = JSON.parse(
   readFileSync(join(root, "packages/provider/catalog.schema.json"), "utf8"),
 );
