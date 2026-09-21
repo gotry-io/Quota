@@ -163,6 +163,19 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      # The audit outcomes again, on their own and small: the trend job reads the last several
+      # nights of these, and should not have to download every night's pictures to do it.
+      - name: Upload the audit outcomes for the trend gate
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-screens-outcomes
+          path: |
+            dist/ios-screens-outcomes/
+            dist/ios-screens-status
+          if-no-files-found: warn
+          retention-days: 14
+
       # The captures and audits are the point; a profile that failed — or that produced no evidence
       # that it ran at all — keeps this job red without blocking the queue, because this workflow
       # is not a required check.
@@ -177,3 +190,111 @@ jobs:
             exit 1
           fi
           ! grep -qv " 0$" dist/ios-screens-status
+
+  # An `incomplete` audit — the auditor hit its deadline — never fails a census run, by design: one
+  # slow audit is not a finding. A screen whose audit times out every night is therefore never
+  # audited and nothing says so. This reads the audit outcomes of the recent nightly runs and
+  # reddens itself when a screen has stopped completing. Nightly and manual runs only: a pull
+  # request has no window of its own to read. It stores nothing — the artifacts are the history —
+  # opens or updates one issue, and blocks no merge, because this workflow is not a required check.
+  trend:
+    needs: screens
+    if: >-
+      ${{ always()
+      && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+      && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      # The window is five eligible runs; a few more are listed because a run whose artifact expired
+      # or never existed carries no evidence and is then eligible for nothing.
+      - name: Download the audit outcomes of the recent nightly runs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p runs
+          # This run first: a manual run is not a scheduled one, so `gh run list` would not name it,
+          # and on the nightly its own artifact is the newest evidence there is.
+          {
+            gh run view "$RUN_ID" --repo "$REPO" --json databaseId,createdAt \
+              --jq '"\(.databaseId) \(.createdAt)"'
+            gh run list --repo "$REPO" --workflow ios-screens.yml --event schedule --branch main \
+              --limit 8 --json databaseId,createdAt --jq '.[] | "\(.databaseId) \(.createdAt)"'
+          } | awk '!seen[$1]++' > wanted-runs
+          # `</dev/null` so nothing in the loop can consume the run list the loop is reading: a
+          # window silently cut to one run would read as "not enough history" and pass.
+          while read -r id created; do
+            if gh run download "$id" --repo "$REPO" --name ios-screens-outcomes \
+              --dir "runs/$id" </dev/null; then
+              printf '{"run_id":"%s","created_at":"%s"}\n' "$id" "$created" > "runs/$id/run.json"
+            else
+              echo "::notice::run $id kept no outcomes artifact; it is eligible for nothing"
+              rm -rf "runs/$id"
+            fi
+          done < wanted-runs
+
+      - name: Judge the trend
+        id: trend
+        run: |
+          set -uo pipefail
+          mkdir -p dist
+          status=0
+          node scripts/ios-audit-trend.mjs --runs-dir runs --n 5 \
+            --out dist/ios-audit-trend.json \
+            --issue-body dist/ios-audit-trend-issue.md \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            > dist/ios-audit-trend.md || status=$?
+          cat dist/ios-audit-trend.md >> "$GITHUB_STEP_SUMMARY"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+
+      # The step summary is prose; this is the same verdict a reviewer can re-read.
+      - name: Upload the trend verdict
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-audit-trend
+          path: dist/ios-audit-trend.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      # One issue, found by its exact title. A gate that opened a new issue every night would be
+      # noise, and closing that one issue when the gate clears is the signal that it was fixed.
+      - name: Open, update, or close the tracking issue
+        if: ${{ steps.trend.outputs.status == '0' || steps.trend.outputs.status == '1' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          STATUS: ${{ steps.trend.outputs.status }}
+          TITLE: "iOS screens: audits not completing"
+        run: |
+          set -euo pipefail
+          number=$(gh issue list --repo "$REPO" --state open --limit 100 --json number,title \
+            --jq 'first(.[] | select(.title == env.TITLE) | .number)')
+          if [ "$STATUS" = "1" ] && [ -z "$number" ]; then
+            gh issue create --repo "$REPO" --title "$TITLE" \
+              --body-file dist/ios-audit-trend-issue.md
+          elif [ -n "$number" ]; then
+            gh issue comment "$number" --repo "$REPO" --body-file dist/ios-audit-trend-issue.md
+            if [ "$STATUS" = "0" ]; then
+              gh issue close "$number" --repo "$REPO"
+            fi
+          fi
+
+      - name: Fail if a screen stopped completing
+        if: ${{ steps.trend.outputs.status != '0' }}
+        run: |
+          echo "The audit trend gate is red; see the summary above and the tracking issue."
+          exit 1
