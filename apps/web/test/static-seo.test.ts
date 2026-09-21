@@ -1,34 +1,22 @@
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const webRoot = dirname(fileURLToPath(new URL(".", import.meta.url)));
 const staticDir = join(webRoot, "static");
-const wranglerPath = join(webRoot, "../relay/wrangler.jsonc");
+const nodeEntry = readFileSync(join(webRoot, "../relay/src/node.ts"), "utf8");
 const hooks = readFileSync(join(webRoot, "src/hooks.server.ts"), "utf8");
 const landing = readFileSync(join(webRoot, "src/routes/+page.svelte"), "utf8");
 const dashboard = readFileSync(join(webRoot, "src/routes/my/+page.svelte"), "utf8");
 
-function parseJsonc(source: string): unknown {
-  return JSON.parse(source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, ""));
-}
-
-test("every static file and directory has a Wrangler asset-first negation", () => {
-  const wrangler = parseJsonc(readFileSync(wranglerPath, "utf8")) as {
-    assets: { run_worker_first: string[] };
-  };
-  const rules = new Set(wrangler.assets.run_worker_first);
+test("Node serves a built static file ahead of a document", () => {
   const entries = readdirSync(staticDir).filter((name) => !name.startsWith("."));
   assert.ok(entries.length > 0, "static/ has no entries");
-  for (const name of entries) {
-    if (statSync(join(staticDir, name)).isDirectory()) {
-      assert.ok(rules.has(`!/${name}/*`), `missing run_worker_first negation for ${name}/*`);
-    } else {
-      assert.ok(rules.has(`!/${name}`), `missing run_worker_first negation for ${name}`);
-    }
-  }
+  assert.match(nodeEntry, /NodeStaticFiles/);
+  assert.match(nodeEntry, /if \(asset\.ok\) return asset/);
+  assert.match(nodeEntry, /isRelayApiPath/);
 });
 
 test("document responses stay private, no-store", () => {

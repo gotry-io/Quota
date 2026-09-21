@@ -1,15 +1,13 @@
 import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { WebDocumentPort } from "../../web/src/lib/server/document-port.ts";
-import worker, { type CloudflareBindings } from "../src/cloudflare.ts";
 import { respondAsRelay, type RelaySecrets } from "../src/deployment.ts";
 import type { RelayDatabase } from "../src/platform/database.ts";
 import { MemoryReadingCache } from "../src/platform/reading-cache.ts";
-import { NodeStaticFiles, WorkersStaticFiles } from "../src/platform/static-files.ts";
+import { NodeStaticFiles } from "../src/platform/static-files.ts";
 import { respondWithWebDocument } from "../src/web-document.ts";
 import { testDatabase } from "./support/database.ts";
 
-const sqliteDriver = import.meta.env.RELAY_TEST_DRIVER === "sqlite";
 const testSecret = "test-secret-that-is-long-enough-for-hmac-and-aes";
 const clientDirectory = fileURLToPath(
   new URL("../../web/.svelte-kit/output/client", import.meta.url),
@@ -35,37 +33,18 @@ beforeEach(async () => {
 
 async function fetchDocument(path: string): Promise<Response> {
   const request = new Request(`https://quota.gotry.io${path}`);
-  if (sqliteDriver) {
-    return respondAsRelay(
-      request,
-      {
-        database: db,
-        assets: new NodeStaticFiles(clientDirectory),
-        statusCache: new MemoryReadingCache(),
-        secrets,
-      },
-      undefined,
-    );
-  }
-  const { createExecutionContext, env, waitOnExecutionContext } = await import("cloudflare:test");
-  const context = createExecutionContext();
-  const response = await worker.fetch(request, env, context);
-  await waitOnExecutionContext(context);
-  return response;
+  return respondAsRelay(request, {
+    database: db,
+    assets: new NodeStaticFiles(clientDirectory),
+    statusCache: new MemoryReadingCache(),
+    secrets,
+  });
 }
 
-describe("composed Worker documents", () => {
-  it("supplies Worker secrets without a local .env file", async () => {
-    if (sqliteDriver) {
-      // Node reads the same names from the process; the Miniflare bindings are a Workers fact.
-      expect(secrets.QUOTA_SESSION_HASH_KEY.length).toBeGreaterThanOrEqual(32);
-      expect(secrets.IDENTITY_SUBJECT_KEY.length).toBeGreaterThanOrEqual(32);
-      return;
-    }
-    const { env } = await import("cloudflare:test");
-    const bindings = env as CloudflareBindings;
-    expect(bindings.QUOTA_SESSION_HASH_KEY.length).toBeGreaterThanOrEqual(32);
-    expect(bindings.IDENTITY_SUBJECT_KEY.length).toBeGreaterThanOrEqual(32);
+describe("composed Relay documents", () => {
+  it("supplies Relay secrets without a local .env file", () => {
+    expect(secrets.QUOTA_SESSION_HASH_KEY.length).toBeGreaterThanOrEqual(32);
+    expect(secrets.IDENTITY_SUBJECT_KEY.length).toBeGreaterThanOrEqual(32);
   });
 
   it("renders the signed-out landing header and keeps the response uncacheable", async () => {
@@ -144,7 +123,7 @@ describe("composed Worker documents", () => {
     expect(html).not.toContain("input_tokens");
   });
 
-  it("keeps Hono API routes on the same Worker", async () => {
+  it("keeps Hono API routes on the same process", async () => {
     const response = await fetchDocument("/api/v2/info");
     expect(response.status).toBe(200);
     const body = (await response.json()) as { service: string };
@@ -202,19 +181,7 @@ function fakePort(input: { displayLabel: string | null }): WebDocumentPort {
 
 async function renderDocument(path: string, document: WebDocumentPort): Promise<Response> {
   const request = new Request(`https://quota.gotry.io${path}`);
-  if (sqliteDriver) {
-    return respondWithWebDocument(request, new NodeStaticFiles(clientDirectory), undefined, {
-      document,
-    });
-  }
-  const { createExecutionContext, env, waitOnExecutionContext } = await import("cloudflare:test");
-  const context = createExecutionContext();
-  const response = await respondWithWebDocument(
-    request,
-    new WorkersStaticFiles(env.ASSETS),
-    context,
-    { document },
-  );
-  await waitOnExecutionContext(context);
-  return response;
+  return respondWithWebDocument(request, new NodeStaticFiles(clientDirectory), {
+    document,
+  });
 }

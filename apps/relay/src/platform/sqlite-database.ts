@@ -5,8 +5,8 @@ import type { RelayDatabase, RelayResult, RelayStatement } from "./database.ts";
  * `RelayDatabase` over a local SQLite file, for the Node deployment.
  *
  * better-sqlite3 is synchronous, so a batch is a real SQLite transaction rather than a queue of
- * promises: the whole batch commits or the first failure rolls it back, which is what D1's batch
- * gives the same statements ([ADR 0049](../../../../docs/decisions/0049-one-relay-two-runtimes.md)).
+ * promises: the whole batch commits or the first failure rolls it back
+ * ([ADR 0058](../../../../docs/decisions/0058-relay-runs-on-node-only.md)).
  * SQLite's own error text reaches the caller unchanged, because the account state reads
  * `UNIQUE constraint failed` out of it to tell a taken identity from a broken write.
  */

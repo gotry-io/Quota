@@ -1,11 +1,10 @@
 # Self-hosting QuotaRelay
 
-Production is the Node + SQLite process on the `dmit` VPS. The same source still runs as a
-Cloudflare Worker over D1 for local development and tests
-([ADR 0049](decisions/0049-one-relay-two-runtimes.md)). Switching runtimes is an operations
-action, not a product migration: the origin, OAuth callbacks, and data contract stay
-`https://quota.gotry.io`. The 2026-09-14 Worker → Node cutover is recorded in
-[ADR 0050](decisions/0050-the-worker-and-d1-are-retired.md); do not re-run it.
+Production is the Node + SQLite process on the `dmit` VPS
+([ADR 0058](decisions/0058-relay-runs-on-node-only.md)). The origin, OAuth callbacks, and data
+contract stay `https://quota.gotry.io`. The 2026-09-14 Worker → Node cutover is recorded in
+[ADR 0050](decisions/0050-the-worker-and-d1-are-retired.md); do not re-run it. Cloudflare is the
+CDN and DNS proxy in front of the origin, not a Relay runtime.
 
 This runbook is the host-side procedure for the dmit deployment: current topology, update,
 rollback, backup, and restore. The Node entry, migration runner, and `build:node` output live
@@ -46,8 +45,8 @@ client ── Cloudflare (proxied A record) ── dmit:443 Caddy ── quota-r
   client (`header_up -CF-Connecting-IP` and `header_up X-Forwarded-For {remote_host}`
   in Caddy).
 
-- **DNS** `quota.gotry.io` is a proxied A record to the dmit address. `wrangler.jsonc`
-  declares no route, so nothing can re-bind the name to a Worker by accident.
+- **DNS** `quota.gotry.io` is a proxied A record to the dmit address. There is no Worker
+  route and no Wrangler config in the repository.
 
 The `deploy/relay/docker-compose.yml` file is the alternative layout for a host
 without a public address (Relay + `cloudflared` Tunnel + backup, `env_file`).
@@ -60,7 +59,7 @@ It is not what production runs.
 reads `X-Forwarded-For`, which Caddy fills with the Cloudflare edge it saw, so every
 client would share a handful of rate-limit buckets.
 
-The Node process reads the same names as the Worker, plus `RELAY_SQLITE_PATH`,
+The Node process reads these names, plus `RELAY_SQLITE_PATH`,
 `RELAY_STATIC_DIR`, `PORT` (the stack file sets those three),
 `RELAY_TRUSTED_PROXIES`, and `RELAY_CLIENT_ADDRESS_HEADER`. Unset or empty
 `RELAY_TRUSTED_PROXIES` is loopback, RFC1918, and unique-local IPv6
@@ -78,10 +77,9 @@ value refuses to start.
   container, so an `env_file` path on the host does not work there.
 - `APPLE_SIGNIN_PRIVATE_KEY` is the PKCS#8 PEM on one line with the two-character
   sequence `\n` between PEM lines; the Node entry restores the line breaks.
-- The three HMAC keys must be the same on every runtime that shares a database.
-  Cloudflare does not read secrets back, so the operator's `relay.env` is the only
-  place to recover them from. `IDENTITY_SUBJECT_KEY` was rotated at cutover; the
-  identity rows in both SQLite and D1 were recomputed with the new key.
+- The three HMAC keys must be the same on every process that shares a database.
+  The operator's `relay.env` is the place to recover them from. `IDENTITY_SUBJECT_KEY`
+  was rotated at the 2026-09-14 cutover.
 
 ## Deploy an update
 
@@ -94,8 +92,8 @@ value refuses to start.
 
 3. Change the image tag in the Portainer stack and redeploy (Portainer UI, or
    `PUT /api/stacks/<id>?endpointId=<dmit>` with `pullImage: false`). The process
-   applies any new `apps/relay/migrations` files on start into the same
-   `d1_migrations` table Wrangler uses.
+   applies any new `apps/relay/migrations` files on start into the
+   `d1_migrations` ledger.
 4. Check `docker logs quota-relay` for `relay_migrations_applied` and
    `https://quota.gotry.io/api/v2/info` for the new version.
 

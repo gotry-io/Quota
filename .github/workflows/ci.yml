@@ -33,7 +33,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # A change confined to the website, the Relay Worker, relay-core, or documentation reaches
+      # A change confined to the website, Relay, relay-core, or documentation reaches
       # no Rust or Swift target, and verify-web already checks it. Anything else, including
       # packages/protocol (Swift and Rust decode its fixtures), scripts, and this file, is Swift work.
       - name: Detect paths that reach Rust or Swift
@@ -99,20 +99,13 @@ jobs:
           # The scripts that decide what CI runs and what a release tag may name.
           pnpm test:scripts
 
-      # `build` and `build:workers` both start by building the website, so calling both built it
-      # twice. The website is built once here, and the Worker bundle is asked for on its own.
+      # `build` compiles the website and the Node Relay bundle. Integration tests need that
+      # website output, so they run after the build. Recursive `test` already ran the Node suite.
       - name: Build the website and the Node Relay
         run: pnpm --filter @gotry-io/quota-relay build
 
-      - name: Build the Relay Worker bundle
-        run: pnpm --filter @gotry-io/quota-relay build:cloudflare
-
-      - name: Run remaining Relay runtime suites
-        run: |
-          set -euo pipefail
-          pnpm --filter @gotry-io/quota-relay test:workers
-          pnpm --filter @gotry-io/quota-relay test:workers:integration
-          pnpm --filter @gotry-io/quota-relay test:node:integration
+      - name: Run Relay integration tests
+        run: pnpm --filter @gotry-io/quota-relay test:node:integration
 
   verify-web-e2e:
     runs-on: ubuntu-24.04

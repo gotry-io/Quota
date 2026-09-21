@@ -1,11 +1,10 @@
 /**
  * Who is calling, as far as the deployment can tell.
  *
- * Rate limits and the anonymous read budget are counted per address. Each entry sanitises the
- * headers before the app reads them: Node honours only `RELAY_CLIENT_ADDRESS_HEADER` from
- * `RELAY_TRUSTED_PROXIES` peers and otherwise writes the socket peer; Workers keeps
- * `CF-Connecting-IP` (the platform sets it; clients cannot forge it there) and drops
- * `X-Forwarded-For`. This function is runtime-neutral: it only reads those headers.
+ * Rate limits and the anonymous read budget are counted per address. The Node entry sanitises
+ * the headers before the app reads them: it honours only `RELAY_CLIENT_ADDRESS_HEADER` from
+ * `RELAY_TRUSTED_PROXIES` peers and otherwise writes the socket peer. This function only reads
+ * those headers. Cloudflare in front of production still sets `CF-Connecting-IP`.
  */
 
 export const DEFAULT_TRUSTED_PROXIES =
@@ -32,8 +31,7 @@ let boundTrustedProxies: TrustedProxies = [];
 
 /**
  * The Node entry binds the parsed `RELAY_TRUSTED_PROXIES` list so `clientAddress` can walk an
- * `X-Forwarded-For` chain that a trusted peer was allowed to keep. Workers never binds, so the
- * list stays empty and `X-Forwarded-For` is ignored after the Workers entry drops it.
+ * `X-Forwarded-For` chain that a trusted peer was allowed to keep.
  */
 export function bindTrustedProxies(proxies: TrustedProxies): void {
   boundTrustedProxies = proxies;
@@ -115,27 +113,6 @@ export function applyNodeForwardedTrust(
   if (address) {
     request.headers.set("X-Forwarded-For", displayAddress(address));
   }
-}
-
-/**
- * Cloudflare states the client in `CF-Connecting-IP` and clients cannot forge it on this
- * runtime, so that header is kept. `X-Forwarded-For` and the other forwarding headers are
- * dropped. Incoming Workers requests have immutable headers, so a request that still carries
- * them is rebuilt.
- */
-export function applyWorkersForwardedTrust(request: Request): Request {
-  if (
-    !request.headers.has("X-Forwarded-For") &&
-    !request.headers.has("X-Real-IP") &&
-    !request.headers.has("Forwarded")
-  ) {
-    return request;
-  }
-  const headers = new Headers(request.headers);
-  headers.delete("X-Forwarded-For");
-  headers.delete("X-Real-IP");
-  headers.delete("Forwarded");
-  return new Request(request, { headers });
 }
 
 export function addressIsTrusted(address: string, trusted: TrustedProxies): boolean {

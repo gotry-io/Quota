@@ -36,7 +36,7 @@
     "format:check": "pnpm format:check:js && pnpm format:check:rust",
     "format:check:js": "biome format .",
     "format:check:rust": "cargo fmt --all -- --check",
-    "test": "pnpm -r --if-present test && pnpm --filter @gotry-io/quota-relay test:workers && pnpm test:service && pnpm test:swift",
+    "test": "pnpm -r --if-present test && pnpm test:service && pnpm test:swift",
     "test:service": "cargo test --locked --package quota-service --package quota-menubar-helper",
     "test:swift": "./scripts/test-swift.sh",
     "test:menubar:helper": "./scripts/test-menubar-helper.sh",
@@ -49,18 +49,15 @@
     "test:ios:version": "node --test scripts/check-ios-version.test.mjs",
     "test:scripts": "node --test scripts/check-ios-version.test.mjs scripts/ci-changed-paths.test.mjs scripts/generate-design-tokens.test.mjs scripts/generate-adr-index.test.mjs scripts/generate-capability-matrix.test.mjs scripts/generate-reference.test.mjs scripts/ios-audit-trend.test.mjs scripts/ios-ui-audit-summary.test.mjs scripts/ios-ui-run-summary.test.mjs",
     "build:ios": "./scripts/build-ios.sh",
-    "deploy:cloudflare": "pnpm --filter @gotry-io/quota-relay deploy:cloudflare",
     "dev:web": "pnpm --filter @gotry-io/quota-web dev",
     "dev:relay": "pnpm --filter @gotry-io/quota-relay dev",
     "check:schema": "node --experimental-strip-types packages/protocol/scripts/generate-json-schemas.ts --check"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.6",
-    "@cloudflare/workers-types": "5.20260801.1",
     "@types/node": "26.1.2",
     "ajv": "8.20.0",
     "typescript": "6.0.3",
-    "vitest": "4.1.10",
-    "wrangler": "4.118.0"
+    "vitest": "4.1.10"
   }
 }

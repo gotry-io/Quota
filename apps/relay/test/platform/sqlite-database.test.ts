@@ -158,7 +158,7 @@ describe("SqliteDatabase", () => {
 });
 
 describe("applyMigrations", () => {
-  it("applies the ladder once and records it in wrangler's own table", async () => {
+  it("applies the ladder once and records it in the d1_migrations ledger", async () => {
     const applied = await applyMigrations(database, migrationsDirectory);
     expect(applied[0]).toBe("0001_initial.sql");
     expect(applied).toEqual([...applied].sort((left, right) => left.localeCompare(right)));
@@ -166,8 +166,8 @@ describe("applyMigrations", () => {
     const ledger = await database
       .prepare("SELECT sql FROM sqlite_master WHERE name = 'd1_migrations'")
       .first<string>("sql");
-    // `wrangler d1 migrations apply --local` writes exactly this, so a database exported from D1
-    // and imported here is already migrated rather than replayed.
+    // The table name and DDL stay this shape so a database imported from the retired D1
+    // export is already migrated rather than replayed.
     expect(ledger).toBe(
       `CREATE TABLE d1_migrations(
 		id         INTEGER PRIMARY KEY AUTOINCREMENT,

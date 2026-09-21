@@ -1,7 +1,12 @@
 # ADR 0050: The production Worker and D1 are retired
 
+> Amended by [ADR 0058](0058-relay-runs-on-node-only.md): the Workers runtime is no longer a
+> test or build target. Production retirement on 2026-09-14 still stands.
+
 - Status: Accepted
 - Date: 2026-09-14
+- Amended: 2026-09-21 by [ADR 0058](0058-relay-runs-on-node-only.md): the Workers runtime,
+  Wrangler, and D1 test pool are removed from the source.
 - Extends [ADR 0049](0049-one-relay-two-runtimes.md)
 
 ## Context

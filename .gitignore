@@ -11,11 +11,12 @@ DerivedData/
 *.xcworkspace/xcuserdata/
 apps/ios/Local.xcconfig
 
-# JavaScript / TypeScript / Cloudflare
+# JavaScript / TypeScript
 node_modules/
 dist/
 .svelte-kit/
 apps/web/static/schema/
+# Leftover local Wrangler state from the retired Workers runtime.
 .wrangler/
 coverage/
 

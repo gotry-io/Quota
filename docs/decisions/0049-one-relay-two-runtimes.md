@@ -1,7 +1,12 @@
 # ADR 0049: One Relay, two runtimes
 
-- Status: Accepted
+> Superseded by [ADR 0058](0058-relay-runs-on-node-only.md): Relay runs on Node over SQLite
+> only. The Workers runtime, Wrangler, and workerd test pool are removed from the source.
+> Production moved on 2026-09-14 ([ADR 0050](0050-the-worker-and-d1-are-retired.md)).
+
+- Status: Superseded
 - Date: 2026-09-09
+- Superseded by: 0058
 - Extends [ADR 0001](0001-persistent-relay-storage.md) and
   [ADR 0011](0011-sveltekit-document-worker.md)
 

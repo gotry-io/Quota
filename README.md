@@ -10,9 +10,9 @@ subscription quota and privacy-preserving Usage together across a user's devices
   reads remaining quota and Today Usage, publishes a non-secret App Group snapshot for Home Screen
   and Lock Screen widgets, and can connect a provider's own web session on the phone; those cookies
   stay in that iPhone's Keychain.
-- **QuotaRelay** — managed account/device service: one Hono source tree, run in production as a
-  Node + SQLite image on a VPS ([ADR 0050](docs/decisions/0050-the-worker-and-d1-are-retired.md));
-  the Cloudflare Workers + D1 adapters remain a supported runtime and are not deployed.
+- **QuotaRelay** — managed account/device service: one Hono source tree, run as a Node + SQLite
+  image on a VPS ([ADR 0058](docs/decisions/0058-relay-runs-on-node-only.md)). Cloudflare is the
+  CDN and DNS proxy in front of that origin, not a Relay runtime.
 - **Quota Web** — public site, GitHub sign-in, account dashboard, the opt-in public Usage page at
   `quota.gotry.io/u/<handle>`, and the opt-in leaderboard at `quota.gotry.io/leaderboard`.
 
@@ -46,12 +46,11 @@ only; they intentionally do not compile the iOS app. `pnpm test` runs every Swif
 QuotaBar. Development recipes, hooks, the merge queue, and review expectations are in
 [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
-`pnpm dev:relay` runs the Node Relay against `apps/relay/data/relay.sqlite`. Workers remains
-`pnpm --filter @gotry-io/quota-relay dev:workers`.
+`pnpm dev:relay` runs the Node Relay against `apps/relay/data/relay.sqlite`.
 
 Relay and the website ship together as one image, `ghcr.io/gotry-io/quota-relay`, built on a
 `relay-v*` tag and deployed to the dmit VPS by the owner ([runbook](docs/relay-self-host.md)).
-Local Wrangler dry runs are verification; do not deploy anywhere without explicit authorization.
+Local builds are verification; do not deploy anywhere without explicit authorization.
 
 ## Current status
 
@@ -60,7 +59,8 @@ Local Wrangler dry runs are verification; do not deploy anywhere without explici
 QuotaBar read Account periods as local dates on the hour grid
 ([ADR 0055](docs/decisions/0055-an-account-period-is-a-local-date-range.md)). Quota iOS is three
 tabs (Quota · Usage · Settings). QuotaBar is a resident menu-bar app with a Quota · Usage ·
-Settings window. Workers + D1 remain a supported runtime and are not deployed. This statement is
+Settings window. Relay is Node + SQLite only
+([ADR 0058](docs/decisions/0058-relay-runs-on-node-only.md)). This statement is
 not generated from git tags.
 
 ## Links
@@ -88,7 +88,7 @@ it is research, not a compatibility contract.
 ```text
 apps/ios/                 Quota iPhone SwiftUI account app
 apps/menubar/             QuotaBar Swift 6.2 / SwiftUI app, including its private Rust helper
-apps/relay/               Managed Hono Relay: shared app, Node + SQLite and Workers + D1 adapters
+apps/relay/               Managed Hono Relay: Node + SQLite app and migration ladder
 apps/web/                 Public site and authenticated account UI
 packages/apple-client/    Shared Apple wire, Relay, session, cache, widget, brand marks, and provider web-session and Keychain modules
 packages/apple-shared/    Foundation-only Apple presentation, alerting, alert delivery, and observation-merge semantics
