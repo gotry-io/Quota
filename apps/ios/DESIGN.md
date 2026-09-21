@@ -396,7 +396,7 @@ selection's inclusive local dates and this iPhone's IANA zone. Presets are the s
 `from=to=localDate`, Last 7 days is `localDate−6`, Last 30 days is `localDate−29`. `breakdown=1`
 carries the agent/model tree. **All** stays the Account summary's 730 UTC-day window. Overview's
 Today row still reads `summary.usage.today`. The monthly budget measures this iPhone's local month
-through the same period read. Opening Usage also requests the last 365 UTC days of activity once
+through the same period read; signed in, that spend is the Account's. Opening Usage also requests the last 365 UTC days of activity once
 (`from = today-364`, `to = today`) for the year heatmap in **Activity patterns**; that answer stays
 in memory and does not write to disk. A period failure keeps last-good. A failure of the activity
 read stays in **Activity patterns** and does not block the period totals or the breakdown.
@@ -453,9 +453,12 @@ Body, in order:
      footers. They are not on the Usage root.
    - **Monthly budget** (`usage.budget`): only when a budget is set. The row shows the spend
      meter (healthy below 80%, warning at or above 80%, critical at or above 100%) and remaining.
-     Editing is the existing amount-and-alerts sheet. **Set a monthly budget** lives in Settings.
-     Both fields are `UserDefaults` on this iPhone and are never uploaded. The two crossings post
-     one local notification each per calendar month.
+     Signed in, the caption is **Account spend this month**. Editing is the existing
+     amount-and-alerts sheet. **Set a monthly budget** lives in Settings. The amount and its
+     switch follow the Account when signed in
+     ([ADR 0061](../../docs/decisions/0061-alert-policy-and-the-budget-follow-the-account.md));
+     signed out they stay on this iPhone. The two crossings post one local notification each per
+     calendar month.
 5. When the selected period reported no tokens: `ContentUnavailableView` titled **No usage**,
    system image `chart.bar`, description **No usage was reported for this period.** Destinations
    still follow.
@@ -575,7 +578,10 @@ usage across them.** The Devices row is absent. Manage Devices on Web,
 
 **Preferences.** NavigationLink **Notifications** with a leading 28-point rounded-square icon
 (white `bell.badge.fill` on red). NavigationLink **Appearance** with white `circle.lefthalf.filled`
-on indigo and the current value **System**, **Light**, or **Dark** trailing. Icons are
+on indigo and the current value **System**, **Light**, or **Dark** trailing. NavigationLink
+**Monthly budget** / **Set a monthly budget** (`settings.budget`) pushes the amount-and-alerts
+editor. Signed in, its footer is **The monthly budget follows the Account. Signed in, it measures
+Account spend this month.** Signed out: **The monthly budget stays on this iPhone.** Icons are
 `SettingsRowIcon(symbol:tint:)`.
 
 **Providers.** One row per provider account this iPhone signed in to, then the row that adds
@@ -664,14 +670,22 @@ and nothing to delete, so those rows are absent rather than disabled.
 #### Notifications
 
 Navigation title **Notifications**. Native Form. Toggle **Enable Notifications**. Toggle **Reset
-Reminders**. Footer: **Alerts are checked when Quota refreshes.** Quota does not promise real-time.
+Reminders**. Toggle **Pace Warnings**. Signed out, footer: **Alerts are checked when Quota refreshes.**
+Signed in, footer: **Reset reminders, pace warnings, and thresholds follow the Account. Enable
+Notifications stays on this iPhone. Alerts are checked when Quota refreshes.** Quota does not
+promise real-time. Enable Notifications is this iPhone's permission and is never synced.
 
 Turning Enable Notifications on asks `UNUserNotificationCenter` for alerts and sound. A refusal
 puts the switch back off and shows **Allow notifications for Quota in Settings.** with **Open
 Settings**, which opens `UIApplication.openSettingsURLString`. Opening the destination re-reads
 the system permission; a later grant in Settings does not turn the switch on by itself. A
 permission-refresh failure leaves the toggle off and uses the denied-state rows. Rules are stored
-in `UserDefaults` under `alerts.*`.
+in `UserDefaults` under `alerts.*` as this device's copy of the Account settings document
+([ADR 0061](../../docs/decisions/0061-alert-policy-and-the-budget-follow-the-account.md)). A
+threshold, reminder, or pace edit applies at once and is written to the Account; it no longer
+waits for the next refresh to re-evaluate or rebuild reset reminders. Offline or 412, each
+edit joins an ordered per-Account queue (coalesced by target) and the next refresh writes
+them in one PUT; a fetched document is never adopted over that queue.
 
 One Section per subscription (catalog `display_name` as the header, masked account label as a row)
 with two remaining-percent pickers **Alert at** and **Then at**. Choices are **5 / 10 / 15 / 20 /
@@ -717,9 +731,10 @@ after percent-decoding. Any other URL returns to Overview.
 ### Notification delivery
 
 Quota on iOS evaluates the same local remaining-quota rules QuotaBar does, through `QuotaAlerts`,
-and posts the same `AlertCopy` title and body. A successful refresh — pull-to-refresh or the
-background app refresh asked for no sooner than every thirty minutes — compares the new Account
-summary to the last available readings and delivers native `UNUserNotificationCenter` alerts.
+and posts the same `AlertCopy` title and body. A policy edit, an adopted Account settings
+document, and a successful refresh — pull-to-refresh or the background app refresh asked for no
+sooner than every thirty minutes — each compare the current readings to the last available ones,
+deliver native `UNUserNotificationCenter` alerts, and rebuild reset reminders.
 
 A calendar notification is booked at each available subscription's primary window `resets_at` so a
 reset is not missed if the next background refresh lands later. A later reading replaces the

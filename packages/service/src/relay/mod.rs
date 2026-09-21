@@ -10,14 +10,17 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::protocol::{AccountComponentValue, AuthStatus, CONTROL_PROTOCOL, MANAGED_DATA_PROTOCOL};
+use crate::protocol::{
+    AccountComponentValue, AccountSettingsMutationResult, AccountSettingsWriteDocument,
+    AccountSettingsWriteOutcome, AuthStatus, CONTROL_PROTOCOL, MANAGED_DATA_PROTOCOL,
+};
 use crate::service::{BackendError, LoginOutcome};
 use crate::state::StateStore;
 use base64::Engine;
 use chrono::Timelike;
 use reqwest::blocking::{Client, Response};
 use reqwest::header::{
-    ACCEPT, AUTHORIZATION, CONTENT_TYPE, ETAG, HeaderMap, HeaderValue, IF_NONE_MATCH,
+    ACCEPT, AUTHORIZATION, CONTENT_TYPE, ETAG, HeaderMap, HeaderValue, IF_MATCH, IF_NONE_MATCH,
 };
 use serde_json::Value;
 use sha2::Digest;
@@ -32,6 +35,19 @@ const MAXIMUM_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 const USAGE_HOUR_GRID_RULE: &str =
     "first_whole_hour_of_local_date; fractional_midnight_to_previous_day; no_proration";
 const MAXIMUM_ACCOUNT_PERIOD_CACHE: usize = 32;
+
+/// What `PUT /api/v2/account/settings` answers. 412 carries the current document, not an error.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AccountSettingsWrite {
+    Written {
+        document: Value,
+        etag: Option<String>,
+    },
+    Conflict {
+        document: Value,
+        etag: Option<String>,
+    },
+}
 
 #[derive(Debug, Error)]
 pub enum RelayError {
@@ -172,6 +188,65 @@ impl RelayClient {
         etag: Option<&str>,
     ) -> Result<(Option<String>, Option<Value>), RelayError> {
         self.conditional_get_json(&format!("/api/v6/account/summary?{query}"), token, etag)
+    }
+
+    /// Conditional `GET /api/v2/account/settings`. 304 returns no body.
+    pub fn account_settings(
+        &self,
+        token: &str,
+        etag: Option<&str>,
+    ) -> Result<(Option<String>, Option<Value>), RelayError> {
+        let (next_etag, body) =
+            self.conditional_get_json("/api/v2/account/settings", token, etag)?;
+        if let Some(document) = &body {
+            validate_account_settings(document)?;
+        }
+        Ok((next_etag, body))
+    }
+
+    /// Compare-and-set write. 412 is `Conflict` with the current document as the body.
+    pub fn put_account_settings(
+        &self,
+        token: &str,
+        body: &Value,
+        if_match: &str,
+    ) -> Result<AccountSettingsWrite, RelayError> {
+        validate_bounded_json(body)?;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            IF_MATCH,
+            HeaderValue::from_str(if_match).map_err(|_| RelayError::InvalidResponse)?,
+        );
+        let response = self.request(
+            self.client
+                .put(self.url("/api/v2/account/settings"))
+                .header(CONTENT_TYPE, "application/json")
+                .header(ACCEPT, "application/json")
+                .header(AUTHORIZATION, bearer(token))
+                .headers(headers),
+            Some(body),
+            Some(token),
+        )?;
+        let status = response.status().as_u16();
+        if status == 401 {
+            return Err(RelayError::AuthenticationRequired);
+        }
+        if status == 200 || status == 412 {
+            let etag = response
+                .headers()
+                .get(ETAG)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned);
+            let document = read_json(response)?;
+            validate_account_settings(&document)?;
+            return Ok(if status == 200 {
+                AccountSettingsWrite::Written { document, etag }
+            } else {
+                AccountSettingsWrite::Conflict { document, etag }
+            });
+        }
+        let _ = check_status(response, 200)?;
+        Err(RelayError::InvalidResponse)
     }
 
     /// Inclusive local-date Account period. Offers the caller's ETag; 304 returns no body.
@@ -718,6 +793,107 @@ fn validate_control_response(value: &Value) -> Result<(), RelayError> {
         return Err(RelayError::InvalidResponse);
     }
     Ok(())
+}
+
+/// `GET`/`PUT /api/v2/account/settings` as a tolerant read: required fields and invariants,
+/// unknown keys ignored ([ADR 0023](../../../docs/decisions/0023-strict-writes-tolerant-reads.md)).
+fn validate_account_settings(value: &Value) -> Result<(), RelayError> {
+    require_response_fields(
+        value,
+        &[
+            "protocol_version",
+            "revision",
+            "updated_at",
+            "alerts",
+            "budget",
+        ],
+    )?;
+    let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
+    if object.get("protocol_version").and_then(Value::as_i64) != Some(CONTROL_PROTOCOL)
+        || object.get("revision").and_then(safe_u64).is_none()
+        || !object
+            .get("updated_at")
+            .and_then(Value::as_str)
+            .is_some_and(valid_rfc3339)
+    {
+        return Err(RelayError::InvalidResponse);
+    }
+    validate_account_settings_alerts(object.get("alerts").ok_or(RelayError::InvalidResponse)?)?;
+    validate_account_settings_budget(object.get("budget").ok_or(RelayError::InvalidResponse)?)
+}
+
+fn validate_account_settings_alerts(value: &Value) -> Result<(), RelayError> {
+    require_response_fields(value, &["reset_reminders", "pace_alerts", "thresholds"])?;
+    let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
+    if !object.get("reset_reminders").is_some_and(Value::is_boolean)
+        || !object.get("pace_alerts").is_some_and(Value::is_boolean)
+    {
+        return Err(RelayError::InvalidResponse);
+    }
+    let thresholds = object
+        .get("thresholds")
+        .and_then(Value::as_object)
+        .filter(|thresholds| thresholds.len() <= 256)
+        .ok_or(RelayError::InvalidResponse)?;
+    for (selector, values) in thresholds {
+        if !is_account_settings_selector(selector) {
+            return Err(RelayError::InvalidResponse);
+        }
+        let list = values
+            .as_array()
+            .filter(|list| (1..=2).contains(&list.len()))
+            .ok_or(RelayError::InvalidResponse)?;
+        let mut previous: Option<i64> = None;
+        for item in list {
+            let number = item.as_i64().ok_or(RelayError::InvalidResponse)?;
+            if !(1..=99).contains(&number) || previous.is_some_and(|prior| number >= prior) {
+                return Err(RelayError::InvalidResponse);
+            }
+            previous = Some(number);
+        }
+    }
+    Ok(())
+}
+
+fn validate_account_settings_budget(value: &Value) -> Result<(), RelayError> {
+    require_response_fields(value, &["amount_usd", "alerts"])?;
+    let object = value.as_object().ok_or(RelayError::InvalidResponse)?;
+    if !object.get("alerts").is_some_and(Value::is_boolean) {
+        return Err(RelayError::InvalidResponse);
+    }
+    match object.get("amount_usd") {
+        Some(Value::Null) => Ok(()),
+        Some(Value::String(amount)) if valid_budget_amount_usd(amount) => Ok(()),
+        _ => Err(RelayError::InvalidResponse),
+    }
+}
+
+fn is_account_settings_selector(value: &str) -> bool {
+    value.len() == 12
+        && value
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+fn valid_budget_amount_usd(value: &str) -> bool {
+    let (whole, fraction) = match value.split_once('.') {
+        Some((whole, fraction)) => (whole, Some(fraction)),
+        None => (value, None),
+    };
+    if whole.is_empty() || whole.len() > 7 || !whole.bytes().all(|byte| byte.is_ascii_digit()) {
+        return false;
+    }
+    if let Some(fraction) = fraction
+        && (fraction.is_empty()
+            || fraction.len() > 2
+            || !fraction.bytes().all(|byte| byte.is_ascii_digit()))
+    {
+        return false;
+    }
+    value
+        .parse::<f64>()
+        .ok()
+        .is_some_and(|amount| amount > 0.0 && amount <= 1_000_000.0)
 }
 
 fn validate_account_summary(value: &Value) -> Result<(), RelayError> {
@@ -1591,6 +1767,11 @@ impl AccountManager {
             .and_then(Value::as_str)
             .map(str::to_owned);
         let device_generation = session.get("device_generation").and_then(Value::as_u64);
+        if let Err(error) = self.fetch_account_settings(cancel, false)
+            && error.error.code.requires_login()
+        {
+            return Err(error);
+        }
         Ok(serde_json::to_value(AccountComponentValue {
             auth_status: AuthStatus::SignedIn,
             account_id,
@@ -1732,6 +1913,160 @@ impl AccountManager {
                 ))),
             },
         }
+    }
+
+    /// Force a GET of the Account settings document and store it.
+    pub fn refresh_account_settings(
+        &self,
+        cancel: &AtomicBool,
+    ) -> Result<crate::protocol::AccountSettingsState, BackendError> {
+        self.fetch_account_settings(cancel, true)?;
+        self.cached_account_settings()
+    }
+
+    /// Compare-and-set write. A 412 is a successful round trip that returns `conflict`.
+    pub fn put_account_settings(
+        &self,
+        document: &AccountSettingsWriteDocument,
+        if_match: &str,
+        cancel: &AtomicBool,
+    ) -> Result<AccountSettingsMutationResult, BackendError> {
+        let (mut session, mut session_epoch) = self.active_session_pair()?;
+        if cancel.load(Ordering::Acquire) {
+            return Err(BackendError::cancelled());
+        }
+        let access_token = self.ensure_fresh_session(&mut session, &mut session_epoch)?;
+        let account_id = session
+            .get("account_id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(BackendError::unavailable)?
+            .to_owned();
+        let body = serde_json::json!({
+            "protocol_version": CONTROL_PROTOCOL,
+            "alerts": document.alerts,
+            "budget": document.budget,
+        });
+        let write = self
+            .client
+            .put_account_settings(&access_token, &body, if_match)
+            .map_err(|error| relay_backend_error(error, session_epoch))?;
+        let (outcome, document, etag) = match write {
+            AccountSettingsWrite::Written { document, etag } => {
+                (AccountSettingsWriteOutcome::Written, document, etag)
+            }
+            AccountSettingsWrite::Conflict { document, etag } => {
+                (AccountSettingsWriteOutcome::Conflict, document, etag)
+            }
+        };
+        let revision = document
+            .get("revision")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| {
+                BackendError::new(crate::protocol::IpcError::new(
+                    crate::protocol::ErrorCode::InvalidResponse,
+                    crate::protocol::RecoveryAction::Retry,
+                ))
+            })?;
+        let _ = self.state.set_account_settings_cache(
+            &account_id,
+            etag.filter(|value| !value.is_empty()).as_deref(),
+            &document,
+        );
+        Ok(AccountSettingsMutationResult {
+            outcome,
+            document,
+            revision,
+        })
+    }
+
+    fn fetch_account_settings(&self, cancel: &AtomicBool, force: bool) -> Result<(), BackendError> {
+        let (mut session, mut session_epoch) = self.active_session_pair()?;
+        if cancel.load(Ordering::Acquire) {
+            return Err(BackendError::cancelled());
+        }
+        let access_token = self.ensure_fresh_session(&mut session, &mut session_epoch)?;
+        let account_id = session
+            .get("account_id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(BackendError::unavailable)?
+            .to_owned();
+        let cached = self
+            .state
+            .account_settings_cache(&account_id)
+            .map_err(|_| BackendError::unavailable())?;
+        let etag = if force {
+            None
+        } else {
+            cached
+                .as_ref()
+                .and_then(|entry| (!entry.etag.is_empty()).then_some(entry.etag.as_str()))
+        };
+        let (next_etag, body) = self
+            .client
+            .account_settings(&access_token, etag)
+            .map_err(|error| relay_backend_error(error, session_epoch))?;
+        match body {
+            Some(document) => {
+                let _ = self.state.set_account_settings_cache(
+                    &account_id,
+                    next_etag.filter(|value| !value.is_empty()).as_deref(),
+                    &document,
+                );
+                Ok(())
+            }
+            None => {
+                if cached.is_some() {
+                    Ok(())
+                } else {
+                    Err(BackendError::new(crate::protocol::IpcError::new(
+                        crate::protocol::ErrorCode::InvalidResponse,
+                        crate::protocol::RecoveryAction::Retry,
+                    )))
+                }
+            }
+        }
+    }
+
+    fn cached_account_settings(
+        &self,
+    ) -> Result<crate::protocol::AccountSettingsState, BackendError> {
+        let session = self
+            .state
+            .session_json()
+            .map_err(|_| BackendError::unavailable())?
+            .ok_or_else(signed_out_error)?;
+        if !is_active_session(&session) {
+            return Err(signed_out_error());
+        }
+        let account_id = session
+            .get("account_id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(signed_out_error)?;
+        self.state
+            .account_settings_cache(account_id)
+            .map_err(|_| BackendError::unavailable())?
+            .map(|cached| cached.state)
+            .ok_or_else(|| {
+                BackendError::new(crate::protocol::IpcError::new(
+                    crate::protocol::ErrorCode::InvalidResponse,
+                    crate::protocol::RecoveryAction::Retry,
+                ))
+            })
+    }
+
+    fn active_session_pair(&self) -> Result<(Value, u64), BackendError> {
+        let (session, epoch) = self
+            .state
+            .session_snapshot()
+            .map_err(|_| BackendError::unavailable())?
+            .ok_or_else(signed_out_error)?;
+        if !is_active_session(&session) {
+            return Err(signed_out_error());
+        }
+        Ok((session, epoch))
     }
 
     fn cached_period(&self, key: &AccountPeriodCacheKey) -> Option<AccountPeriodCacheEntry> {
@@ -2100,6 +2435,13 @@ fn current_platform() -> &'static str {
 
 fn session_changed_error() -> BackendError {
     BackendError::session_changed()
+}
+
+fn signed_out_error() -> BackendError {
+    BackendError::new(crate::protocol::IpcError::new(
+        crate::protocol::ErrorCode::AuthenticationRequired,
+        crate::protocol::RecoveryAction::Login,
+    ))
 }
 
 fn relay_backend_error(error: RelayError, observed_epoch: u64) -> BackendError {
@@ -3502,9 +3844,12 @@ mod tests {
     fn an_unchanged_account_read_keeps_the_previous_summary() {
         let mut summary = valid_summary(serde_json::json!([]));
         summary["account"]["display_label"] = serde_json::json!("octocat");
+        let settings = default_account_settings_document();
         let (origin, server) = spawn_mock_server(vec![
             http_json_with_etag(200, "\"stamp-one\"", &summary),
+            http_json_with_etag(200, "\"0\"", &settings),
             http_not_modified("\"stamp-one\""),
+            http_not_modified("\"0\""),
         ]);
         let root =
             std::env::temp_dir().join(format!("quota-account-etag-{}", uuid::Uuid::new_v4()));
@@ -3560,14 +3905,31 @@ mod tests {
         );
 
         let sent = server.join().expect("mock server");
-        assert_eq!(sent.len(), 2, "{sent:?}");
+        assert_eq!(sent.len(), 4, "{sent:?}");
+        assert!(
+            sent[0].contains("GET /api/v6/account/summary"),
+            "{}",
+            sent[0]
+        );
+        assert!(
+            sent[1].contains("GET /api/v2/account/settings"),
+            "{}",
+            sent[1]
+        );
         assert!(!sent[0].to_ascii_lowercase().contains("if-none-match"));
         assert!(
-            sent[1]
+            sent[2]
                 .to_ascii_lowercase()
                 .contains("if-none-match: \"stamp-one\""),
             "{}",
-            sent[1]
+            sent[2]
+        );
+        assert!(
+            sent[3]
+                .to_ascii_lowercase()
+                .contains("if-none-match: \"0\""),
+            "{}",
+            sent[3]
         );
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -3578,7 +3940,10 @@ mod tests {
         summary["account"]["display_label"] = serde_json::json!("octocat");
         let arrived = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
         let (origin, server) = spawn_gated_mock(
-            vec![http_json_with_etag(200, "\"stamp-one\"", &summary)],
+            vec![
+                http_json_with_etag(200, "\"stamp-one\"", &summary),
+                http_json_with_etag(200, "\"0\"", &default_account_settings_document()),
+            ],
             Duration::from_millis(150),
             arrived.clone(),
         );
@@ -3738,6 +4103,8 @@ mod tests {
             200 => "OK",
             201 => "Created",
             400 => "Bad Request",
+            412 => "Precondition Failed",
+            428 => "Precondition Required",
             _ => "Error",
         };
         let retry = retry_after
@@ -4217,5 +4584,262 @@ mod tests {
             "{}",
             sent[1]
         );
+    }
+
+    fn valid_account_settings_document() -> Value {
+        serde_json::json!({
+            "protocol_version": CONTROL_PROTOCOL,
+            "revision": 1,
+            "updated_at": "2026-09-21T10:00:00Z",
+            "alerts": {
+                "reset_reminders": true,
+                "pace_alerts": true,
+                "thresholds": { "a1b2c3d4e5f6": [20, 10] }
+            },
+            "budget": { "amount_usd": "250.00", "alerts": true }
+        })
+    }
+
+    fn default_account_settings_document() -> Value {
+        serde_json::json!({
+            "protocol_version": CONTROL_PROTOCOL,
+            "revision": 0,
+            "updated_at": "1970-01-01T00:00:00Z",
+            "alerts": {
+                "reset_reminders": true,
+                "pace_alerts": true,
+                "thresholds": {}
+            },
+            "budget": { "amount_usd": null, "alerts": true }
+        })
+    }
+
+    fn signed_in_manager(origin: &str, root: &std::path::Path) -> AccountManager {
+        std::fs::create_dir_all(root).expect("root");
+        let state = Arc::new(crate::state::StateStore::open(root).expect("state"));
+        state
+            .write_session_json(&fresh_session_json())
+            .expect("session");
+        AccountManager::new(
+            Arc::new(RelayClient::for_test(origin).expect("test client")),
+            state,
+            "Test Mac".to_owned(),
+        )
+    }
+
+    #[test]
+    fn account_settings_shape_is_checked() {
+        let body = valid_account_settings_document();
+        assert!(validate_account_settings(&body).is_ok());
+        let mut extra = body.clone();
+        extra["future"] = serde_json::json!(true);
+        extra["alerts"]["future"] = serde_json::json!(false);
+        assert!(validate_account_settings(&extra).is_ok());
+        let mut missing = body.clone();
+        missing.as_object_mut().expect("object").remove("budget");
+        assert!(validate_account_settings(&missing).is_err());
+        let mut unsorted = body.clone();
+        unsorted["alerts"]["thresholds"]["a1b2c3d4e5f6"] = serde_json::json!([10, 20]);
+        assert!(validate_account_settings(&unsorted).is_err());
+        let mut amount = body;
+        amount["budget"]["amount_usd"] = serde_json::json!("0");
+        assert!(validate_account_settings(&amount).is_err());
+    }
+
+    #[test]
+    fn account_settings_get_returns_body_304_and_412_put_body() {
+        let written = valid_account_settings_document();
+        let defaults = default_account_settings_document();
+        let (origin, server) = spawn_mock_server(vec![
+            http_json_with_etag(200, "\"0\"", &defaults),
+            http_not_modified("\"0\""),
+            http_json_with_etag(200, "\"1\"", &written),
+            http_json_with_etag(412, "\"1\"", &written),
+            http_json(
+                428,
+                None,
+                &serde_json::json!({
+                    "error": { "code": "precondition_required", "message": "If-Match is required." }
+                }),
+            ),
+            "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                .to_owned(),
+        ]);
+        let client = RelayClient::for_test(&origin).expect("test client");
+
+        let (etag, first) = client
+            .account_settings("account-token", None)
+            .expect("first get");
+        assert_eq!(etag.as_deref(), Some("\"0\""));
+        assert_eq!(first.as_ref(), Some(&defaults));
+
+        let (_, not_modified) = client
+            .account_settings("account-token", Some("\"0\""))
+            .expect("304");
+        assert!(not_modified.is_none());
+
+        let put_body = serde_json::json!({
+            "protocol_version": CONTROL_PROTOCOL,
+            "alerts": written["alerts"],
+            "budget": written["budget"]
+        });
+        let wrote = client
+            .put_account_settings("account-token", &put_body, "\"0\"")
+            .expect("put");
+        assert!(matches!(
+            wrote,
+            AccountSettingsWrite::Written { ref document, .. } if document == &written
+        ));
+
+        let conflict = client
+            .put_account_settings("account-token", &put_body, "\"0\"")
+            .expect("412");
+        assert!(matches!(
+            conflict,
+            AccountSettingsWrite::Conflict { ref document, .. } if document == &written
+        ));
+
+        let missing = client.put_account_settings("account-token", &put_body, "\"0\"");
+        assert!(matches!(
+            missing,
+            Err(RelayError::Rejected {
+                status: 428,
+                code
+            }) if code == "precondition_required"
+        ));
+
+        let unauthorized = client.account_settings("account-token", None);
+        assert!(matches!(
+            unauthorized,
+            Err(RelayError::AuthenticationRequired)
+        ));
+
+        let sent = server.join().expect("mock server");
+        assert_eq!(sent.len(), 6, "{sent:?}");
+        assert!(
+            sent[0].contains("GET /api/v2/account/settings"),
+            "{}",
+            sent[0]
+        );
+        assert!(
+            sent[1]
+                .to_ascii_lowercase()
+                .contains("if-none-match: \"0\""),
+            "{}",
+            sent[1]
+        );
+        assert!(
+            sent[2].contains("PUT /api/v2/account/settings"),
+            "{}",
+            sent[2]
+        );
+        assert!(
+            sent[2].to_ascii_lowercase().contains("if-match: \"0\""),
+            "{}",
+            sent[2]
+        );
+    }
+
+    #[test]
+    fn account_settings_poll_uses_cached_etag_and_401_refreshes_the_session() {
+        let defaults = default_account_settings_document();
+        let written = valid_account_settings_document();
+        let (origin, server) = spawn_mock_server(vec![
+            http_json_with_etag(200, "\"0\"", &defaults),
+            http_not_modified("\"0\""),
+            token_refresh_http(),
+            http_json_with_etag(200, "\"1\"", &written),
+        ]);
+        let root = std::env::temp_dir().join(format!(
+            "quota-account-settings-poll-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let manager = signed_in_manager(&origin, &root);
+        let cancel = AtomicBool::new(false);
+        manager
+            .fetch_account_settings(&cancel, false)
+            .expect("first");
+        manager.fetch_account_settings(&cancel, false).expect("304");
+        let cached = manager
+            .state
+            .account_settings_cache("account_1")
+            .expect("cache")
+            .expect("present");
+        assert_eq!(cached.etag, "\"0\"");
+        assert_eq!(cached.state.revision, 0);
+
+        let mut session = manager.state.session_json().expect("session").expect("row");
+        session["session"]["access_expires_at"] = serde_json::json!(
+            chrono::Utc::now()
+                .checked_add_signed(chrono::Duration::seconds(30))
+                .expect("expiry")
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        );
+        manager
+            .state
+            .write_session_json(&session)
+            .expect("near expiry");
+        manager
+            .fetch_account_settings(&cancel, true)
+            .expect("refresh then get");
+        let after = manager
+            .state
+            .account_settings_cache("account_1")
+            .expect("cache")
+            .expect("updated");
+        assert_eq!(after.state.revision, 1);
+        let session = manager.state.session_json().expect("session").expect("row");
+        assert_eq!(
+            session["session"]["access_token"],
+            "access_token_rotated_xx"
+        );
+
+        let sent = server.join().expect("mock server");
+        assert_eq!(sent.len(), 4, "{sent:?}");
+        assert!(
+            sent[1]
+                .to_ascii_lowercase()
+                .contains("if-none-match: \"0\""),
+            "{}",
+            sent[1]
+        );
+        assert!(sent[2].starts_with("POST /oauth/v2/token"), "{}", sent[2]);
+        assert!(
+            sent[3].contains("GET /api/v2/account/settings"),
+            "{}",
+            sent[3]
+        );
+        assert!(
+            !sent[3].to_ascii_lowercase().contains("if-none-match"),
+            "{}",
+            sent[3]
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn account_settings_without_a_session_is_the_typed_refusal() {
+        let (origin, server) = spawn_mock_server(vec![]);
+        let root = std::env::temp_dir().join(format!(
+            "quota-account-settings-signed-out-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(crate::state::StateStore::open(&root).expect("state"));
+        let manager = AccountManager::new(
+            Arc::new(RelayClient::for_test(&origin).expect("test client")),
+            state,
+            "Test Mac".to_owned(),
+        );
+        let cancel = AtomicBool::new(false);
+        let error = manager
+            .refresh_account_settings(&cancel)
+            .expect_err("signed out");
+        assert_eq!(
+            error.error.code,
+            crate::protocol::ErrorCode::AuthenticationRequired
+        );
+        drop(server);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

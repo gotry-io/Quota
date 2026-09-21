@@ -5,6 +5,10 @@ import Foundation
 ///
 /// Thresholds are remaining-percent integers 1–99, kept descending and unique. A selector
 /// that has never been edited uses `[20, 10]`. Persistence is each app's own UserDefaults.
+///
+/// Every field but `enabled` follows the Account (ADR 0061): `AccountSettingsPolicy` is the
+/// travelling half, and the master switch stays here because it mirrors this device's
+/// notification permission.
 public struct AlertRules: Equatable, Sendable {
   public var enabled: Bool
   public var resetReminders: Bool

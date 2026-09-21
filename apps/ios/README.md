@@ -38,10 +38,24 @@ deltas are in [`DESIGN.md`](DESIGN.md).
 The app owns SwiftUI, `ASWebAuthenticationSession`, UI preferences, App Group snapshot publish/clear,
 and WidgetKit timeline reloads. [`packages/apple-client`](../../packages/apple-client)
 owns wire decoding, PKCE values, the fixed-origin HTTPS client, session refresh/revoke, Keychain
-session storage, last-good Account summary cache, the provider web collectors
+session storage, last-good Account summary cache, the Account settings document
+(`GET` / `PUT /api/v2/account/settings`, cached beside the summary, cleared on sign-out),
+the provider web collectors
 (`QuotaProviderWeb`) and their Keychain store (`QuotaProviderSessions`), and the Foundation-only
 `QuotaWidgetData` snapshot types/store. The app owns the local collection pass over those sessions
-and the app-container file holding its result.
+and the app-container file holding its result. Alert policy and the monthly budget follow the
+Account when signed in
+([ADR 0061](../../docs/decisions/0061-alert-policy-and-the-budget-follow-the-account.md));
+`enabled` and delivery stay on this iPhone. The last local values keep working signed out.
+A local policy edit is applied immediately, written with `If-Match`, and on 412 replayed once
+onto the fresh document. Un-acknowledged edits are an ordered list per Account under
+`accountSettings.pendingEdits` (the old single-record `accountSettings.pendingEdit` is
+migrated into that list on load and then deleted). A later edit of the same target replaces
+the earlier one; different targets append. One PUT folds the whole list. A second 412 or an
+offline write keeps the local values and retries that snapshot; an edit that arrives while a
+write is in flight is not cleared by that write's success. Pending edits for another Account
+stay queued and are not sent. First sync is remembered per Account id in
+`accountSettings.firstSyncAccountIDs`.
 [`packages/apple-shared`](../../packages/apple-shared) owns remaining-quota, plan/account label,
 compact count, Usage cost, and compact relative-age presentation, and — in `QuotaObservations` —
 the subscription key and the observation merge this app resolves Overview with. Views never call `URLSession`, Security, or decode JSON. `QuotaWire` is the one definition of the

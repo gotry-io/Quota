@@ -1,4 +1,5 @@
 import Foundation
+import QuotaAlerts
 import QuotaPresentation
 import QuotaWire
 
@@ -519,7 +520,7 @@ extension LocalServiceOverviewItem {
 struct LocalServiceState: Decodable, Sendable {
   /// The one private IPC version this app speaks. The two ship together, so a helper that
   /// announces anything else is not the one in this bundle.
-  static let supportedIPCVersion = 3
+  static let supportedIPCVersion = 4
 
   let ipcVersion: Int
   let revision: Int
@@ -530,6 +531,9 @@ struct LocalServiceState: Decodable, Sendable {
   let quota: LocalServiceComponent<QuotaCollectionReport>
   let usage: LocalServiceComponent<LocalUsageReport>
   let account: LocalServiceComponent<LocalServiceAccountState>
+  /// Present only while signed in and the helper has already read the document. Signed out, the
+  /// key is absent, not `null`.
+  let accountSettings: LocalServiceAccountSettingsState?
   let pricing: LocalServiceComponent<PricingCatalog>
   let providers: [LocalServiceProviderConfig]
   var providerStatus: [LocalServiceProviderStatus] = []
@@ -537,6 +541,44 @@ struct LocalServiceState: Decodable, Sendable {
   let browserScanEnabled: [ProviderID]
   let overview: [LocalServiceOverviewItem]
   let cache: LocalServiceCacheState
+
+  init(
+    ipcVersion: Int,
+    revision: Int,
+    usageUploadEnabled: Bool,
+    groupUsageByProject: Bool,
+    quotaRefreshIntervalSeconds: Int,
+    usagePeriods: LocalServiceUsagePeriodCache,
+    quota: LocalServiceComponent<QuotaCollectionReport>,
+    usage: LocalServiceComponent<LocalUsageReport>,
+    account: LocalServiceComponent<LocalServiceAccountState>,
+    accountSettings: LocalServiceAccountSettingsState? = nil,
+    pricing: LocalServiceComponent<PricingCatalog>,
+    providers: [LocalServiceProviderConfig],
+    providerStatus: [LocalServiceProviderStatus] = [],
+    providerBrowserSessions: [LocalServiceProviderBrowserSession],
+    browserScanEnabled: [ProviderID],
+    overview: [LocalServiceOverviewItem],
+    cache: LocalServiceCacheState
+  ) {
+    self.ipcVersion = ipcVersion
+    self.revision = revision
+    self.usageUploadEnabled = usageUploadEnabled
+    self.groupUsageByProject = groupUsageByProject
+    self.quotaRefreshIntervalSeconds = quotaRefreshIntervalSeconds
+    self.usagePeriods = usagePeriods
+    self.quota = quota
+    self.usage = usage
+    self.account = account
+    self.accountSettings = accountSettings
+    self.pricing = pricing
+    self.providers = providers
+    self.providerStatus = providerStatus
+    self.providerBrowserSessions = providerBrowserSessions
+    self.browserScanEnabled = browserScanEnabled
+    self.overview = overview
+    self.cache = cache
+  }
 
   private enum CodingKeys: String, CodingKey {
     case ipcVersion
@@ -548,6 +590,7 @@ struct LocalServiceState: Decodable, Sendable {
     case quota
     case usage
     case account
+    case accountSettings
     case pricing
     case providers
     case providerStatus
@@ -615,7 +658,8 @@ extension LocalServiceState {
       "ipcVersion", "revision", "usageUploadEnabled", "groupUsageByProject",
       "quotaRefreshIntervalSeconds",
       "usagePeriods", "quota", "usage",
-      "account", "pricing", "providers", "providerStatus", "providerBrowserSessions",
+      "account", "accountSettings", "pricing", "providers", "providerStatus",
+      "providerBrowserSessions",
       "browserScanEnabled",
       "overview", "cache",
     ])
@@ -630,6 +674,8 @@ extension LocalServiceState {
     usage = try container.decode(LocalServiceComponent<LocalUsageReport>.self, forKey: .usage)
     account = try container.decode(
       LocalServiceComponent<LocalServiceAccountState>.self, forKey: .account)
+    accountSettings = try container.decodeIfPresent(
+      LocalServiceAccountSettingsState.self, forKey: .accountSettings)
     pricing = try container.decode(LocalServiceComponent<PricingCatalog>.self, forKey: .pricing)
     providers = try container.decode([LocalServiceProviderConfig].self, forKey: .providers)
     providerStatus = try container.decode(
@@ -639,6 +685,83 @@ extension LocalServiceState {
     browserScanEnabled = try container.decode([ProviderID].self, forKey: .browserScanEnabled)
     overview = try container.decode([LocalServiceOverviewItem].self, forKey: .overview)
     cache = try container.decode(LocalServiceCacheState.self, forKey: .cache)
+  }
+}
+
+/// The Account settings document as `get_state` and `refresh_account_settings` carry it.
+struct LocalServiceAccountSettingsState: Decodable, Equatable, Sendable {
+  let document: AccountSettingsDocument
+  let revision: Int
+
+  init(document: AccountSettingsDocument, revision: Int) {
+    self.document = document
+    self.revision = revision
+  }
+
+  /// The `If-Match` value a later write states: `"<revision>"`, including the quotes.
+  var ifMatch: String { Self.ifMatch(revision) }
+
+  static func ifMatch(_ revision: Int) -> String { "\"\(revision)\"" }
+}
+
+/// What `set_account_settings` answers: the document Relay now holds, and whether this write
+/// landed or must be re-applied onto it.
+enum LocalServiceAccountSettingsWriteResult: Equatable, Sendable {
+  case written(AccountSettingsDocument)
+  case conflict(AccountSettingsDocument)
+
+  var document: AccountSettingsDocument {
+    switch self {
+    case .written(let document), .conflict(let document): document
+    }
+  }
+}
+
+struct LocalServiceAccountSettingsMutationResult: Decodable, Sendable {
+  let outcome: Outcome
+  let document: AccountSettingsDocument
+  let revision: Int
+
+  enum Outcome: String, Decodable, Sendable {
+    case written
+    case conflict
+  }
+
+  var result: LocalServiceAccountSettingsWriteResult {
+    switch outcome {
+    case .written: .written(document)
+    case .conflict: .conflict(document)
+    }
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case outcome
+    case document
+    case revision
+  }
+}
+
+extension LocalServiceAccountSettingsState {
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["document", "revision"])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    document = try decodeIPCAccountSettingsDocument(from: container, forKey: .document)
+    revision = try container.decode(Int.self, forKey: .revision)
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case document
+    case revision
+  }
+}
+
+extension LocalServiceAccountSettingsMutationResult {
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["outcome", "document", "revision"])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    outcome = try container.decode(Outcome.self, forKey: .outcome)
+    document = try decodeIPCAccountSettingsDocument(from: container, forKey: .document)
+    revision = try container.decode(Int.self, forKey: .revision)
   }
 }
 
@@ -1077,5 +1200,108 @@ extension LocalServiceEvent {
     revision = try container.decode(Int.self, forKey: .revision)
     changedComponents = try container.decode(
       [LocalServiceComponentName].self, forKey: .changedComponents)
+  }
+}
+
+/// The IPC envelope is decoded with `convertFromSnakeCase`. The Account settings document's keys
+/// are literal snake_case, so the nested object is captured and decoded with
+/// `AccountSettingsDocument.decode` (a tolerant read). Unknown document keys are ignored.
+private func decodeIPCAccountSettingsDocument<Key: CodingKey>(
+  from container: KeyedDecodingContainer<Key>,
+  forKey key: Key
+) throws -> AccountSettingsDocument {
+  let nested = try container.decode(IPCJSONValue.self, forKey: key)
+  let data = try JSONSerialization.data(withJSONObject: nested.snakeCasedJSONObject())
+  return try AccountSettingsDocument.decode(data)
+}
+
+/// Untyped JSON as the IPC decoder presents it, so a nested document can be re-encoded with the
+/// snake_case keys `AccountSettingsDocument.decode` reads.
+private enum IPCJSONValue: Decodable {
+  case object([String: IPCJSONValue])
+  case array([IPCJSONValue])
+  case string(String)
+  case int(Int)
+  case double(Double)
+  case bool(Bool)
+  case null
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.singleValueContainer()
+    if container.decodeNil() {
+      self = .null
+    } else if let object = try? container.decode([String: IPCJSONValue].self) {
+      self = .object(object)
+    } else if let array = try? container.decode([IPCJSONValue].self) {
+      self = .array(array)
+    } else if let bool = try? container.decode(Bool.self) {
+      self = .bool(bool)
+    } else if let int = try? container.decode(Int.self) {
+      self = .int(int)
+    } else if let double = try? container.decode(Double.self) {
+      self = .double(double)
+    } else if let string = try? container.decode(String.self) {
+      self = .string(string)
+    } else {
+      throw DecodingError.dataCorruptedError(
+        in: container,
+        debugDescription: "Unsupported JSON in the Account settings document."
+      )
+    }
+  }
+
+  func snakeCasedJSONObject() -> Any {
+    switch self {
+    case .object(let object):
+      Dictionary(
+        uniqueKeysWithValues: object.map { key, value in
+          (Self.convertToSnakeCase(key), value.snakeCasedJSONObject())
+        }
+      )
+    case .array(let array):
+      array.map { $0.snakeCasedJSONObject() }
+    case .string(let value):
+      value
+    case .int(let value):
+      value
+    case .double(let value):
+      value
+    case .bool(let value):
+      value
+    case .null:
+      NSNull()
+    }
+  }
+
+  /// Matches `JSONEncoder.KeyEncodingStrategy.convertToSnakeCase`.
+  private static func convertToSnakeCase(_ stringKey: String) -> String {
+    guard !stringKey.isEmpty else { return stringKey }
+    var words: [Range<String.Index>] = []
+    var wordStart = stringKey.startIndex
+    var searchRange = stringKey.startIndex..<stringKey.endIndex
+    while let upperCaseRange = stringKey.rangeOfCharacter(
+      from: .uppercaseLetters, options: [], range: searchRange)
+    {
+      words.append(wordStart..<upperCaseRange.lowerBound)
+      searchRange = upperCaseRange.lowerBound..<searchRange.upperBound
+      guard
+        let lowerCaseRange = stringKey.rangeOfCharacter(
+          from: .lowercaseLetters, options: [], range: searchRange)
+      else {
+        wordStart = searchRange.lowerBound
+        break
+      }
+      let nextAfterCapital = stringKey.index(after: upperCaseRange.lowerBound)
+      if lowerCaseRange.lowerBound == nextAfterCapital {
+        wordStart = upperCaseRange.lowerBound
+      } else {
+        let beforeLower = stringKey.index(before: lowerCaseRange.lowerBound)
+        words.append(upperCaseRange.lowerBound..<beforeLower)
+        wordStart = beforeLower
+      }
+      searchRange = lowerCaseRange.upperBound..<searchRange.upperBound
+    }
+    words.append(wordStart..<stringKey.endIndex)
+    return words.map { stringKey[$0].lowercased() }.filter { !$0.isEmpty }.joined(separator: "_")
   }
 }

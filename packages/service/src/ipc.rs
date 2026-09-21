@@ -236,7 +236,7 @@ fn read_frame<R: BufRead>(input: &mut R) -> io::Result<Option<Result<Vec<u8>, Fr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::DiagnosticReport;
+    use crate::protocol::{DiagnosticReport, IPC_VERSION};
     use crate::service::{BackendError, LocalBackend, LoginOutcome, RefreshOutcome, RefreshSink};
     use crate::state::StateStore;
     use std::io::Cursor;
@@ -356,7 +356,8 @@ mod tests {
 
         let lines = output.lines();
         assert_eq!(
-            lines[0], r#"{"type":"event","event":"ready","ipc_version":3}"#,
+            lines[0],
+            format!(r#"{{"type":"event","event":"ready","ipc_version":{IPC_VERSION}}}"#),
             "ready must be the first line on the stream"
         );
         assert!(
@@ -392,7 +393,7 @@ mod tests {
         let lines = output.lines();
         assert_eq!(
             lines[0],
-            r#"{"type":"event","event":"ready","ipc_version":3}"#
+            format!(r#"{{"type":"event","event":"ready","ipc_version":{IPC_VERSION}}}"#)
         );
         assert!(lines[1].contains(r#""request_id":"r1""#));
         assert!(lines[1].contains(r#""code":"client_upgrade_required""#));

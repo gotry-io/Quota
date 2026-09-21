@@ -53,9 +53,10 @@ final class AlertCoordinator {
 
   /// Says once per month that 80%, and then 100%, of the budget has been spent.
   ///
-  /// The budget is its own cycle and its own store: the alert switch over subscriptions does not
-  /// silence it, and signing out does not clear it, because a budget is not a fact about an
-  /// Account.
+  /// The budget is its own cycle and its own fired-state store. The alert switch over
+  /// subscriptions does not silence it. Signing out does not clear the local amount: last values
+  /// stay and keep working, and the Account document is what signed-in clients share
+  /// ([ADR 0061](../../../../docs/decisions/0061-alert-policy-and-the-budget-follow-the-account.md)).
   func evaluateBudget(budget: UsageBudget, progress: UsageBudgetProgress?) {
     let previous = budgetStore.loadFired()
     let result = BudgetAlertEvaluator.evaluate(

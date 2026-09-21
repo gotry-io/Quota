@@ -29,12 +29,13 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::protocol::{
-    BrowserAccessDenialReason, CacheState, ComponentName, ComponentState, ComponentStatus,
-    DEFAULT_QUOTA_REFRESH_INTERVAL_SECONDS, DiagnosticAttempt, DiagnosticAttemptCode,
-    DiagnosticAttemptKind, DiagnosticAttemptOutcome, DiagnosticAttemptTrigger, DiagnosticReport,
-    ErrorCode, IPC_VERSION, IpcError, MAXIMUM_DIAGNOSTIC_RECENT, ProviderBrowserSessionView,
-    ProviderConfigView, QUOTA_REFRESH_INTERVALS_SECONDS, QuotaOverviewItem, RecoveryAction,
-    StateSnapshot, UsagePeriod, UsagePeriodCache, UsageSource,
+    AccountSettingsState, BrowserAccessDenialReason, CacheState, ComponentName, ComponentState,
+    ComponentStatus, DEFAULT_QUOTA_REFRESH_INTERVAL_SECONDS, DiagnosticAttempt,
+    DiagnosticAttemptCode, DiagnosticAttemptKind, DiagnosticAttemptOutcome,
+    DiagnosticAttemptTrigger, DiagnosticReport, ErrorCode, IPC_VERSION, IpcError,
+    MAXIMUM_DIAGNOSTIC_RECENT, ProviderBrowserSessionView, ProviderConfigView,
+    QUOTA_REFRESH_INTERVALS_SECONDS, QuotaOverviewItem, RecoveryAction, StateSnapshot, UsagePeriod,
+    UsagePeriodCache, UsageSource,
 };
 use crate::usage::{
     DatedUsageRow, LocalHourlyFact, NormalizedUsageEvent, USAGE_SESSION_RETENTION_DAYS, UsageAgent,
@@ -146,6 +147,19 @@ pub struct BrowserAccessDenial {
 struct ProviderFile {
     schema_version: u32,
     providers: BTreeMap<String, ProviderSecret>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredAccountSettings {
+    etag: String,
+    document: Value,
+}
+
+#[derive(Debug, Clone)]
+pub struct CachedAccountSettings {
+    pub etag: String,
+    pub state: AccountSettingsState,
 }
 
 #[derive(Debug, Clone)]
@@ -577,6 +591,24 @@ impl StateStore {
         let browser_scan_enabled = self.browser_scan_enabled_providers()?;
         let cache_reset_at = self.with_identity(|conn| preference(conn, CACHE_RESET_KEY))?;
         let session = self.session_json()?;
+        let account_settings = match session
+            .as_ref()
+            .and_then(|value| value.get("status"))
+            .and_then(Value::as_str)
+        {
+            Some("active") => match session
+                .as_ref()
+                .and_then(|value| value.get("account_id"))
+                .and_then(Value::as_str)
+                .filter(|account_id| !account_id.is_empty())
+            {
+                Some(account_id) => self
+                    .account_settings_cache(account_id)?
+                    .map(|cached| cached.state),
+                None => None,
+            },
+            _ => None,
+        };
         self.with_cache(|conn| {
             let revision = metadata_u64(conn, "revision")?;
             self.remembered_revision.store(revision, Ordering::Release);
@@ -624,6 +656,7 @@ impl StateStore {
                     .unwrap_or_else(|| ComponentRecord::empty(ComponentStatus::Unavailable))
                     .to_wire(),
                 account: account.to_wire(),
+                account_settings,
                 pricing: pricing
                     .unwrap_or_else(|| ComponentRecord::empty(ComponentStatus::Unavailable))
                     .to_wire(),
@@ -1465,6 +1498,72 @@ impl StateStore {
         self.bump_revision()
     }
 
+    /// The last Account settings document this device read for `account_id`, if any.
+    ///
+    /// The row lives in `identity.sqlite` so a cache reset cannot drop it, and the key names
+    /// the Account so a later sign-in cannot be handed someone else's copy.
+    pub fn account_settings_cache(
+        &self,
+        account_id: &str,
+    ) -> Result<Option<CachedAccountSettings>, StateError> {
+        if !is_account_settings_account_id(account_id) {
+            return Err(StateError::InvalidState);
+        }
+        let key = account_settings_preference_key(account_id);
+        let raw = self.with_identity(|conn| preference(conn, &key))?;
+        let Some(raw) = raw else {
+            return Ok(None);
+        };
+        let stored: StoredAccountSettings = serde_json::from_str(&raw)?;
+        let revision = stored
+            .document
+            .get("revision")
+            .and_then(Value::as_u64)
+            .ok_or(StateError::InvalidState)?;
+        Ok(Some(CachedAccountSettings {
+            etag: stored.etag,
+            state: AccountSettingsState {
+                document: stored.document,
+                revision,
+            },
+        }))
+    }
+
+    /// Records the document and the ETag it is current at. An empty ETag means the next GET
+    /// is unconditional.
+    pub fn set_account_settings_cache(
+        &self,
+        account_id: &str,
+        etag: Option<&str>,
+        document: &Value,
+    ) -> Result<u64, StateError> {
+        if !is_account_settings_account_id(account_id) {
+            return Err(StateError::InvalidState);
+        }
+        let etag = etag.unwrap_or("");
+        if etag.len() > 256 || etag.trim() != etag {
+            return Err(StateError::InvalidState);
+        }
+        let raw = serde_json::to_string(&StoredAccountSettings {
+            etag: etag.to_owned(),
+            document: document.clone(),
+        })?;
+        if raw.len() > crate::protocol::MAXIMUM_LINE_BYTES {
+            return Err(StateError::InvalidState);
+        }
+        let key = account_settings_preference_key(account_id);
+        self.with_identity_mut(|conn| write_preference(conn, &key, &raw))?;
+        self.bump_revision()
+    }
+
+    fn clear_account_settings_cache(conn: &Connection) -> Result<(), StateError> {
+        conn.execute(
+            "DELETE FROM preferences WHERE key GLOB 'account_settings:*'",
+            [],
+        )?;
+        Ok(())
+    }
+
     pub fn group_usage_by_project(&self) -> Result<bool, StateError> {
         self.with_identity(
             |conn| match preference(conn, "group_usage_by_project")?.as_deref() {
@@ -1749,10 +1848,16 @@ impl StateStore {
     /// Deletes the session only if the caller still owns the pending epoch.
     pub fn clear_session_if_epoch(&self, expected_epoch: u64) -> Result<bool, StateError> {
         let cleared = self.with_identity_mut(|conn| {
-            Ok(conn.execute(
+            let tx = conn.transaction()?;
+            let changed = tx.execute(
                 "DELETE FROM session WHERE id = 1 AND epoch = ?1",
                 params![i64::try_from(expected_epoch).map_err(|_| StateError::InvalidState)?],
-            )? > 0)
+            )? > 0;
+            if changed {
+                Self::clear_account_settings_cache(&tx)?;
+            }
+            tx.commit()?;
+            Ok(changed)
         })?;
         if cleared {
             self.forget_account_reads();
@@ -4450,6 +4555,18 @@ fn browser_scan_preference_key(provider: &str) -> String {
     format!("browser_scan:{provider}")
 }
 
+fn account_settings_preference_key(account_id: &str) -> String {
+    format!("account_settings:{account_id}")
+}
+
+fn is_account_settings_account_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._:-".contains(&byte))
+}
+
 fn parse_quota_refresh_interval(stored: Option<&str>) -> u64 {
     stored
         .and_then(|value| value.parse().ok())
@@ -6392,6 +6509,79 @@ mod tests {
         assert_eq!(value["device_id"], "device_1");
         assert_eq!(value["device_generation"], 2);
         assert!(value["account_summary"].is_null());
+
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn account_settings_cache_is_per_account_survives_cache_reset_and_clears_on_sign_out() {
+        let root = temp_root("account-settings-cache");
+        let store = StateStore::open(&root).expect("state");
+        let document = serde_json::json!({
+            "protocol_version": 2,
+            "revision": 1,
+            "updated_at": "2026-09-21T10:00:00Z",
+            "alerts": {
+                "reset_reminders": true,
+                "pace_alerts": true,
+                "thresholds": { "a1b2c3d4e5f6": [20, 10] }
+            },
+            "budget": { "amount_usd": "250.00", "alerts": true }
+        });
+        let mut first = active_session();
+        first["account_id"] = serde_json::json!("account_1");
+        store.write_session_json(&first).expect("session");
+        store
+            .set_account_settings_cache("account_1", Some("\"1\""), &document)
+            .expect("cache");
+        let snapshot = store.snapshot().expect("snapshot");
+        let settings = snapshot.account_settings.expect("present while signed in");
+        assert_eq!(settings.revision, 1);
+        assert_eq!(settings.document, document);
+
+        let mut other = active_session();
+        other["account_id"] = serde_json::json!("account_2");
+        store.write_session_json(&other).expect("other account");
+        assert!(
+            store
+                .snapshot()
+                .expect("other account snapshot")
+                .account_settings
+                .is_none()
+        );
+
+        store
+            .write_session_json(&first)
+            .expect("restore first account");
+        let (_, epoch) = store
+            .session_snapshot()
+            .expect("snapshot")
+            .expect("session");
+        drop(store);
+
+        fs::write(root.join(CACHE_NAME), b"this is not a database").expect("garbage");
+        let store = StateStore::open(&root).expect("reopen");
+        let restored = store
+            .account_settings_cache("account_1")
+            .expect("identity survived")
+            .expect("settings survived");
+        assert_eq!(restored.etag, "\"1\"");
+        assert_eq!(restored.state.document, document);
+        assert!(store.clear_session_if_epoch(epoch).expect("sign-out"));
+        assert!(
+            store
+                .account_settings_cache("account_1")
+                .expect("cleared")
+                .is_none()
+        );
+        assert!(
+            store
+                .snapshot()
+                .expect("signed out")
+                .account_settings
+                .is_none()
+        );
 
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");

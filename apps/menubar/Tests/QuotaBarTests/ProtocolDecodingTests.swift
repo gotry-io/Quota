@@ -355,7 +355,7 @@ func rejectsUnknownNestedLocalServiceStateFields() throws {
   let data = Data(
     #"""
     {
-      "ipc_version": 3,
+      "ipc_version": 4,
       "revision": 0,
       "usage_upload_enabled": true,
       "group_usage_by_project": true,
@@ -439,6 +439,138 @@ func rejectsUnknownNestedLocalServiceStateFields() throws {
   #expect(throws: DecodingError.self) {
     _ = try QuotaWireCodec.makeDecoder().decode(LocalServiceState.self, from: nestedExtra)
   }
+
+  #expect(state.accountSettings == nil)
+}
+
+@Test
+func decodesAccountSettingsWhenPresentAndIgnoresUnknownDocumentKeys() throws {
+  let data = Data(
+    #"""
+    {
+      "ipc_version": 4,
+      "revision": 0,
+      "usage_upload_enabled": true,
+      "group_usage_by_project": true,
+      "quota_refresh_interval_seconds": 300,
+      "usage_periods": {"local": {}, "account": {}},
+      "quota": {
+        "status": "unavailable",
+        "value": null,
+        "updated_at": null,
+        "last_error": null,
+        "refreshing": false
+      },
+      "usage": {
+        "status": "unavailable",
+        "value": null,
+        "updated_at": null,
+        "last_error": null,
+        "refreshing": false
+      },
+      "account": {
+        "status": "ready",
+        "value": {
+          "auth_status": "signed_in",
+          "account_id": "account_1",
+          "device_id": "device_1",
+          "device_generation": 1,
+          "account_summary": null
+        },
+        "updated_at": null,
+        "last_error": null,
+        "refreshing": false
+      },
+      "account_settings": {
+        "document": {
+          "protocol_version": 2,
+          "revision": 1,
+          "updated_at": "2026-09-21T10:00:00Z",
+          "alerts": {
+            "reset_reminders": true,
+            "pace_alerts": true,
+            "thresholds": { "a1b2c3d4e5f6": [20, 10] },
+            "quiet_hours": { "from": "22:00" }
+          },
+          "budget": { "amount_usd": "250.00", "alerts": true, "currency": "USD" },
+          "experiment": true
+        },
+        "revision": 1
+      },
+      "pricing": {
+        "status": "unavailable",
+        "value": null,
+        "updated_at": null,
+        "last_error": null,
+        "refreshing": false
+      },
+      "providers": [],
+      "provider_status": [],
+      "provider_browser_sessions": [],
+      "browser_scan_enabled": [],
+      "overview": [],
+      "cache": { "rebuilding": false, "reset_at": null }
+    }
+    """#.utf8
+  )
+  let state = try QuotaWireCodec.makeDecoder().decode(LocalServiceState.self, from: data)
+  let settings = try #require(state.accountSettings)
+  #expect(settings.revision == 1)
+  #expect(settings.document.revision == 1)
+  #expect(settings.document.alerts.resetReminders)
+  #expect(settings.document.alerts.thresholds == ["a1b2c3d4e5f6": [20, 10]])
+  #expect(settings.document.budget.amountUSD == Decimal(250))
+  #expect(settings.ifMatch == "\"1\"")
+
+  let extraEnvelope = Data(
+    String(decoding: data, as: UTF8.self).replacingOccurrences(
+      of: "\"account_settings\": {",
+      with: "\"account_settings\": { \"future_field\": true,"
+    ).utf8
+  )
+  #expect(throws: DecodingError.self) {
+    _ = try QuotaWireCodec.makeDecoder().decode(LocalServiceState.self, from: extraEnvelope)
+  }
+}
+
+@Test
+func decodesAccountSettingsMutationWrittenAndConflict() throws {
+  let document = """
+    {
+      "protocol_version": 2,
+      "revision": 1,
+      "updated_at": "2026-09-21T10:00:00Z",
+      "alerts": {
+        "reset_reminders": true,
+        "pace_alerts": true,
+        "thresholds": { "a1b2c3d4e5f6": [20, 10] }
+      },
+      "budget": { "amount_usd": "250.00", "alerts": true }
+    }
+    """
+  let written = Data(
+    """
+    { "outcome": "written", "document": \(document), "revision": 1 }
+    """.utf8
+  )
+  let writtenResult = try QuotaWireCodec.makeDecoder().decode(
+    LocalServiceAccountSettingsMutationResult.self, from: written)
+  #expect(writtenResult.outcome == .written)
+  #expect(writtenResult.document.revision == 1)
+  if case .written(let decoded) = writtenResult.result {
+    #expect(decoded.budget.amountUSD == Decimal(250))
+  } else {
+    Issue.record("expected written")
+  }
+
+  let conflict = Data(
+    """
+    { "outcome": "conflict", "document": \(document), "revision": 1 }
+    """.utf8
+  )
+  let conflictResult = try QuotaWireCodec.makeDecoder().decode(
+    LocalServiceAccountSettingsMutationResult.self, from: conflict)
+  #expect(conflictResult.outcome == .conflict)
 }
 
 @Test

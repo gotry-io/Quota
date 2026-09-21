@@ -45,7 +45,7 @@ struct DashboardUsageView: View {
       }
 
       if let progress = state.budget {
-        budgetBar(progress)
+        budgetBar(progress, basis: state.budgetBasis)
       }
 
       if let warning = state.statusWarning {
@@ -217,16 +217,23 @@ struct DashboardUsageView: View {
     .quotaFont(.listSecondary)
   }
 
-  private func budgetBar(_ progress: UsageBudgetProgress) -> some View {
+  private func budgetBar(_ progress: UsageBudgetProgress, basis: String?) -> some View {
     usageCard("Monthly budget") {
       VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
         ProgressView(value: progress.fraction)
         Text(progress.text)
           .quotaMonoListValueStyle()
+        if let basis {
+          Text(basis)
+            .quotaFont(.meta)
+            .foregroundStyle(QuotaPalette.body)
+        }
       }
       .accessibilityElement(children: .ignore)
       .accessibilityLabel("Monthly budget")
-      .accessibilityValue(progress.accessibilityText)
+      .accessibilityValue(
+        basis.map { "\(progress.accessibilityText). \($0)" } ?? progress.accessibilityText
+      )
     }
   }
 

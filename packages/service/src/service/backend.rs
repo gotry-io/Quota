@@ -3371,6 +3371,22 @@ impl LocalBackend for NativeBackend {
         self.read_quota_history(since)
     }
 
+    fn set_account_settings(
+        &self,
+        document: &crate::protocol::AccountSettingsWriteDocument,
+        if_match: &str,
+    ) -> Result<crate::protocol::AccountSettingsMutationResult, BackendError> {
+        self.account
+            .put_account_settings(document, if_match, &AtomicBool::new(false))
+    }
+
+    fn refresh_account_settings(
+        &self,
+    ) -> Result<crate::protocol::AccountSettingsState, BackendError> {
+        self.account
+            .refresh_account_settings(&AtomicBool::new(false))
+    }
+
     fn diagnose(&self) -> Result<DiagnosticReport, BackendError> {
         self.diagnostic_report()
     }
@@ -4879,6 +4895,13 @@ mod tests {
                         recorded.push(head.clone());
                         let body = if head.contains("/api/v6/account/usage/activity") {
                             activity_hours_response()
+                        } else if head.contains("GET /api/v2/account/settings") {
+                            if head.to_ascii_lowercase().contains("if-none-match") {
+                                "HTTP/1.1 304 Not Modified\r\nETag: \"0\"\r\nConnection: close\r\n\r\n"
+                                    .to_owned()
+                            } else {
+                                account_settings_response()
+                            }
                         } else {
                             responses.next().unwrap_or_default()
                         };
@@ -4933,6 +4956,13 @@ mod tests {
                         std::thread::sleep(delay);
                         let body = if head.contains("/api/v6/account/usage/activity") {
                             activity_hours_response()
+                        } else if head.contains("GET /api/v2/account/settings") {
+                            if head.to_ascii_lowercase().contains("if-none-match") {
+                                "HTTP/1.1 304 Not Modified\r\nETag: \"0\"\r\nConnection: close\r\n\r\n"
+                                    .to_owned()
+                            } else {
+                                account_settings_response()
+                            }
                         } else {
                             responses.next().unwrap_or_default()
                         };
@@ -4994,6 +5024,26 @@ mod tests {
                 .to_rfc3339_opts(SecondsFormat::Secs, true)
         );
         session
+    }
+
+    fn account_settings_response() -> String {
+        let body = json!({
+            "protocol_version": crate::protocol::CONTROL_PROTOCOL,
+            "revision": 0,
+            "updated_at": "1970-01-01T00:00:00Z",
+            "alerts": {
+                "reset_reminders": true,
+                "pace_alerts": true,
+                "thresholds": {}
+            },
+            "budget": { "amount_usd": null, "alerts": true }
+        });
+        let encoded = serde_json::to_vec(&body).expect("json");
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nETag: \"0\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            encoded.len(),
+            String::from_utf8(encoded).expect("utf8")
+        )
     }
 
     fn activity_hours_response() -> String {
@@ -5270,11 +5320,16 @@ mod tests {
             .iter()
             .filter(|head| !head.contains("/api/v6/account/usage/activity"))
             .collect();
-        assert_eq!(accounted.len(), 4, "{sent:?}");
+        assert_eq!(accounted.len(), 5, "{sent:?}");
         assert!(
             sent[3].starts_with("GET /api/v6/account/summary"),
             "{}",
             sent[3]
+        );
+        assert!(
+            sent[4].starts_with("GET /api/v2/account/settings"),
+            "{}",
+            sent[4]
         );
         drop(backend);
         drop(state);

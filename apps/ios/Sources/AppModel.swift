@@ -75,8 +75,10 @@ final class AppModel {
   /// The provider sessions this phone signed in for, and the consent behind them. Settings owns
   /// the rows; the sessions themselves are the Keychain store's.
   let providers: ProvidersModel
-  /// Selected Usage range, activity/rhythm/day reads, and this device's monthly budget.
+  /// Selected Usage range, activity/rhythm/day reads, and this device's copy of the monthly budget.
   let usage: UsageModel
+  /// Alert policy and the budget as the Account settings document. No forwarding accessors.
+  let accountSettings: AccountSettingsSync
 
   var phase: Phase = .launching
   var summary: AccountSummary?
@@ -173,6 +175,8 @@ final class AppModel {
     localCollector: LocalCollector? = nil,
     providerStatusClient: any ProviderStatusServing = IdleProviderStatusClient(),
     budgetStore: UsageBudgetStore = UsageBudgetStore(),
+    settingsDefaults: UserDefaults = .standard,
+    syncAccountSettings: Bool = false,
     installation: any InstallationIdentifying = KeychainInstallationIdentity(),
     now: @escaping @Sendable () -> Date = { Date() }
   ) {
@@ -192,13 +196,14 @@ final class AppModel {
     let center = notificationCenter ?? NoOpNotificationCenter()
     let sink = UserNotificationAlertSink(center: center)
     self.resetScheduler = ResetReminderScheduler(center: center)
+    let resolvedRules = alertRulesStore ?? AlertCoordinator.rulesStore()
     if let alertCoordinator {
       self.alertCoordinator = alertCoordinator
       self.userNotificationSink = nil
     } else {
       self.userNotificationSink = sink
       self.alertCoordinator = AlertCoordinator(
-        rulesStore: alertRulesStore ?? AlertCoordinator.rulesStore(),
+        rulesStore: resolvedRules,
         stateStore: alertStateStore ?? InMemoryAlertStateStore(),
         budgetStore: budgetStore,
         sink: sink,
@@ -212,12 +217,29 @@ final class AppModel {
       now: now
     )
     self.usage = usage
+    let accountSettings = AccountSettingsSync(
+      account: account,
+      rulesStore: resolvedRules,
+      budgetStore: budgetStore,
+      defaults: settingsDefaults,
+      connectsToAccount: syncAccountSettings
+    )
+    self.accountSettings = accountSettings
     usage.isSignedIn = { [weak self] in self?.phase == .signedIn }
     usage.sessionEpoch = { [weak self] in self?.accountSessionEpoch ?? 0 }
     usage.onSessionExpired = { [weak self] in self?.applyExpired() }
     usage.onNotSignedIn = { [weak self] in self?.applySignedOut() }
     usage.evaluateBudget = { [weak self] budget, progress in
       self?.alertCoordinator.evaluateBudget(budget: budget, progress: progress)
+    }
+    usage.onBudgetEdited = { [weak accountSettings] budget in
+      Task { await accountSettings?.apply(.setBudget(amount: budget.amountUSD, alerts: budget.alerts)) }
+    }
+    accountSettings.isSignedIn = { [weak self] in self?.phase == .signedIn }
+    accountSettings.onApplied = { [weak self] in
+      self?.usage.reloadBudgetFromStore()
+      self?.evaluateAlerts()
+      self?.usage.evaluateBudgetAlerts()
     }
     #if DEBUG
       usage.skipsUnforcedLoad = { [weak self] in self?.skipsRestore ?? false }
@@ -229,7 +251,9 @@ final class AppModel {
       account: AccountClient(
         sessionStore: KeychainAccountSessionStore(),
         summaryStore: (try? ProtectedFileAccountSummaryStore.applicationSupport())
-          ?? MemoryAccountSummaryStore()
+          ?? MemoryAccountSummaryStore(),
+        settingsStore: (try? ProtectedFileAccountSettingsStore.applicationSupport())
+          ?? MemoryAccountSettingsStore()
       ),
       authenticator: SystemBrowserAuthenticator(),
       widgetPublisher: AppGroupWidgetSnapshotPublisher.make(),
@@ -245,7 +269,8 @@ final class AppModel {
       localStore: FileLocalCollectionStore.applicationSupport() ?? MemoryLocalCollectionStore(),
       sampleStore: FileLocalQuotaSampleStore.applicationSupport()
         ?? MemoryLocalQuotaSampleStore(),
-      providerStatusClient: ProviderStatusClient()
+      providerStatusClient: ProviderStatusClient(),
+      syncAccountSettings: true
     )
   }
 
@@ -558,6 +583,7 @@ final class AppModel {
     }
     publishWidget()
     evaluateAlerts()
+    await accountSettings.refresh()
     scheduleBackgroundRefresh()
     resolvePendingSubscriptionSelection()
     pruneOverviewPath()
@@ -933,6 +959,7 @@ final class AppModel {
         previousSummary: previousSummary,
         result: result
       )
+      await accountSettings.refresh()
     }
   }
 

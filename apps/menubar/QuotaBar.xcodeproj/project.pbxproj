@@ -108,6 +108,7 @@
 		DB443EE0DDD587EBBE582921 /* QuotaWindowDisplay.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2AF08A8655D2B347B5F754A /* QuotaWindowDisplay.swift */; };
 		DECF01C6E1A13DCEB0A0E7C5 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9B410A967029C8BE9D6E8DE2 /* WidgetKit.framework */; };
 		E05A43DEFA144C46C5D40FA2 /* QuotaBarUpdater.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50710BC153A03418AC444B78 /* QuotaBarUpdater.swift */; };
+		E3652E7FD3C94E6C64530A70 /* AccountSettingsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1A6305AEC95EF076680C4B2 /* AccountSettingsModel.swift */; };
 		E387CADA0351EB3595587AD1 /* Charts.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 31FDCF9328EFB297EBEEF466 /* Charts.framework */; };
 		E38FA4ECC294D2EE1E68A865 /* QuotaWire in Frameworks */ = {isa = PBXBuildFile; productRef = 253DA38FEA12E8B6F73D4921 /* QuotaWire */; };
 		E6B50F78E1C4B4AF3A2790B6 /* NotificationRules.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCE5BD1FB833617B3C97659E /* NotificationRules.swift */; };
@@ -254,6 +255,7 @@
 		DD4DC7B395BF3FEE01C12BFC /* CacheRebuildNotice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CacheRebuildNotice.swift; sourceTree = "<group>"; };
 		E10A8891702B59A380D6087D /* MenuBarHeader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarHeader.swift; sourceTree = "<group>"; };
 		E138A76EE03F9746E232875A /* QuotaBarWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = QuotaBarWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		E1A6305AEC95EF076680C4B2 /* AccountSettingsModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountSettingsModel.swift; sourceTree = "<group>"; };
 		E6B5C7CA8AA09698498432A5 /* MenuBarViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarViewModel.swift; sourceTree = "<group>"; };
 		E92EC22777A2740A66CE9E6B /* THIRD_PARTY_NOTICES.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = THIRD_PARTY_NOTICES.md; sourceTree = "<group>"; };
 		EC0DAB46A796B4692947780F /* SettingsDiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsDiagnosticsView.swift; sourceTree = "<group>"; };
@@ -608,6 +610,7 @@
 			isa = PBXGroup;
 			children = (
 				F4FCBCE79B2E41C285177400 /* AccountFlowModel.swift */,
+				E1A6305AEC95EF076680C4B2 /* AccountSettingsModel.swift */,
 			);
 			path = Account;
 			sourceTree = "<group>";
@@ -801,6 +804,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A14E32C2E85BAD9441ED8D34 /* AccountFlowModel.swift in Sources */,
+				E3652E7FD3C94E6C64530A70 /* AccountSettingsModel.swift in Sources */,
 				838F1CFC579E183AE6568CD9 /* AccountSettingsView.swift in Sources */,
 				E90C2030FA84BD3CD0278D6F /* AccountUsageWireModels.swift in Sources */,
 				B68A40F8287D9B065D1D12E0 /* AgentsSettingsView.swift in Sources */,

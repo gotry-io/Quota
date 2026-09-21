@@ -1,4 +1,5 @@
 @preconcurrency import Foundation
+import QuotaAlerts
 import QuotaWire
 
 enum LocalServiceClientError: LocalizedError, Equatable {
@@ -55,7 +56,9 @@ struct LocalServiceClientTimings: Sendable {
   var termination: Duration = .seconds(2)
 }
 
-protocol LocalServiceServing: UsageTransport, BrowserConnectionTransport, AccountFlowTransport {
+protocol LocalServiceServing: UsageTransport, BrowserConnectionTransport, AccountFlowTransport,
+  AccountSettingsTransport
+{
   var events: AsyncStream<LocalServiceEvent> { get }
 
   func state() async throws -> LocalServiceState
@@ -243,6 +246,20 @@ actor LocalServiceClient: LocalServiceServing {
 
   func logout() async throws -> LocalServiceLogoutResult {
     try await request(operation: "logout", payload: EmptyPayload())
+  }
+
+  func setAccountSettings(document: AccountSettingsDocument, ifMatch: String) async throws
+    -> LocalServiceAccountSettingsWriteResult
+  {
+    let decoded: LocalServiceAccountSettingsMutationResult = try await request(
+      operation: "set_account_settings",
+      payload: SetAccountSettingsPayload(document: document, ifMatch: ifMatch)
+    )
+    return decoded.result
+  }
+
+  func refreshAccountSettings() async throws -> LocalServiceAccountSettingsState {
+    try await request(operation: "refresh_account_settings", payload: EmptyPayload())
   }
 
   func setUsageUpload(enabled: Bool) async throws -> LocalServiceUsageUploadSetting {
@@ -856,6 +873,22 @@ private struct RequestEnvelope<Payload: Encodable>: Encodable {
   let requestID: String
   let operation: String
   let payload: Payload
+}
+
+private struct SetAccountSettingsPayload: Encodable {
+  var document: StoredAccountSettingsDocument
+  var ifMatch: String
+
+  init(document: AccountSettingsDocument, ifMatch: String) {
+    self.document = StoredAccountSettingsDocument(alerts: document.alerts, budget: document.budget)
+    self.ifMatch = ifMatch
+  }
+}
+
+/// The stored shape `set_account_settings` writes: policy only, no envelope.
+private struct StoredAccountSettingsDocument: Encodable {
+  var alerts: AccountSettingsDocument.Alerts
+  var budget: AccountSettingsDocument.Budget
 }
 
 private struct EmptyPayload: Encodable {}

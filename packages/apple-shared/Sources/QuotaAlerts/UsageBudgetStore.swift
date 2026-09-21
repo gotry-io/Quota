@@ -3,8 +3,9 @@ import QuotaPresentation
 
 /// UserDefaults adapter for the monthly budget and the crossings it has already announced.
 ///
-/// The budget is a device's own preference and is never uploaded, so it sits beside the alert
-/// rules rather than in the Account. Both Apple apps keep it under the same keys. The fired keys
+/// The amount and its switch follow the Account (ADR 0061), so what these keys hold is this
+/// device's copy of the Account settings document; the keys themselves are the shipped ones that
+/// ADR 0053 named, and both Apple apps still keep the budget under them. The fired keys
 /// are the dedup state `QuotaAlerts` works in, written as `requestIdentifier` strings because
 /// that is what the notification centre is asked to post under too.
 public struct UsageBudgetStore {
