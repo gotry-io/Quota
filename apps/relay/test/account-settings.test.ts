@@ -90,6 +90,27 @@ describe("Account settings", () => {
     expect(await stale.json()).toEqual(body);
   });
 
+  it("stores a budget amount in one spelling, whoever wrote it", async () => {
+    await seedAccount("owner");
+    const app = appFor("account_owner");
+    // Swift can only write cents; the website writes what was typed. The stored document must
+    // not depend on which of them saved last.
+    for (const [sent, stored, ifMatch] of [
+      ["0.5", "0.50", '"0"'],
+      ["1000000", "1000000.00", '"1"'],
+      ["0250.5", "250.50", '"2"'],
+    ] as const) {
+      const written = await put(
+        app,
+        { ...writtenSettings, budget: { amount_usd: sent, alerts: true } },
+        { ifMatch },
+      );
+      expect(written.status, sent).toBe(200);
+      const body = (await written.json()) as AccountSettingsResponse;
+      expect(body.budget.amount_usd, sent).toBe(stored);
+    }
+  });
+
   it("refuses a write with no If-Match", async () => {
     await seedAccount("match");
     const response = await appFor("account_match").request(`${origin}/api/v2/account/settings`, {
