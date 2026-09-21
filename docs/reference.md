@@ -10,7 +10,8 @@ Canonical prose: [architecture](architecture.md), [security](security.md),
 
 ## Providers
 
-From `packages/provider/catalog.json`. Strategy for each catalog id is
+From `packages/provider/catalog.json`. What Quota can do with each id, and what validates it, is
+the generated [provider capability matrix](providers/README.md). Strategy for each catalog id is
 [`docs/providers/<id>.md`](provider-collection.md#providers).
 
 | Order | Id | Display name | Account sync | Default visible | Setup | Credential | Browser session | Status page | Environment keys | Default base URL |
@@ -58,7 +59,7 @@ Entry points and scripts from package and project files. Root `package.json` fir
 
 ### `.` (repository root)
 npm package `@gotry-io/quota`.
-Scripts: `prepare`, `build`, `check`, `check:provider-catalog`, `generate:provider-catalog`, `check:design-tokens`, `generate:design-tokens`, `generate:plan-display`, `check:plan-display`, `generate:adr-index`, `check:adr-index`, `generate:reference`, `check:reference`, `version:bump:menubar`, `version:bump:ios`, `format`, `format:check`, `format:check:js`, `format:check:rust`, `test`, `test:service`, `test:swift`, `test:menubar:helper`, `generate:menubar`, `build:menubar:app`, `build:menubar:visual`, `generate:ios`, `check:ios`, `test:ios`, `test:ios:version`, `test:scripts`, `build:ios`, `dev:web`, `dev:relay`, `check:schema`.
+Scripts: `prepare`, `build`, `check`, `check:provider-catalog`, `generate:provider-catalog`, `check:capability-matrix`, `generate:capability-matrix`, `check:design-tokens`, `generate:design-tokens`, `generate:plan-display`, `check:plan-display`, `generate:adr-index`, `check:adr-index`, `generate:reference`, `check:reference`, `version:bump:menubar`, `version:bump:ios`, `format`, `format:check`, `format:check:js`, `format:check:rust`, `test`, `test:service`, `test:swift`, `test:menubar:helper`, `generate:menubar`, `build:menubar:app`, `build:menubar:visual`, `generate:ios`, `check:ios`, `test:ios`, `test:ios:version`, `test:scripts`, `build:ios`, `dev:web`, `dev:relay`, `check:schema`.
 
 ### `apps/ios`
 XcodeGen project `Quota` ([`project.yml`](../apps/ios/project.yml)).

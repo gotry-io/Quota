@@ -69,3 +69,4 @@ instructions. Stable ADR URLs stay.
 | [0056](./0056-a-period-export-is-the-period-on-screen.md) | A period export is the period on screen | Accepted |  |  |
 | [0057](./0057-content-is-opaque-glass-is-chrome.md) | Content is opaque; glass is chrome | Accepted |  |  |
 | [0058](./0058-relay-runs-on-node-only.md) | Relay runs on Node only | Accepted |  |  |
+| [0060](./0060-provider-freeze-and-two-tiers.md) | Freeze new providers and keep two provider tiers | Accepted |  |  |
