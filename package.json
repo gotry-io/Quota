@@ -45,7 +45,7 @@
     "check:ios": "./scripts/check-ios.sh",
     "test:ios": "./scripts/test-ios.sh",
     "test:ios:version": "node --test scripts/check-ios-version.test.mjs",
-    "test:scripts": "node --test scripts/check-ios-version.test.mjs scripts/ci-changed-paths.test.mjs scripts/generate-design-tokens.test.mjs scripts/generate-adr-index.test.mjs scripts/generate-reference.test.mjs scripts/ios-ui-audit-summary.test.mjs scripts/ios-ui-run-summary.test.mjs",
+    "test:scripts": "node --test scripts/check-ios-version.test.mjs scripts/ci-changed-paths.test.mjs scripts/generate-design-tokens.test.mjs scripts/generate-adr-index.test.mjs scripts/generate-reference.test.mjs scripts/ios-audit-trend.test.mjs scripts/ios-ui-audit-summary.test.mjs scripts/ios-ui-run-summary.test.mjs",
     "build:ios": "./scripts/build-ios.sh",
     "dev:web": "pnpm --filter @gotry-io/quota-web dev",
     "dev:relay": "pnpm --filter @gotry-io/quota-relay dev",

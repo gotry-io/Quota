@@ -1,27 +1,21 @@
 import SwiftUI
 
-/// Tahoe-only glass and scroll-edge modifiers, with the existing material fallbacks below 26.
-/// Views use these helpers instead of branching on availability themselves.
+/// Chrome glass and scroll-edge modifiers (Tahoe, with material fallbacks below 26),
+/// plus the opaque card surface used on every OS. Views use these helpers instead of
+/// branching on availability themselves.
 extension View {
-  /// Quota / Usage cards: glass on 26, group fill otherwise, 20pt continuous corners.
-  @ViewBuilder
+  /// Quota / Usage cards: opaque `surface.content`, 20pt continuous corners, `border.subtle`
+  /// hairline. Not glass.
   func quotaCardSurface() -> some View {
-    if #available(macOS 26.0, *) {
-      glassEffect(
-        .regular,
-        in: RoundedRectangle(
-          cornerRadius: QuotaDesign.Layout.cardCornerRadius,
-          style: .continuous
-        )
-      )
-    } else {
-      background {
-        RoundedRectangle(
-          cornerRadius: QuotaDesign.Layout.cardCornerRadius,
-          style: .continuous
-        )
-        .fill(QuotaPalette.settingsGroupFill)
-      }
+    let shape = RoundedRectangle(
+      cornerRadius: QuotaDesign.Layout.cardCornerRadius,
+      style: .continuous
+    )
+    return background {
+      shape.fill(QuotaPalette.cardFill)
+    }
+    .overlay {
+      shape.strokeBorder(QuotaPalette.cardHairline, lineWidth: 1)
     }
   }
 
