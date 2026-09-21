@@ -447,9 +447,9 @@ const rsa = {
  * The key material every stub uses, generated once for the file.
  *
  * Three key pairs per stub and thirteen stubs is thirteen times the work for the same keys, and
- * under the Workers runtime on a loaded machine that cost is what made these tests exceed the
- * five-second timeout. Nothing here is mutated per test: the stub's state is its claims and its
- * responses, which stay per test.
+ * generating them per stub on a loaded machine is what made these tests exceed the five-second
+ * timeout. Nothing here is mutated per test: the stub's state is its claims and its responses,
+ * which stay per test.
  */
 const appleKeys = (async () => {
   const signing = (await crypto.subtle.generateKey(rsa, true, ["sign", "verify"])) as CryptoKeyPair;

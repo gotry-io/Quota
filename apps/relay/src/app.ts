@@ -250,8 +250,8 @@ export function accountMaintenanceInput(checkedAt: Date): AccountMaintenanceInpu
 }
 
 /**
- * The hour's maintenance, which is one call in both runtimes: the Workers cron trigger and the
- * Node timer run this same pass ([ADR 0049](../../docs/decisions/0049-one-relay-two-runtimes.md)).
+ * The hour's maintenance. The Node timer runs this pass
+ * ([ADR 0058](../../docs/decisions/0058-relay-runs-on-node-only.md)).
  */
 export async function runHourlyMaintenance(state: AccountState, now: Date): Promise<void> {
   await state.performMaintenance(accountMaintenanceInput(now));
@@ -272,8 +272,7 @@ function nextUtcDate(date: string): string {
 export function createRelayApp(options: RelayAppOptions): Hono {
   const app = new Hono();
   const now = options.now ?? (() => new Date());
-  // An in-process cache is the answer that needs no platform: an entry point that has a shared
-  // one — the Workers colo cache — hands it over instead.
+  // An in-process cache is the last-good provider status reading; a restart re-polls.
   const statusCache = options.providerStatusCache ?? new MemoryReadingCache();
   // Checked-in defaults are schema-constructed by their source modules and semantic-validation
   // tested, so app construction skips the pricing validator's pairwise scan. Costing validates

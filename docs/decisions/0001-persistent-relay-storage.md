@@ -1,7 +1,13 @@
 # ADR 0001: Persistent managed Relay storage
 
+> Amended by [ADR 0058](0058-relay-runs-on-node-only.md): the durable store is SQLite on the
+> Node origin, not Cloudflare D1. The explicit-migration rule stands; the ledger table is still
+> named `d1_migrations`.
+
 - Status: Accepted
 - Amended: 2026-08-10
+- Amended: 2026-09-21 by [ADR 0058](0058-relay-runs-on-node-only.md): production persistence is
+  SQLite; D1 is retired.
 - Related: [ADR 0006](./0006-managed-account-device-usage.md)
 
 ## Context

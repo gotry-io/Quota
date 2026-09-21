@@ -870,6 +870,17 @@ provider and support, and no custom card chrome beyond the system widget contain
   `scripts/ios-ui-audit-summary.mjs` (the `ios-screens` job summary). A contrast pass that
   exceeds the auditor deadline on the 365-day heatmap may retry without contrast; that is a
   deadline, not a type skip.
+- Because `incomplete` does not fail, a screen whose audit times out every night would never be
+  audited and nothing would say so. The nightly `ios-screens` run therefore also judges the trend
+  with `scripts/ios-audit-trend.mjs`: a (profile, screen, test) with no completed non-contrast audit
+  in its last five **eligible** runs reddens the nightly job and opens or updates one issue,
+  `iOS screens: audits not completing`, which the same gate closes once it clears. A run is eligible
+  for a screen only when that screen appears in it, so a skipped test, a profile that was not
+  captured, a screen added later or removed, and a run whose artifact has expired neither count
+  towards the five nor reset them; completed means every non-contrast type the record reports is
+  `passed`, `confirmed`, or `unconfirmed`; contrast is excluded as it is everywhere else. The gate
+  reads the recent runs' artifacts and stores nothing, runs on the nightly and manual runs only, and
+  never blocks a merge.
 - The Connect footnote sits 24 pt below the prominent button so the button's glass bloom does not
   reach it.
 - `scripts/ios-ui-screenshots.sh` removes its `/tmp/quota-ios-uitest-*` override files on exit; a

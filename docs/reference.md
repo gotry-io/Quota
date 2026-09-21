@@ -58,7 +58,7 @@ Entry points and scripts from package and project files. Root `package.json` fir
 
 ### `.` (repository root)
 npm package `@gotry-io/quota`.
-Scripts: `prepare`, `build`, `check`, `check:provider-catalog`, `generate:provider-catalog`, `check:design-tokens`, `generate:design-tokens`, `generate:plan-display`, `check:plan-display`, `generate:adr-index`, `check:adr-index`, `generate:reference`, `check:reference`, `version:bump:menubar`, `version:bump:ios`, `format`, `format:check`, `format:check:js`, `format:check:rust`, `test`, `test:service`, `test:swift`, `test:menubar:helper`, `generate:menubar`, `build:menubar:app`, `build:menubar:visual`, `generate:ios`, `check:ios`, `test:ios`, `test:ios:version`, `test:scripts`, `build:ios`, `deploy:cloudflare`, `dev:web`, `dev:relay`, `check:schema`.
+Scripts: `prepare`, `build`, `check`, `check:provider-catalog`, `generate:provider-catalog`, `check:design-tokens`, `generate:design-tokens`, `generate:plan-display`, `check:plan-display`, `generate:adr-index`, `check:adr-index`, `generate:reference`, `check:reference`, `version:bump:menubar`, `version:bump:ios`, `format`, `format:check`, `format:check:js`, `format:check:rust`, `test`, `test:service`, `test:swift`, `test:menubar:helper`, `generate:menubar`, `build:menubar:app`, `build:menubar:visual`, `generate:ios`, `check:ios`, `test:ios`, `test:ios:version`, `test:scripts`, `build:ios`, `dev:web`, `dev:relay`, `check:schema`.
 
 ### `apps/ios`
 XcodeGen project `Quota` ([`project.yml`](../apps/ios/project.yml)).
@@ -72,7 +72,7 @@ Cargo crate `quota-menubar-helper`; bins `quota-menubar-helper`.
 
 ### `apps/relay`
 npm package `@gotry-io/quota-relay`.
-Scripts: `build`, `build:web`, `build:workers`, `build:cloudflare`, `check`, `deploy:cloudflare`, `dev`, `dev:workers`, `d1:migrate:local`, `d1:migrate:remote`, `test`, `test:workers`, `test:workers:integration`, `test:node:integration`, `test:restore-drill`, `build:node`, `start:node`.
+Scripts: `build`, `build:web`, `check`, `dev`, `test`, `test:node:integration`, `test:restore-drill`, `build:node`, `start:node`.
 
 ### `apps/web`
 npm package `@gotry-io/quota-web`.

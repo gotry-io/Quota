@@ -5,7 +5,7 @@ struct SettingsSection<Content: View, Trailing: View>: View {
   enum Chrome {
     /// Persistent grouped fill (`quotaGroupSurface`).
     case group
-    /// Tahoe card (`quotaCardSurface`) for the Agents provider list.
+    /// Opaque card (`quotaCardSurface`) for the Agents provider list.
     case card
   }
 

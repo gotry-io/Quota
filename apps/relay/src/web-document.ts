@@ -9,7 +9,6 @@ const server = new Server(manifest);
 export async function respondWithWebDocument(
   request: Request,
   assets: StaticFiles,
-  context: ExecutionContext | undefined,
   platform: { document: WebDocumentPort },
 ): Promise<Response> {
   return runDocumentSsr(request, platform.document, async (document) => {
@@ -24,12 +23,7 @@ export async function respondWithWebDocument(
       },
     });
     return server.respond(request, {
-      platform: {
-        document,
-        ctx: context,
-        caches: globalThis.caches,
-        cf: request.cf,
-      },
+      platform: { document },
       getClientAddress() {
         return clientAddress(request.headers) ?? "";
       },

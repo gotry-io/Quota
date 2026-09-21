@@ -28,7 +28,10 @@ links to it rather than restating it.
   menu-bar panel (Overview and one provider's detail), and one main window whose sidebar is Quota ·
   Usage · Settings. Quota is the subscription list and the selected subscription's windows and
   remaining history; Usage is this Mac or Account periods; Settings holds preferences. QuotaBar
-  adopts Liquid Glass on macOS 26, with the existing material fallback below it. QuotaBar lives in
+  uses Liquid Glass on macOS 26 for chrome (sidebar, toolbar, menu-bar panel, transients);
+  data cards are opaque
+  ([ADR 0057](decisions/0057-content-is-opaque-glass-is-chrome.md)). Below 26, chrome uses the
+  existing material fallback. QuotaBar lives in
   the menu bar; **Show in Dock** is off by default, so a Dock icon exists only while the main window
   is open. A
   Login Item launch does not show the main window. The desktop widgets read the same
@@ -40,10 +43,9 @@ links to it rather than restating it.
   `quotabar://dashboard` opens the main window on Quota.
 - **QuotaRelay** owns Accounts and the identities that reach them, Devices, one scoped session per client, normalized
   quota/Usage storage, deletion controls, pricing distribution, and account queries. It runs as a
-  Node server over local SQLite in production and for local `dev`; the same source still
-  runs as a Cloudflare Worker over D1 via `dev:workers` and the Workers test project
-  ([ADR 0049](decisions/0049-one-relay-two-runtimes.md),
-  [ADR 0050](decisions/0050-the-worker-and-d1-are-retired.md), [self-host runbook](relay-self-host.md)).
+  Node server over SQLite in production and for local `dev`
+  ([ADR 0058](decisions/0058-relay-runs-on-node-only.md), [self-host runbook](relay-self-host.md)).
+  Cloudflare is the CDN and DNS proxy in front of that origin.
 - **Quota Web** owns the public site and browser account UI, sharing `quota.gotry.io` with the Relay
   as a separate SvelteKit application and source boundary.
 
@@ -60,7 +62,7 @@ An Account owns the channels it is reached through — GitHub today, with Apple 
 against the same port ([ADR 0032](decisions/0032-an-account-owns-its-identities.md)) — and the
 managed origin is fixed at `https://quota.gotry.io`. There is no anonymous owner, pairing group, arbitrary Relay URL, discovery
 document, or protocol v1 route. Self-hosting is that same process on Node and SQLite, not a second
-product ([ADR 0049](decisions/0049-one-relay-two-runtimes.md),
+product ([ADR 0058](decisions/0058-relay-runs-on-node-only.md),
 [self-host runbook](relay-self-host.md)). The decision records
 behind each area are indexed in [`decisions/README.md`](decisions/README.md) and linked where they
 apply below.
@@ -527,9 +529,9 @@ readings for ten minutes, and answers `unknown` when a poll fails with nothing s
 - `packages/protocol` defines the managed-network contracts and exported JSON Schemas, including the
   language-neutral pricing and model-catalog fixtures both Rust and `quota-model` tests answer.
 - `packages/quota-model` and `packages/relay-core` are runtime-neutral TypeScript for Relay and Web;
-  the local Rust service does not import them. `apps/relay` is the only Cloudflare/D1 adapter and may
-  not import filesystem, subprocess, TCP, or native-addon APIs, and `apps/web` stays a separate
-  SvelteKit boundary meeting Relay only through `WebDocumentPort`.
+  the local Rust service does not import them. `apps/relay` is the Node + SQLite deployment; SQL in
+  `src/state/` speaks only `RelayDatabase` (D1's shape, implemented by `SqliteDatabase`). `apps/web`
+  stays a separate SvelteKit boundary meeting Relay only through `WebDocumentPort`.
 
 ## Relay, Web, and deployment
 
@@ -546,9 +548,9 @@ query names the keys it accepts, and a key it did not name is a 400. The managed
 canonical in [ADR 0024](decisions/0024-hour-versioned-usage-and-daily-rollups.md).
 
 Quota Web is a SvelteKit app whose hashed `/_app/immutable/*` CSS and JS stay asset-first. Document
-navigations run through Relay first on either runtime: Hono keeps `/api`, `/oauth`, `/healthz`, and
-`/readyz`, and every other request is rendered by SvelteKit `Server.respond`. On the Workers runtime,
-`apps/relay/src/cloudflare.ts` stays Wrangler `main`. Relay reads the `__Host-quota_session` cookie
+navigations run through Relay first: Hono keeps `/api`, `/oauth`, `/healthz`, and
+`/readyz`, and every other request is rendered by SvelteKit `Server.respond`. The Node entry
+serves a built file from disk when one exists, then renders. Relay reads the `__Host-quota_session` cookie
 through `WebDocumentPort` and writes the signed-in header into the first HTML byte. `/` offers the
 QuotaBar `.dmg` and Homebrew install command, Sign in is in the header, and `/my` is a server redirect
 when unsigned and otherwise a client-rendered dashboard: the browser requests
@@ -563,18 +565,15 @@ login and browser sessions ([ADR 0025](decisions/0025-one-session-system.md)); t
 decision is [ADR 0011](decisions/0011-sveltekit-document-worker.md).
 
 The SQLite file on the production host is the only durable Relay store and applied migrations are
-never rewritten; the Worker runtime's local D1 exists for development and the `workers` test
-project. Production deploys are the owner action in the self-host runbook; there is no deploy
-workflow.
+never rewritten. Production deploys are the owner action in the self-host runbook; there is no
+Workers deploy workflow.
 
-The same source still runs as a Worker over D1 for local development and tests
-([ADR 0049](decisions/0049-one-relay-two-runtimes.md)). Everything that differs between the two
-runtimes lives in `apps/relay/src/platform/` — the database, the built website's files, the
-last-reading cache, the migration runner, and the caller's address — and in the two entry points,
-`src/cloudflare.ts` and `src/node.ts`; request handling itself is shared and uses only what both
-runtimes offer. The state classes take `RelayDatabase`, which is D1's own `prepare`/`bind`/`batch`
-shape, so their SQL and the migration ladder are the same on either. Both are exercised in CI.
-The Node image is published from `.github/workflows/release-relay-image.yml`. Production topology,
-update, rollback, backup, and restore are [`relay-self-host.md`](relay-self-host.md). The Workers
-runtime remains for local development and tests and is not deployed
-([ADR 0050](decisions/0050-the-worker-and-d1-are-retired.md)).
+Platform pieces live in `apps/relay/src/platform/` — the database, the built website's files, the
+last-reading cache, the migration runner, and the caller's address — and the Node entry
+`src/node.ts` assembles them. Request handling itself lives in `src/deployment.ts`. The state
+classes take `RelayDatabase`, which is D1's `prepare`/`bind`/`batch` shape implemented by
+`SqliteDatabase`, so SQL and the migration ladder stay on that contract
+([ADR 0058](decisions/0058-relay-runs-on-node-only.md)). CI runs the Node suite and, after a
+website build, `test:node:integration`. The Node image is published from
+`.github/workflows/release-relay-image.yml`. Production topology, update, rollback, backup, and
+restore are [`relay-self-host.md`](relay-self-host.md).

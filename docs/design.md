@@ -86,8 +86,8 @@ Spacing steps are 4, 8, 12, 16, 24, 32, 48. Card inset 16; content gaps 12; sect
 page gutter 24. Radii: control 8, group 12, content card 16 (Apple 20), capsule full. System
 controls keep their own shape.
 
-Native material and glass belong on panel, navigation, and transients. App DESIGN files own
-whether a data card is glass. Do not add decorative drop shadows or a second card language.
+Native material and glass belong on panel, navigation, and transients. Data cards are opaque
+(`surface.content`). Do not add decorative drop shadows or a second card language.
 
 State changes are short; navigation is a little longer. Honor reduced motion. Clocks and
 refreshes never animate the whole layout.

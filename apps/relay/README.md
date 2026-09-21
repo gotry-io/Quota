@@ -1,14 +1,14 @@
 # QuotaRelay
 
 QuotaRelay is the account and usage service for `https://quota.gotry.io`. In production it is
-a Node process over SQLite on the dmit VPS ([ADR 0049](../../docs/decisions/0049-one-relay-two-runtimes.md),
-[ADR 0050](../../docs/decisions/0050-the-worker-and-d1-are-retired.md)). Everyday `dev`, `build`,
-and `test` run that Node runtime over local SQLite; the same source still runs as a Cloudflare
-Worker over D1 via `dev:workers`, `build:workers`, and `test:workers`. It serves v2 GitHub account, native-client OAuth, Device control, and
+a Node process over SQLite on the dmit VPS
+([ADR 0058](../../docs/decisions/0058-relay-runs-on-node-only.md)). Everyday `dev`, `build`,
+and `test` run that runtime over local SQLite. It serves v2 GitHub account, native-client OAuth,
+Device control, and
 public catalog APIs alongside the managed-data v6 quota/Usage data APIs. It renders Quota Web documents through SvelteKit
 `Server.respond` as described in [ADR 0011](../../docs/decisions/0011-sveltekit-document-worker.md).
 
-QuotaBar and Quota Web speak managed-data v6, the only data contract this Worker serves. A client
+QuotaBar and Quota Web speak managed-data v6, the only data contract this process serves. A client
 that speaks an older version is refused rather than translated; see
 [ADR 0018](../../docs/decisions/0018-single-managed-data-contract.md). Within a version the two
 directions differ: Relay checks a request body against exactly the contract and refuses one that
@@ -105,17 +105,10 @@ pnpm test
 pnpm build
 ```
 
-Workers commands stay explicit: `pnpm dev:workers`, `pnpm test:workers`,
-`pnpm test:workers:integration`, and `pnpm build:workers` (website, then `build:cloudflare`'s
-wrangler dry-run). A build script runs no tests: CI asks for the website once and then for each
-bundle and suite by name. Apply local D1 migrations before Wrangler:
+A build script runs no tests: CI asks for the website once, then the Node bundle, then
+`test:node:integration`. The process applies pending migrations on start.
 
-```bash
-pnpm d1:migrate:local
-pnpm dev:workers
-```
-
-The Worker requires these secrets:
+The process requires these secrets:
 
 - `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`
 - `APPLE_SIGNIN_TEAM_ID`, `APPLE_SIGNIN_SERVICES_ID`, `APPLE_SIGNIN_KEY_ID`, and
@@ -132,7 +125,7 @@ billing system, no entitlement, and no 402
 ([ADR 0048](../../docs/decisions/0048-sync-is-free-and-billing-is-gone.md)).
 
 The extra signing secret the retired browser-auth framework required is
-not read by anything now and can be deleted from a local `.env` and from the deployed Worker; it is
+not read by anything now and can be deleted from a local `.env` and from the deployed process; it is
 named in [ADR 0025](../../docs/decisions/0025-one-session-system.md).
 
 Register the GitHub OAuth App callback as
@@ -182,8 +175,7 @@ or not at all. Presenting them registers a Device on the same path `quotabar` ta
 ([ADR 0041](../../docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md)).
 `POST /oauth/v2/apple` takes the same optional installation. Both
 exchanges answer with the Account's `display_label` beside the session, read in the same batch that
-issued it, so a client can name the account before its first Account read. The checked-in Worker
-enables Cloudflare `nodejs_compat`, which the SvelteKit server runtime requires.
+issued it, so a client can name the account before its first Account read.
 
 Each keyed secret is independent and must contain at least 32 random characters. OAuth and session
 routes return `Cache-Control: no-store`; only the versioned pricing and model catalogs are publicly
@@ -202,9 +194,8 @@ same policy without a nonce.
 
 ## Running on Node
 
-The Worker and the Node process are one source tree: everything that differs between them lives in
-[`src/platform/`](./src/platform) and in the two entry points, `src/cloudflare.ts` and
-`src/node.ts` ([ADR 0049](../../docs/decisions/0049-one-relay-two-runtimes.md)).
+Platform pieces live in [`src/platform/`](./src/platform); the entry is `src/node.ts`
+([ADR 0058](../../docs/decisions/0058-relay-runs-on-node-only.md)).
 
 `pnpm dev` is the everyday loop (website build, then the Node bundle with watch). A one-shot
 production-shaped run is `pnpm build` (the website, then the same `build:node` the Dockerfile
@@ -213,11 +204,10 @@ runs) and `pnpm start:node`. `test` is the Node + SQLite suite, including `test/
 
 `build:node` bundles `src/node.ts` to `dist/node/server.mjs` with esbuild, leaving
 `better-sqlite3` external because it is a native module; `start:node` runs it. The process applies
-every pending migration from `migrations/` before it listens, writing the same `d1_migrations`
-ledger wrangler writes, so a database exported from D1 imports as already migrated. `SIGTERM`
-stops the listener and closes the database.
+every pending migration from `migrations/` before it listens, writing the `d1_migrations`
+ledger. `SIGTERM` stops the listener and closes the database.
 
-It reads the same secrets the Worker does, from the environment, plus three of its own:
+It reads secrets from the environment, plus:
 
 | Variable | Default | What it is |
 | --- | --- | --- |
@@ -235,8 +225,8 @@ Nothing terminates TLS. The Node entry trusts only `RELAY_CLIENT_ADDRESS_HEADER`
 `RELAY_TRUSTED_PROXIES` (the socket peer otherwise). A Cloudflare-fronted deployment must set
 `RELAY_CLIENT_ADDRESS_HEADER=cf-connecting-ip`, or every client shares the Cloudflare edge
 addresses its proxy reports. The production setting, the accepted risk of a directly reachable
-origin, and the default CIDR list are in [the self-host runbook](../../docs/relay-self-host.md). `caches.default` has no equivalent here,
-so the last-good provider status readings live in the process and a restart re-polls them.
+origin, and the default CIDR list are in [the self-host runbook](../../docs/relay-self-host.md).
+The last-good provider status readings live in the process and a restart re-polls them.
 
 ## Docker
 
@@ -252,7 +242,7 @@ date intervals preserve known historical changes. Unknown models and missing com
 unpriced; wildcard dimension matches and the inferred-cache approximation remain explicit in the
 calculation assumptions.
 
-Readiness probes and the hourly Worker schedule run the bounded credential and quota-observation
+Readiness probes and the hourly maintenance interval run the bounded credential and quota-observation
 cleanup defined in [`docs/security.md`](../../docs/security.md), and the same batch retires Usage:
 `usage_hourly` and the hour versions beside it after 400 days, `usage_daily` after 800, and stored
 Account Usage folds after two days. Each is at most a hundred rows per run, so a sweep never

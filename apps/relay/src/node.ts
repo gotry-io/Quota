@@ -45,7 +45,7 @@ function readSecrets(environment: NodeJS.ProcessEnv): RelaySecrets {
     SECRET_NAMES.map((name) => [name, environment[name] as string]),
   ) as unknown as RelaySecrets;
   // A Docker env file holds one line per value, so the PEM arrives with the two characters
-  // `\n` where Apple put line breaks; Workers secrets keep the breaks themselves.
+  // `\n` where Apple put line breaks.
   return {
     ...secrets,
     APPLE_SIGNIN_PRIVATE_KEY: secrets.APPLE_SIGNIN_PRIVATE_KEY.replace(/\\n/g, "\n"),
@@ -95,18 +95,18 @@ const server = serve({
       clientAddressHeader,
     );
     const url = new URL(request.url);
-    // Cloudflare serves the built files ahead of the Worker; here nothing is in front, so the
-    // one file the build produced for this path is the answer before a document is rendered.
+    // Nothing sits in front of this process, so the one file the build produced for this path
+    // is the answer before a document is rendered.
     try {
       if (!isRelayApiPath(url.pathname)) {
         const asset = await assets.fetch(url);
         if (asset.ok) return asset;
       }
-      return await respondAsRelay(request, platform, undefined);
+      return await respondAsRelay(request, platform);
     } catch (error) {
-      // Cloudflare records an unhandled exception itself; nothing here does, and a 500 nobody
-      // wrote down is a deployment that cannot be diagnosed. The error's own name is the most it
-      // may carry, for the reason `createRelayApp` states: a message can quote a bound parameter.
+      // A 500 nobody wrote down is a deployment that cannot be diagnosed. The error's own name
+      // is the most it may carry, for the reason `createRelayApp` states: a message can quote a
+      // bound parameter.
       console.error(
         JSON.stringify({
           event: "relay_request_failed",

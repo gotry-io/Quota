@@ -64,14 +64,16 @@ Required checks are the ones a merge must not break. The iOS accessibility audit
 census are not among them: they run in the advisory `ios-screens` workflow, whose own concurrency
 namespace keeps it from cancelling a required run, while `verify-ios-ui` runs the journeys in
 `QuotaSmokeUITests`. A confirmed `ios-screens` finding is still a defect to fix — nothing merges
-that on purpose.
+that on purpose. Its nightly run additionally judges the audit trend and opens one issue when a
+screen has stopped completing its audit at all (`apps/ios/README.md`), which likewise blocks no
+merge.
 
 A change that moves nothing but a product's version string answers the macOS checks without running
 them (`scripts/ci-changed-paths.sh`, judged on file content, not on the pull request's author); the
 Linux jobs still run in full. `update-bump-prs` re-syncs an open bump pull request when main moves.
 
-Relay/website production is the owner action in `docs/relay-self-host.md`. Local builds and Wrangler
-dry runs are verification; do not deploy without explicit authorization.
+Relay/website production is the owner action in `docs/relay-self-host.md`. Local builds are
+verification; do not deploy without explicit authorization.
 
 ## Review
 

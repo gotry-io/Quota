@@ -4,20 +4,12 @@ import { join, normalize, resolve, sep } from "node:path";
 /**
  * The built website's files, as the deployment serves them.
  *
- * On Workers this is the Static Assets binding; on Node it is the SvelteKit client build read
- * from disk ([ADR 0049](../../../../docs/decisions/0049-one-relay-two-runtimes.md)). A path the
- * build did not produce answers 404, which is how the entry decides to render a document instead.
+ * Node reads the SvelteKit client build from disk
+ * ([ADR 0058](../../../../docs/decisions/0058-relay-runs-on-node-only.md)). A path the build did
+ * not produce answers 404, which is how the entry decides to render a document instead.
  */
 export interface StaticFiles {
   fetch(url: URL): Promise<Response>;
-}
-
-export class WorkersStaticFiles implements StaticFiles {
-  constructor(private readonly assets: Fetcher) {}
-
-  fetch(url: URL): Promise<Response> {
-    return this.assets.fetch(url);
-  }
 }
 
 /**

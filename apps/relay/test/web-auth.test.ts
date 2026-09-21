@@ -352,7 +352,7 @@ describe("browser sign-in through GitHub", () => {
     const handoff = onlyCookie(started);
     // A handoff sealed with a target the start route would have refused. Relay signs this cookie,
     // so nothing outside can forge one — and the callback still refuses to send the browser there,
-    // because the value has left this Worker and come back before becoming a `Location`.
+    // because the value has left this process and come back before becoming a `Location`.
     const forged = await sealedHandoff({
       provider: "github",
       intent: { kind: "sign_in" },

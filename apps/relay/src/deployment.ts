@@ -47,14 +47,10 @@ export interface RelayPlatform {
  *
  * The assembly is per request rather than per process because the pieces it memoizes — the
  * session authorization and the document port — are answers about the caller in front of it, not
- * about the deployment. Both entry points call this, so neither carries the wiring
- * ([ADR 0049](../../docs/decisions/0049-one-relay-two-runtimes.md)).
+ * about the deployment. The Node entry calls this, so it does not carry the wiring
+ * ([ADR 0058](../../docs/decisions/0058-relay-runs-on-node-only.md)).
  */
-export async function respondAsRelay(
-  request: Request,
-  platform: RelayPlatform,
-  context: ExecutionContext | undefined,
-): Promise<Response> {
+export async function respondAsRelay(request: Request, platform: RelayPlatform): Promise<Response> {
   const secrets = platform.secrets;
   const state = new D1AccountState(platform.database);
   const hasher = new SecretHasher(secrets.QUOTA_SESSION_HASH_KEY);
@@ -110,7 +106,7 @@ export async function respondAsRelay(
     }).fetch(request);
   }
 
-  return respondWithWebDocument(request, platform.assets, context, {
+  return respondWithWebDocument(request, platform.assets, {
     document: createWebDocumentPort({
       webSessions,
       state,

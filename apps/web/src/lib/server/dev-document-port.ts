@@ -3,7 +3,7 @@ import { env } from "$env/dynamic/private";
 import type { WebDocumentPort } from "./document-port.ts";
 
 /**
- * The document port `pnpm dev:web` runs against, where there is no Worker and so no D1.
+ * The document port `pnpm dev:web` runs against, where there is no Relay process and so no store.
  *
  * `QUOTA_DEV_VIEWER` is the header stub described in
  * [ADR 0011](../../../../../docs/decisions/0011-sveltekit-document-worker.md);

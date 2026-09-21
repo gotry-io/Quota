@@ -13,8 +13,8 @@ done
 
 # The Visual QA matrix renders every QuotaBar route and would starve the app's wait-loop tests
 # if it ran inside the parallel suite above, so it runs alone, afterwards, with capture on. The
-# windows go on screen and are read back through the window server, because Liquid Glass does
-# not exist in an off-screen bitmap.
+# windows go on screen and are read back through the window server, because Liquid Glass chrome
+# does not exist in an off-screen bitmap (opaque cards still draw).
 SHOTS_DIR="${QUOTABAR_SCREENSHOTS:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/quotabar-screenshots}"
 echo "QUOTABAR_SCREENSHOTS=$SHOTS_DIR swift test --package-path apps/menubar --filter VisualMatrixScreenshotTests"
 QUOTABAR_SCREENSHOTS="$SHOTS_DIR" QUOTABAR_SCREENSHOTS_ONSCREEN=1 swift test --package-path apps/menubar --filter VisualMatrixScreenshotTests

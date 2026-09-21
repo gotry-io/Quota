@@ -2,14 +2,14 @@
 
 Public website for [quota.gotry.io](https://quota.gotry.io).
 
-The site is a SvelteKit app kept separate from the Relay source boundary. The managed `quota`
-Worker renders documents through SvelteKit `Server.respond` and publishes hashed `/_app` assets
-from `dist/` through Cloudflare Workers Static Assets. Production builds also publish canonical
+The site is a SvelteKit app kept separate from the Relay source boundary. The Node Relay process
+renders documents through SvelteKit `Server.respond` and serves hashed `/_app` assets from the
+client build on disk. Production builds also publish canonical
 protocol files from `packages/protocol/schema` under `/schema/`; the website does not keep a
 duplicate source copy.
 
 SvelteKit owns documents, routes, components, and the document-scoped viewer. Relay owns sessions,
-OAuth, APIs, D1, Usage aggregation, and domain policy. The only join is `WebDocumentPort`.
+OAuth, APIs, SQLite storage, Usage aggregation, and domain policy. The only join is `WebDocumentPort`.
 See [ADR 0011](../../docs/decisions/0011-sveltekit-document-worker.md).
 
 Production publishes through the Relay image (`ghcr.io/gotry-io/quota-relay`, built on a
@@ -77,10 +77,9 @@ a platform icon, when it was last seen, and when its newest reading was taken, l
 or Not reporting from the newer of the two, newest last-seen first. It is read-only, and a quiet
 Device is asleep or closed rather than broken.
 
-New files under `static/` other than `logo.svg`, `logo-monochrome.svg`, `og.png`, `favicon.ico`,
-`apple-touch-icon.png`, `site.webmanifest`, `robots.txt`, `sitemap.xml`, `schema/`,
-`screenshots/`, and `providers/` need a matching `!/filename` (or `!/dir/*`) negation in
-`apps/relay/wrangler.jsonc`; `test/static-seo.test.ts` checks this.
+New files under `static/` are copied into the SvelteKit client build; the Node entry serves a
+built file for that path before it renders a document. `test/static-seo.test.ts` checks that
+order.
 
 Public pages `/download`, `/support`, `/privacy`, and `/terms` are SvelteKit routes. Support,
 Privacy, and Terms copy lives in `src/content/*.md` and is rendered by `src/lib/markdown.ts`
