@@ -29,18 +29,28 @@ pnpm version:bump:ios patch       # Quota iOS MARKETING_VERSION, then generate-i
 ```
 
 Targeted entry points live in the root `package.json` and each app README. Do not duplicate those
-command lists in new documents. After a catalog change run `pnpm generate:provider-catalog`; after
-a token change run `pnpm generate:design-tokens`; after an ADR header change run
-`pnpm generate:adr-index`; after catalog, protocol, package, or token inventory changes run
-`pnpm generate:reference`.
+command lists in new documents. After a catalog change run `pnpm generate:provider-catalog` and
+`pnpm generate:capability-matrix`; after a token change run `pnpm generate:design-tokens`; after an
+ADR header change run `pnpm generate:adr-index`; after catalog, protocol, package, or token
+inventory changes run `pnpm generate:reference`.
 
 `pnpm install` arms the checked-in hooks in `.githooks` through `core.hooksPath`. Pre-commit
-rejects unformatted sources and stale generated artifacts (provider catalog, design tokens, ADR
-index, reference). Pre-push runs the tests for the areas the pushed commits touch. Bypass either with
-`QUOTA_HOOKS_SKIP=1` or `--no-verify`.
+rejects unformatted sources and stale generated artifacts (provider catalog, capability matrix,
+design tokens, ADR index, reference). Pre-push runs the tests for the areas the pushed commits
+touch. Bypass either with `QUOTA_HOOKS_SKIP=1` or `--no-verify`.
 
 Do not commit generated state such as `node_modules/`, `dist/`, `target/`, `.build/`, `.swiftpm/`,
 `.wrangler/`, SQLite files, logs, or local credentials.
+
+## Adding a provider
+
+Do not, this cycle. New providers are frozen until the next planning round, and the twelve that
+exist are two tiers — first-class Codex and Claude Code, best-effort for the rest — with the
+generated [capability matrix](docs/providers/README.md) saying what each one can do and what
+validates it. Both statements are
+[ADR 0060](docs/decisions/0060-provider-freeze-and-two-tiers.md); read it before proposing a
+thirteenth. Fixing, fixture-backing, or extending one of the twelve is ordinary work and is not
+frozen — that is where the matrix's unverified rows point.
 
 ## Merge queue and releases
 

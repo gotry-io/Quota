@@ -41,6 +41,68 @@
       "status_page": {
         "kind": "statuspage_v2",
         "url": "https://status.openai.com/api/v2/status.json"
+      },
+      "capabilities": {
+        "tier": "first_class",
+        "known_gaps": [],
+        "validated": {
+          "quota.five_hour": {
+            "kind": "fixture",
+            "fixture": "packages/protocol/fixtures/provider-web-conformance.json",
+            "pointer": "/cases/0/expect/snapshot/windows/0"
+          },
+          "quota.weekly": {
+            "kind": "fixture",
+            "fixture": "packages/protocol/fixtures/provider-web-conformance.json",
+            "pointer": "/cases/0/expect/snapshot/windows/1"
+          },
+          "quota.monthly": {
+            "kind": "test",
+            "file": "packages/service/src/providers/codex/mod.rs",
+            "name": "maps_free_monthly_and_weekly_windows_by_duration"
+          },
+          "quota.balance": {
+            "kind": "test",
+            "file": "packages/service/src/providers/codex/mod.rs",
+            "name": "maps_credits_balance_and_reset_credits"
+          },
+          "usage.local_logs": {
+            "kind": "fixture",
+            "fixture": "packages/service/fixtures/usage/codex.jsonl"
+          },
+          "channel.cli_credentials": {
+            "kind": "test",
+            "file": "packages/service/src/providers/codex/mod.rs",
+            "name": "accepts_snake_and_camel_case_credentials_but_requires_access_token",
+            "note": "the auth.json grant; no test reads that file from disk"
+          },
+          "channel.browser_session_macos": {
+            "kind": "fixture",
+            "fixture": "packages/protocol/fixtures/provider-web-conformance.json",
+            "pointer": "/sources/codex"
+          },
+          "channel.web_session_ios": {
+            "kind": "fixture",
+            "fixture": "packages/protocol/fixtures/provider-web-conformance.json",
+            "pointer": "/sources/codex",
+            "note": "QuotaProviderWeb answers the same fixture on the device"
+          },
+          "account.sync": {
+            "kind": "fixture",
+            "fixture": "packages/protocol/fixtures/wire-conformance.json",
+            "pointer": "/contracts/quota_snapshot_envelope/0"
+          },
+          "status.statuspage_v2": {
+            "kind": "live",
+            "date": "2026-09-06",
+            "note": "the dated status-page table in provider-collection.md"
+          },
+          "pricing.api_equivalent": {
+            "kind": "fixture",
+            "fixture": "packages/protocol/fixtures/pricing-conformance.json",
+            "pointer": "/rows/cost_calculated"
+          }
+        }
       }
     },
     {
@@ -74,6 +136,68 @@
       "status_page": {
         "kind": "statuspage_v2",
         "url": "https://status.claude.com/api/v2/status.json"
+      },
+      "capabilities": {
+        "tier": "first_class",
+        "known_gaps": ["pricing.api_equivalent"],
+        "validated": {
+          "quota.five_hour": {
+            "kind": "fixture",
+            "fixture": "packages/protocol/fixtures/provider-web-conformance.json",
+            "pointer": "/cases/4/expect/snapshot/windows/0"
+          },
+          "quota.weekly": {
+            "kind": "fixture",
+            "fixture": "packages/protocol/fixtures/provider-web-conformance.json",
+            "pointer": "/cases/4/expect/snapshot/windows/1"
+          },
+          "quota.balance": {
+            "kind": "test",
+            "file": "packages/service/src/providers/claude/mod.rs",
+            "name": "maps_optional_usage_windows_and_extra_usage"
+          },
+          "usage.local_logs": {
+            "kind": "fixture",
+            "fixture": "packages/service/fixtures/usage/claude.jsonl"
+          },
+          "channel.cli_credentials": {
+            "kind": "test",
+            "file": "packages/service/src/providers/claude/mod.rs",
+            "name": "parses_oauth_credentials_and_rejects_mcp_only_payloads",
+            "note": "the credential document; no test reads the live macOS Keychain item"
+          },
+          "channel.browser_session_macos": {
+            "kind": "fixture",
+            "fixture": "packages/protocol/fixtures/provider-web-conformance.json",
+            "pointer": "/sources/claude"
+          },
+          "channel.web_session_ios": {
+            "kind": "fixture",
+            "fixture": "packages/protocol/fixtures/provider-web-conformance.json",
+            "pointer": "/sources/claude",
+            "note": "QuotaProviderWeb answers the same fixture on the device"
+          },
+          "account.sync": {
+            "kind": "fixture",
+            "fixture": "packages/protocol/fixtures/wire-conformance.json",
+            "pointer": "/contracts/quota_snapshot_envelope/0",
+            "note": "one envelope contract for every id; the fixture case uses codex"
+          },
+          "status.statuspage_v2": {
+            "kind": "live",
+            "date": "2026-09-06",
+            "note": "the dated status-page table in provider-collection.md"
+          },
+          "pricing.api_equivalent": {
+            "kind": "unverified",
+            "note": "no pricing-conformance row and no test prices an anthropic_direct Claude row"
+          },
+          "pricing.source_reported": {
+            "kind": "test",
+            "file": "packages/service/src/usage/tests.rs",
+            "name": "parser_fixtures_preserve_normalized_fields_and_coverage"
+          }
+        }
       }
     },
     {
@@ -107,6 +231,68 @@
       "status_page": {
         "kind": "none",
         "url": "https://status.x.ai/"
+      },
+      "capabilities": {
+        "tier": "best_effort",
+        "known_gaps": [],
+        "validated": {
+          "quota.weekly": {
+            "kind": "test",
+            "file": "packages/service/src/providers/grok/mod.rs",
+            "name": "maps_weekly_billing_cycle"
+          },
+          "quota.monthly": {
+            "kind": "fixture",
+            "fixture": "packages/protocol/fixtures/provider-web-conformance.json",
+            "pointer": "/cases/10/expect/snapshot/windows/0"
+          },
+          "quota.plan_cycle": {
+            "kind": "fixture",
+            "fixture": "packages/protocol/fixtures/provider-web-conformance.json",
+            "pointer": "/cases/9/expect/snapshot/windows/0"
+          },
+          "quota.balance": {
+            "kind": "test",
+            "file": "packages/service/src/providers/grok/mod.rs",
+            "name": "maps_credit_amounts_when_the_legacy_money_fields_are_present"
+          },
+          "usage.local_logs": {
+            "kind": "fixture",
+            "fixture": "packages/service/fixtures/usage/grok.jsonl"
+          },
+          "channel.cli_credentials": {
+            "kind": "test",
+            "file": "packages/service/src/providers/grok/mod.rs",
+            "name": "prefers_latest_oidc_credentials_and_falls_back_to_legacy"
+          },
+          "channel.browser_session_macos": {
+            "kind": "fixture",
+            "fixture": "packages/protocol/fixtures/provider-web-conformance.json",
+            "pointer": "/sources/grok"
+          },
+          "channel.web_session_ios": {
+            "kind": "fixture",
+            "fixture": "packages/protocol/fixtures/provider-web-conformance.json",
+            "pointer": "/sources/grok",
+            "note": "QuotaProviderWeb answers the same fixture on the device"
+          },
+          "account.sync": {
+            "kind": "fixture",
+            "fixture": "packages/protocol/fixtures/wire-conformance.json",
+            "pointer": "/contracts/quota_snapshot_envelope/0",
+            "note": "one envelope contract for every id; the fixture case uses codex"
+          },
+          "pricing.api_equivalent": {
+            "kind": "fixture",
+            "fixture": "packages/protocol/fixtures/pricing-conformance.json",
+            "pointer": "/rows/unknown_channel_grok"
+          },
+          "pricing.source_reported": {
+            "kind": "test",
+            "file": "packages/service/src/usage/tests.rs",
+            "name": "grok_ticks_are_exact_and_overflow_is_partial"
+          }
+        }
       }
     },
     {
@@ -131,6 +317,41 @@
       "status_page": {
         "kind": "none",
         "url": "https://status.openrouter.ai/"
+      },
+      "capabilities": {
+        "tier": "best_effort",
+        "known_gaps": [],
+        "validated": {
+          "quota.daily": {
+            "kind": "fixture",
+            "fixture": "packages/provider/fixtures/quota-responses.json",
+            "pointer": "/openrouter/key"
+          },
+          "quota.weekly": {
+            "kind": "unverified",
+            "note": "key_weekly comes from limit_reset; no fixture or test names that period"
+          },
+          "quota.monthly": {
+            "kind": "unverified",
+            "note": "key_monthly comes from limit_reset; no fixture or test names that period"
+          },
+          "quota.balance": {
+            "kind": "fixture",
+            "fixture": "packages/provider/fixtures/quota-responses.json",
+            "pointer": "/openrouter/credits"
+          },
+          "channel.api_key": {
+            "kind": "test",
+            "file": "packages/service/src/providers/common/config.rs",
+            "name": "config_precedes_environment_and_fixed_urls_ignore_stale_values"
+          },
+          "account.sync": {
+            "kind": "fixture",
+            "fixture": "packages/protocol/fixtures/wire-conformance.json",
+            "pointer": "/contracts/quota_snapshot_envelope/0",
+            "note": "one envelope contract for every id; the fixture case uses codex"
+          }
+        }
       }
     },
     {
@@ -155,6 +376,29 @@
       "status_page": {
         "kind": "none",
         "url": "https://status.deepseek.com/"
+      },
+      "capabilities": {
+        "tier": "best_effort",
+        "known_gaps": [],
+        "validated": {
+          "quota.balance": {
+            "kind": "test",
+            "file": "packages/service/src/providers/deepseek.rs",
+            "name": "keeps_positive_non_usd_balance_when_usd_is_zero",
+            "note": "quota-responses.json also records this body and no test reads that entry"
+          },
+          "channel.api_key": {
+            "kind": "test",
+            "file": "packages/service/src/providers/common/config.rs",
+            "name": "a_saved_key_with_a_null_base_url_is_the_key"
+          },
+          "account.sync": {
+            "kind": "fixture",
+            "fixture": "packages/protocol/fixtures/wire-conformance.json",
+            "pointer": "/contracts/quota_snapshot_envelope/0",
+            "note": "one envelope contract for every id; the fixture case uses codex"
+          }
+        }
       }
     },
     {
@@ -194,6 +438,49 @@
       "status_page": {
         "kind": "statuspage_v2",
         "url": "https://status.moonshot.cn/api/v2/status.json"
+      },
+      "capabilities": {
+        "tier": "best_effort",
+        "known_gaps": [],
+        "validated": {
+          "quota.five_hour": {
+            "kind": "test",
+            "file": "packages/service/src/providers/kimi.rs",
+            "name": "maps_weekly_and_five_hour_windows",
+            "note": "quota-responses.json also records this body and no test reads that entry"
+          },
+          "quota.weekly": {
+            "kind": "test",
+            "file": "packages/service/src/providers/kimi.rs",
+            "name": "maps_weekly_and_five_hour_windows",
+            "note": "quota-responses.json also records this body and no test reads that entry"
+          },
+          "channel.api_key": {
+            "kind": "unverified",
+            "note": "no test resolves a Kimi API key; config.rs covers OpenRouter, DeepSeek and LiteLLM only"
+          },
+          "channel.cli_credentials": {
+            "kind": "test",
+            "file": "packages/service/src/providers/kimi.rs",
+            "name": "accepts_fresh_cli_credential_and_rejects_stale_or_missing_expiry"
+          },
+          "channel.browser_session_macos": {
+            "kind": "test",
+            "file": "packages/service/src/providers/kimi.rs",
+            "name": "validate_keeps_only_a_session_with_a_coding_allowance"
+          },
+          "account.sync": {
+            "kind": "fixture",
+            "fixture": "packages/protocol/fixtures/wire-conformance.json",
+            "pointer": "/contracts/quota_snapshot_envelope/0",
+            "note": "one envelope contract for every id; the fixture case uses codex"
+          },
+          "status.statuspage_v2": {
+            "kind": "live",
+            "date": "2026-09-06",
+            "note": "the dated status-page table in provider-collection.md"
+          }
+        }
       }
     },
     {
@@ -218,6 +505,29 @@
       "status_page": {
         "kind": "none",
         "url": null
+      },
+      "capabilities": {
+        "tier": "best_effort",
+        "known_gaps": [],
+        "validated": {
+          "quota.balance": {
+            "kind": "test",
+            "file": "packages/service/src/providers/litellm.rs",
+            "name": "maps_nested_key_info_and_team_list_variants",
+            "note": "asserts the team budget window; no test asserts its USD remaining_value"
+          },
+          "channel.api_key": {
+            "kind": "test",
+            "file": "packages/service/src/providers/common/config.rs",
+            "name": "an_empty_saved_base_url_is_refused_and_a_null_one_means_none"
+          },
+          "account.sync": {
+            "kind": "fixture",
+            "fixture": "packages/protocol/fixtures/wire-conformance.json",
+            "pointer": "/contracts/quota_snapshot_envelope/0",
+            "note": "one envelope contract for every id; the fixture case uses codex"
+          }
+        }
       }
     },
     {
@@ -251,6 +561,62 @@
       "status_page": {
         "kind": "statuspage_v2",
         "url": "https://status.cursor.com/api/v2/status.json"
+      },
+      "capabilities": {
+        "tier": "best_effort",
+        "known_gaps": [],
+        "validated": {
+          "quota.weekly": {
+            "kind": "test",
+            "file": "packages/service/src/providers/cursor/mod.rs",
+            "name": "grok_bot_weekly_allowance_follows_the_included_windows"
+          },
+          "quota.plan_cycle": {
+            "kind": "test",
+            "file": "packages/service/src/providers/cursor/mod.rs",
+            "name": "usage_summary_maps_official_model_groups_and_on_demand_money"
+          },
+          "quota.balance": {
+            "kind": "test",
+            "file": "packages/service/src/providers/cursor/mod.rs",
+            "name": "usage_summary_maps_official_model_groups_and_on_demand_money",
+            "note": "the same test asserts the Other Models and On-Demand USD remainders"
+          },
+          "usage.local_logs": {
+            "kind": "fixture",
+            "fixture": "packages/service/fixtures/usage/cursor.jsonl"
+          },
+          "channel.cli_credentials": {
+            "kind": "test",
+            "file": "packages/service/src/providers/cursor/app.rs",
+            "name": "discovers_usable_cursor_app_session_before_browser_session"
+          },
+          "channel.browser_session_macos": {
+            "kind": "test",
+            "file": "packages/service/src/providers/cursor/mod.rs",
+            "name": "a_stored_session_is_discovered_only_without_a_usable_app_session",
+            "note": "discovery and the 401/403 refusal only; no test asserts a successful cursor.com read"
+          },
+          "account.sync": {
+            "kind": "fixture",
+            "fixture": "packages/protocol/fixtures/wire-conformance.json",
+            "pointer": "/contracts/quota_snapshot_envelope/0",
+            "note": "one envelope contract for every id; the fixture case uses codex"
+          },
+          "status.statuspage_v2": {
+            "kind": "live",
+            "date": "2026-09-06",
+            "note": "the dated status-page table in provider-collection.md"
+          },
+          "pricing.api_equivalent": {
+            "kind": "unverified",
+            "note": "house models have no vendor-direct entry to price against"
+          },
+          "pricing.source_reported": {
+            "kind": "unverified",
+            "note": "the parser reads a cost field; no test asserts one"
+          }
+        }
       }
     },
     {
@@ -265,7 +631,51 @@
       "credential_config": null,
       "browser_session": null,
       "default_base_url": null,
-      "base_url_environment_key": null
+      "base_url_environment_key": null,
+      "capabilities": {
+        "tier": "best_effort",
+        "known_gaps": [],
+        "validated": {
+          "quota.per_minute": {
+            "kind": "test",
+            "file": "packages/service/src/providers/gemini.rs",
+            "name": "maps_pooled_daily_and_per_minute_request_buckets"
+          },
+          "quota.daily": {
+            "kind": "test",
+            "file": "packages/service/src/providers/gemini.rs",
+            "name": "maps_pooled_daily_and_per_minute_request_buckets"
+          },
+          "quota.weekly": {
+            "kind": "unverified",
+            "note": "no fixture or test pools a bucket into the weekly horizon"
+          },
+          "quota.monthly": {
+            "kind": "unverified",
+            "note": "no fixture or test pools a bucket into the monthly horizon"
+          },
+          "usage.local_logs": {
+            "kind": "fixture",
+            "fixture": "packages/service/fixtures/usage/gemini.json",
+            "pointer": "/messages/1/tokens"
+          },
+          "channel.cli_credentials": {
+            "kind": "test",
+            "file": "packages/service/src/providers/gemini.rs",
+            "name": "collect_loads_code_assist_then_quota"
+          },
+          "account.sync": {
+            "kind": "fixture",
+            "fixture": "packages/protocol/fixtures/wire-conformance.json",
+            "pointer": "/contracts/quota_snapshot_envelope/0",
+            "note": "one envelope contract for every id; the fixture case uses codex"
+          },
+          "pricing.api_equivalent": {
+            "kind": "unverified",
+            "note": "priced only through the vendor-official fallback; no fixture or test names this agent"
+          }
+        }
+      }
     },
     {
       "id": "copilot",
@@ -279,7 +689,37 @@
       "credential_config": null,
       "browser_session": null,
       "default_base_url": null,
-      "base_url_environment_key": null
+      "base_url_environment_key": null,
+      "capabilities": {
+        "tier": "best_effort",
+        "known_gaps": [],
+        "validated": {
+          "quota.monthly": {
+            "kind": "test",
+            "file": "packages/service/src/providers/copilot.rs",
+            "name": "maps_monthly_premium_requests_as_the_headline"
+          },
+          "usage.local_logs": {
+            "kind": "fixture",
+            "fixture": "packages/service/fixtures/usage/copilot.jsonl"
+          },
+          "channel.cli_credentials": {
+            "kind": "test",
+            "file": "packages/service/src/providers/copilot.rs",
+            "name": "reads_apps_json_github_com_token_first"
+          },
+          "account.sync": {
+            "kind": "fixture",
+            "fixture": "packages/protocol/fixtures/wire-conformance.json",
+            "pointer": "/contracts/quota_snapshot_envelope/0",
+            "note": "one envelope contract for every id; the fixture case uses codex"
+          },
+          "pricing.api_equivalent": {
+            "kind": "unverified",
+            "note": "priced only through the vendor-official fallback; no fixture or test names this agent"
+          }
+        }
+      }
     },
     {
       "id": "antigravity",
@@ -297,6 +737,50 @@
       "status_page": {
         "kind": "none",
         "url": "https://www.google.com/appsstatus/dashboard/"
+      },
+      "capabilities": {
+        "tier": "best_effort",
+        "known_gaps": [],
+        "validated": {
+          "quota.five_hour": {
+            "kind": "test",
+            "file": "packages/service/src/providers/antigravity.rs",
+            "name": "maps_quota_summary_groups_into_named_windows"
+          },
+          "quota.daily": {
+            "kind": "unverified",
+            "note": "no fixture or test pools a bucket into the daily horizon"
+          },
+          "quota.weekly": {
+            "kind": "test",
+            "file": "packages/service/src/providers/antigravity.rs",
+            "name": "maps_pooled_request_buckets_when_summary_groups_are_absent"
+          },
+          "quota.monthly": {
+            "kind": "unverified",
+            "note": "no fixture or test pools a bucket into the monthly horizon"
+          },
+          "usage.local_logs": {
+            "kind": "test",
+            "file": "packages/service/src/usage/antigravity.rs",
+            "name": "parses_generation_usage_from_conversation_db"
+          },
+          "channel.cli_credentials": {
+            "kind": "test",
+            "file": "packages/service/src/providers/antigravity.rs",
+            "name": "nested_cli_token_file_is_read"
+          },
+          "account.sync": {
+            "kind": "fixture",
+            "fixture": "packages/protocol/fixtures/wire-conformance.json",
+            "pointer": "/contracts/quota_snapshot_envelope/0",
+            "note": "one envelope contract for every id; the fixture case uses codex"
+          },
+          "pricing.api_equivalent": {
+            "kind": "unverified",
+            "note": "priced only through the vendor-official fallback; no fixture or test names this agent"
+          }
+        }
       }
     },
     {
@@ -321,6 +805,49 @@
       "status_page": {
         "kind": "none",
         "url": null
+      },
+      "capabilities": {
+        "tier": "best_effort",
+        "known_gaps": [],
+        "validated": {
+          "quota.five_hour": {
+            "kind": "test",
+            "file": "packages/service/src/providers/opencode_go.rs",
+            "name": "maps_official_usage_api_windows"
+          },
+          "quota.weekly": {
+            "kind": "test",
+            "file": "packages/service/src/providers/opencode_go.rs",
+            "name": "maps_official_usage_api_windows"
+          },
+          "quota.monthly": {
+            "kind": "test",
+            "file": "packages/service/src/providers/opencode_go.rs",
+            "name": "maps_official_usage_api_windows"
+          },
+          "quota.balance": {
+            "kind": "test",
+            "file": "packages/service/src/providers/opencode_go.rs",
+            "name": "local_costs_map_to_published_dollar_limits",
+            "note": "remaining is measured against published limits, not a quota endpoint"
+          },
+          "channel.api_key": {
+            "kind": "test",
+            "file": "packages/service/src/providers/opencode_go.rs",
+            "name": "collect_api_sends_bearer_key"
+          },
+          "channel.cli_credentials": {
+            "kind": "test",
+            "file": "packages/service/src/providers/opencode_go.rs",
+            "name": "local_costs_map_to_published_dollar_limits"
+          },
+          "account.sync": {
+            "kind": "fixture",
+            "fixture": "packages/protocol/fixtures/wire-conformance.json",
+            "pointer": "/contracts/quota_snapshot_envelope/0",
+            "note": "one envelope contract for every id; the fixture case uses codex"
+          }
+        }
       }
     }
   ]

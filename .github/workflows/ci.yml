@@ -88,6 +88,7 @@ jobs:
           set -euo pipefail
           pnpm format:check:js
           pnpm check:provider-catalog
+          pnpm check:capability-matrix
           pnpm check:design-tokens
           pnpm check:plan-display
           pnpm check:adr-index

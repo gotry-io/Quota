@@ -18,14 +18,24 @@ initiate account authentication; account login is the browser flow described in
 Product metadata lives in `packages/provider/catalog.json` (not in this file). Collection
 **strategy** for each provider is documented in [`providers/<id>.md`](#providers), named by the catalog id.
 
-To add a provider:
+No new provider is added this cycle
+([ADR 0060](decisions/0060-provider-freeze-and-two-tiers.md)). When the freeze lifts, to add a
+provider:
 
-1. Catalog row in `packages/provider/catalog.json`, validated by `catalog.schema.json`.
+1. Catalog row in `packages/provider/catalog.json`, validated by `catalog.schema.json`, including
+   the required `capabilities` block: its `tier`, its `known_gaps`, and one `validated` entry per
+   capability naming the fixture, the test that asserts it, the live date, or `unverified`.
 2. Strategy file at `docs/providers/<id>.md`.
 3. Collector implementation under `packages/service/src/providers/`.
 4. Registry entry in `packages/service/src/providers/mod.rs`.
-5. `pnpm generate:provider-catalog` for protocol, Rust, and Swift provider IDs, then `pnpm generate:reference`.
+5. `pnpm generate:provider-catalog` for protocol, Rust, and Swift provider IDs, then
+   `pnpm generate:capability-matrix` and `pnpm generate:reference`.
 6. Optional QuotaBar brand SVG named by `brand_icon_asset`.
+
+What each of the twelve can do, and what validates it, is the generated capability matrix at
+[`providers/README.md`](providers/README.md). That file is where a claim about a provider's windows,
+Usage source, collection channels, account sync, status page, or cost pricing is recorded; this
+document stays the strategy order.
 
 API-key providers declare credential and base-URL capabilities so QuotaBar Settings can render the
 correct native fields. Browser-session capability separately declares its HTTPS login URL, exact

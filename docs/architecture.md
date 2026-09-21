@@ -191,10 +191,14 @@ only bounds, and its types are held to the exported schema by test
 
 The provider catalog is the language-neutral `packages/provider/catalog.json`, validated by its JSON
 Schema; generation produces TypeScript protocol IDs, Rust catalog metadata in
-`packages/service/src/catalog.rs`, and Swift `ProviderID`. The shared crate implements all ten
-quota collectors and all eight Usage parsers. `account_sync` declares whether a provider
-synchronizes and the generated managed provider enum is exactly that set; all ten declare it
-today, so the managed enum and the local collection schema currently name the same providers.
+`packages/service/src/catalog.rs`, and Swift `ProviderID`. The shared crate implements all twelve
+quota collectors and all ten Usage parsers. Each catalog row also carries a `capabilities` block
+naming what Quota can do with that provider and what validates each capability, generated into the
+matrix at [`providers/README.md`](providers/README.md)
+([ADR 0060](decisions/0060-provider-freeze-and-two-tiers.md)). `account_sync` declares whether a
+provider synchronizes and the generated managed provider enum is exactly that set; all twelve
+declare it today, so the managed enum and the local collection schema currently name the same
+providers.
 Provider credentials stay provider-owned; optional API-key overrides live in the owner-only `providers.json`
 described in [`security.md`](security.md).
 
@@ -439,7 +443,8 @@ readings for ten minutes, and answers `unknown` when a poll fails with nothing s
 
 - `packages/provider/catalog.json` generates the Rust crate metadata, the Swift `ProviderID` enum in
   `packages/apple-client`, QuotaBar's app-behavior extension on that enum,
-  `ProviderID.brandIconAssetName` in `QuotaBrandIcons`, and the protocol TypeScript IDs. One catalog
+  `ProviderID.brandIconAssetName` in `QuotaBrandIcons`, the protocol TypeScript IDs, and the
+  capability matrix in [`providers/README.md`](providers/README.md). One catalog
   produces one Swift type, and one decoder validates for both products. Collection strategy is
   [`provider-collection.md`](provider-collection.md) plus [`providers/<id>.md`](provider-collection.md#providers).
   Local Usage parsers and the local-only attribution boundary live in
