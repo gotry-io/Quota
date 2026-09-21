@@ -26,7 +26,6 @@ const published = $derived(isPublishedPagePath(page.url.pathname));
   <span>© {year} GoTry IO · MIT</span>
   <div class="footer-controls">
     <div class="footer-links">
-      <a href="/leaderboard">Leaderboard</a>
       <a href="/download">Download</a>
       <a href="/support">Support</a>
       <a href="/privacy">Privacy</a>

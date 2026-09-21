@@ -13,8 +13,8 @@ subscription quota and privacy-preserving Usage together across a user's devices
 - **QuotaRelay** — managed account/device service: one Hono source tree, run as a Node + SQLite
   image on a VPS ([ADR 0058](docs/decisions/0058-relay-runs-on-node-only.md)). Cloudflare is the
   CDN and DNS proxy in front of that origin, not a Relay runtime.
-- **Quota Web** — public site, GitHub sign-in, account dashboard, the opt-in public Usage page at
-  `quota.gotry.io/u/<handle>`, and the opt-in leaderboard at `quota.gotry.io/leaderboard`.
+- **Quota Web** — public site, GitHub sign-in, account dashboard, and the opt-in public Usage page at
+  `quota.gotry.io/u/<handle>`.
 
 Provider credentials, prompts, completions, raw events, local paths, and conversation identifiers
 never upload. See the [security baseline](docs/security.md).

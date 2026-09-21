@@ -5,9 +5,8 @@
 - Superseded by: 0052
 - Follows [ADR 0035](0035-quota-pace-is-derived-from-the-reading.md),
   [ADR 0037](0037-a-public-profile-shows-usage-not-quota.md),
-  [ADR 0039](0039-project-attribution-stays-local.md),
-  [ADR 0042](0042-quota-history-is-local-samples.md), and
-  [ADR 0045](0045-the-leaderboard-is-a-page-you-opt-into.md)
+  [ADR 0039](0039-project-attribution-stays-local.md), and
+  [ADR 0042](0042-quota-history-is-local-samples.md)
 
 ## Context
 
@@ -45,9 +44,8 @@ detail, 320×480, nothing else. The Settings window is where every preference li
 window is where this Mac's 30-day quota history, today's cost per window, and Usage are read at
 width.
 
-**The website keeps cross-device Usage, public profiles, and the leaderboard**
-([ADR 0037](0037-a-public-profile-shows-usage-not-quota.md),
-[ADR 0045](0045-the-leaderboard-is-a-page-you-opt-into.md)). Neither the website nor the Account
+**The website keeps cross-device Usage and public profiles**
+([ADR 0037](0037-a-public-profile-shows-usage-not-quota.md)). Neither the website nor the Account
 gains a history view; neither window gains an upload. Every number a window shows comes from
 `cache.sqlite`, `identity.sqlite`, or the Account summary the panel already reads
 ([ADR 0039](0039-project-attribution-stays-local.md),

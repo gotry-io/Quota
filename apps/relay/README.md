@@ -71,9 +71,8 @@ Each period of `usage` also carries `cache_saved`: what its cache reads saved ag
 uncached input price for the same tokens, folded from the rows it already priced and therefore
 costing no extra query ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)). The cache
 hit rate is not on the wire; every client derives it from the totals beside it.
-Two more v6 routes answer with no principal at all
-([ADR 0037](../../docs/decisions/0037-a-public-profile-shows-usage-not-quota.md),
-[ADR 0045](../../docs/decisions/0045-the-leaderboard-is-a-page-you-opt-into.md)):
+One more v6 route answers with no principal at all
+([ADR 0037](../../docs/decisions/0037-a-public-profile-shows-usage-not-quota.md)):
 
 - `GET /api/v6/public/<handle>/usage` answers the page an Account publishes at
   `quota.gotry.io/u/<handle>`: tokens, messages, an optional API-equivalent cost, provider and
@@ -84,13 +83,6 @@ Two more v6 routes answer with no principal at all
   no rollup read. `GET` and `PUT /api/v2/account/profile` are how the owner reads and writes the
   handle and its three switches; the write is browser-only and same-origin, and a handle another
   Account holds is `409 conflict`.
-- `GET /api/v6/public/leaderboard` answers the board at `quota.gotry.io/leaderboard`: the hundred
-  listed profiles with the most tokens over the last 30 UTC days, each a handle, a token and
-  message total, and a rank. `period` accepts only `30d`. A profile is on it only while
-  `on_leaderboard = 1` and `enabled = 1`, and the whole board is one grouped statement over
-  `usage_daily` rather than one read per profile. It is cached the same way and for the same
-  reason as a page, and its `ETag` comes from the listed set and the summed upload revision of the
-  devices behind it, computed before the rollup is read.
 
 `all` and the activity read are `usage_daily` alone. A trailing period folds its whole UTC days
 from `usage_daily` too, and reaches into `usage_hourly` only for the day its edge cuts — four such

@@ -41,7 +41,6 @@ describe("the public profile an Account may publish", () => {
         enabled: false,
         show_models: true,
         show_cost: false,
-        on_leaderboard: false,
       },
     });
     expect(response.headers.get("Cache-Control")).toBe("no-store");
@@ -74,7 +73,6 @@ describe("the public profile an Account may publish", () => {
       enabled: true,
       show_models: true,
       show_cost: false,
-      on_leaderboard: false,
     });
 
     // A handle is lowercase by contract, so an uppercase one is not a rival claim but a
@@ -260,6 +258,13 @@ describe("the page a published handle answers", () => {
     expect((await port.readPublicProfile("rendered"))?.handle).toBe("rendered");
     expect(await port.readPublicProfile("someone-else")).toBeNull();
   });
+
+  it("the retired leaderboard API is gone", async () => {
+    await seedAccount("retired");
+    const response = await appFor("account_retired").request(`${origin}/api/v6/public/leaderboard`);
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({ error: { code: "not_found" } });
+  });
 });
 
 function profileBody(handle: string, options: ProfileOptions = {}) {
@@ -268,7 +273,6 @@ function profileBody(handle: string, options: ProfileOptions = {}) {
     enabled: options.enabled ?? true,
     show_models: options.showModels ?? true,
     show_cost: options.showCost ?? false,
-    on_leaderboard: options.onLeaderboard ?? false,
   };
 }
 
@@ -276,7 +280,6 @@ interface ProfileOptions {
   enabled?: boolean;
   showModels?: boolean;
   showCost?: boolean;
-  onLeaderboard?: boolean;
 }
 
 function put(app: ReturnType<typeof createRelayApp>, handle: string, options: ProfileOptions = {}) {
