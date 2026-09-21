@@ -534,6 +534,7 @@ describe("browser sign-in through GitHub", () => {
     for (const table of [
       "accounts",
       "account_identities",
+      "account_settings",
       "sessions",
       "devices",
       "quota_snapshots",

@@ -3,6 +3,9 @@
 - Status: Accepted
 - Date: 2026-08-14
 - Amended: 2026-08-26 by [ADR 0027](./0027-one-token-per-client.md)
+- Amended: 2026-09-21 by [ADR 0061](./0061-alert-policy-and-the-budget-follow-the-account.md):
+  `quota-ios` may write `PUT /api/v2/account/settings` under `account:settings`. It still cannot
+  manage identities, delete the Account, or publish a profile.
 - Related: [ADR 0006](./0006-managed-account-device-usage.md)
 
 > Updated 2026-08-26: every client now holds one session; `quotacli` and the Device Authorization Grant are gone ([ADR 0027](./0027-one-token-per-client.md)).
@@ -48,8 +51,9 @@ Quota iOS consumes the session through `packages/apple-client`.
 ## Consequences
 
 - Account summaries list only collection Devices; a `quota-ios` login never adds one.
-- A `quota-ios` credential can read Account quota and Usage and revoke its own session, and can write
-  nothing.
+- A `quota-ios` credential can read Account quota and Usage, revoke its own session, and write the
+  Account settings document ([ADR 0061](./0061-alert-policy-and-the-budget-follow-the-account.md)).
+  It still cannot manage the Account, delete it, or publish a profile.
 - Shipping the viewer gives Quota iOS and `packages/apple-client` no *upload* capability. Reading a
   provider on the phone, added by [ADR 0034](./0034-ios-collects-for-itself.md), stays local to that
   device.

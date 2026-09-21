@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import {
   AccountResponseSchema,
+  AccountSettingsResponseSchema,
+  AccountSettingsUpdateRequestSchema,
   AccountSummarySchema,
   AccountUsageActivityResponseSchema,
   AccountUsagePeriodResponseSchema,
@@ -68,6 +70,8 @@ const AccountHttpPayloadSchema = z.union([
   PublicProfileUpdateRequestSchema,
   PublicProfileResponseSchema,
   PublicUsageResponseSchema,
+  AccountSettingsUpdateRequestSchema,
+  AccountSettingsResponseSchema,
   RelayErrorEnvelopeSchema,
 ]);
 

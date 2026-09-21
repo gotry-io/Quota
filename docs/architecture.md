@@ -296,11 +296,14 @@ folds QuotaBar asked for, because the hours behind them moved. The website and Q
 route for every Usage selection except `all`, and for the budget month. QuotaBar Account reads it
 for week / month / custom. The year Activity heatmap still reads UTC activity days.
 
-The monthly spend budget is a device preference and is never uploaded: it is one amount and one
-alert switch in `UserDefaults` on Apple and `localStorage` on the website, evaluated against the
-current month's fold by the same dedup rule the quota alerts use. A budget says what someone wants
-to be warned about, which is not a fact about their Account, so no managed store and no wire
-contract names one. Collection and report
+Alert policy and the monthly spend budget follow the Account
+([ADR 0061](decisions/0061-alert-policy-and-the-budget-follow-the-account.md)). The document is
+`GET` / `PUT /api/v2/account/settings`: remaining-percent thresholds keyed by an opaque selector,
+reset and pace switches, and an optional budget amount. `enabled` and delivery stay per device.
+`GET` is `account:read` with `ETag: "<revision>"` and `Cache-Control: private, no-cache`. `PUT`
+is `account:settings`, compare-and-set on `If-Match`, and a web session also presents a
+same-origin Origin. Signed in, every client measures the budget against the Account calendar
+month; signed out, against what the device has. Collection and report
 generation continue when Usage upload is disabled: the service neither stages nor drains the outbox,
 `get_state` omits cached Account Usage so QuotaBar stays local-only, and quota and account
 synchronization stay independent.
@@ -350,8 +353,9 @@ hold it.
 The registered `quota-ios` public client uses the same `/oauth/v2/authorize` PKCE route with the
 exact redirect `io.gotry.quota:/oauth/callback`. Its exchange takes an optional `installation_id`,
 `device_display_name`, and `platform: ios` — present together or not at all — and issues a session
-naming a Device with `[account:read, device:write]` when they are, and a read-only one when they
-are not; the Device half is the path QuotaBar's exchange already takes
+naming a Device with `[account:read, device:write, account:settings]` when they are, and
+`[account:read, account:settings]` when they are not; the Device half is the path QuotaBar's
+exchange already takes
 ([ADR 0041](decisions/0041-ios-is-a-device-when-sync-is-paid.md)). Quota iOS consumes that session
 through `packages/apple-client`, fetches `GET /api/v6/account/summary`, and — when its session
 names a Device — sends what it read on the phone through `GET /api/v2/device/sync` and

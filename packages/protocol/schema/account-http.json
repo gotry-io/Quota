@@ -846,6 +846,46 @@
     {
       "type": "object",
       "properties": {
+        "protocol_version": {
+          "type": "number",
+          "const": 2
+        },
+        "alerts": {
+          "$ref": "#/$defs/__schema79"
+        },
+        "budget": {
+          "$ref": "#/$defs/__schema83"
+        }
+      },
+      "required": ["protocol_version", "alerts", "budget"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "type": "number",
+          "const": 2
+        },
+        "revision": {
+          "$ref": "#/$defs/__schema20"
+        },
+        "updated_at": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "alerts": {
+          "$ref": "#/$defs/__schema79"
+        },
+        "budget": {
+          "$ref": "#/$defs/__schema83"
+        }
+      },
+      "required": ["protocol_version", "revision", "updated_at", "alerts", "budget"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
         "error": {
           "type": "object",
           "properties": {
@@ -866,6 +906,8 @@
                 "device_deleted",
                 "client_upgrade_required",
                 "conflict",
+                "precondition_required",
+                "precondition_failed",
                 "internal_error"
               ]
             },
@@ -1958,6 +2000,66 @@
         }
       },
       "required": ["date", "level"],
+      "additionalProperties": false
+    },
+    "__schema79": {
+      "type": "object",
+      "properties": {
+        "reset_reminders": {
+          "type": "boolean"
+        },
+        "pace_alerts": {
+          "type": "boolean"
+        },
+        "thresholds": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/__schema80"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/__schema81"
+          }
+        }
+      },
+      "required": ["reset_reminders", "pace_alerts", "thresholds"],
+      "additionalProperties": false
+    },
+    "__schema80": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{12}$"
+    },
+    "__schema81": {
+      "minItems": 1,
+      "maxItems": 2,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema82"
+      }
+    },
+    "__schema82": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 99
+    },
+    "__schema83": {
+      "type": "object",
+      "properties": {
+        "amount_usd": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^\\d{1,7}(\\.\\d{1,2})?$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "alerts": {
+          "type": "boolean"
+        }
+      },
+      "required": ["amount_usd", "alerts"],
       "additionalProperties": false
     }
   }

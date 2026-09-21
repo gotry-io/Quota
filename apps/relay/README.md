@@ -166,12 +166,14 @@ do not ask for HTML still receive the original 409 JSON. See
 
 Every client's session is a row in that same table, and one login issues one access/refresh family
 ([ADR 0027](../../docs/decisions/0027-one-token-per-client.md)). The `quotabar` client exchanges an
-authorization code over a loopback redirect for a session scoped `[account:read, device:write]`,
+authorization code over a loopback redirect for a session scoped
+`[account:read, device:write, account:settings]`,
 and Authorization Code with PKCE is the only grant Relay offers. The registered `quota-ios` public
 client signs in over the exact redirect `io.gotry.quota:/oauth/callback`, and its exchange takes an
 optional `installation_id`, `device_display_name`, and `platform: ios` — the three present together
 or not at all. Presenting them registers a Device on the same path `quotabar` takes and issues
-`[account:read, device:write]`; presenting none issues `[account:read]` and registers no Device
+`[account:read, device:write, account:settings]`; presenting none issues
+`[account:read, account:settings]` and registers no Device
 ([ADR 0041](../../docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md)).
 `POST /oauth/v2/apple` takes the same optional installation. Both
 exchanges answer with the Account's `display_label` beside the session, read in the same batch that
@@ -183,6 +185,13 @@ cacheable. `GET /api/v6/account/summary`, `GET /api/v6/account/usage/activity`, 
 `GET /api/v6/account/usage/period` are
 `private, no-cache` with a strong `ETag`, and answer a matching `If-None-Match` with 304 before
 running any Usage query.
+
+`GET` / `PUT /api/v2/account/settings` is the Account alert-policy and budget document
+([ADR 0061](../../docs/decisions/0061-alert-policy-and-the-budget-follow-the-account.md)).
+`GET` is `account:read`, `ETag: "<revision>"`, `Cache-Control: private, no-cache`. `PUT` is
+`account:settings` and compare-and-set on `If-Match`; a browser also presents a same-origin
+Origin. No row is the default document at revision 0. Live sessions gain the scope in
+migration 0033.
 
 Every document response carries `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin`,
 `X-Frame-Options: DENY`, and a Content Security Policy that allows scripts, styles, images, fonts,

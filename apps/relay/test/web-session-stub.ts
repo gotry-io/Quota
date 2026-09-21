@@ -45,7 +45,7 @@ export class SignedInWebSessionStub implements WebSessionPort {
       device_id: null,
       device_generation: null,
       client_kind: "web",
-      scopes: ["account:read", "account:manage"],
+      scopes: ["account:read", "account:manage", "account:settings"],
       authenticated_at: this.authenticatedAt.toISOString(),
     };
   }

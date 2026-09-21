@@ -873,6 +873,7 @@ describe("managed Relay on SQLite", () => {
       .all<{ name: string }>();
     expect(tables.results.map((row) => row.name)).toEqual([
       "account_identities",
+      "account_settings",
       "account_usage_folds",
       "accounts",
       "devices",
@@ -1154,7 +1155,7 @@ describe("managed Relay on SQLite", () => {
       device_id: tokens.device_id,
       device_generation: 1,
       client_kind: "quotabar",
-      scopes: ["account:read", "device:write"],
+      scopes: ["account:read", "device:write", "account:settings"],
     });
     // The one token reads the Account it was issued for, and writes only its own Device.
     const lastSeen = () =>

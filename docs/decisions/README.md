@@ -23,7 +23,7 @@ instructions. Stable ADR URLs stay.
 | [0010](./0010-provider-browser-session-auth.md) | Provider browser-session authentication | Accepted |  |  |
 | [0011](./0011-sveltekit-document-worker.md) | Quota Web document SSR via SvelteKit on the existing Relay Worker | Partially superseded | [0058](./0058-relay-runs-on-node-only.md) | 2026-08-26, 2026-09-21 |
 | [0012](./0012-managed-data-v3.md) | Managed-data v3 | Superseded | [0018](./0018-single-managed-data-contract.md), [0024](./0024-hour-versioned-usage-and-daily-rollups.md) |  |
-| [0013](./0013-readonly-ios-account-client.md) | Read-only Quota iOS account client | Accepted |  | 2026-08-26 |
+| [0013](./0013-readonly-ios-account-client.md) | Read-only Quota iOS account client | Accepted |  | 2026-08-26, 2026-09-21 |
 | [0014](./0014-nonsecret-ios-widget-snapshot.md) | Non-secret iOS widget snapshot via App Group | Accepted |  | 2026-09-04, 2026-09-06, 2026-09-07, 2026-09-19 |
 | [0015](./0015-diagnostic-attempts-and-device-health.md) | Diagnostic attempts, support reports, and Device Health | Superseded | [0022](./0022-minimal-diagnostics.md) | 2026-08-25 |
 | [0016](./0016-local-service-self-repair.md) | Local service self-repair | Superseded | [0021](./0021-identity-store-and-disposable-cache.md) | 2026-08-25 |
@@ -37,7 +37,7 @@ instructions. Stable ADR URLs stay.
 | [0024](./0024-hour-versioned-usage-and-daily-rollups.md) | Replace an hour by version, fold days once, resolve subscriptions in Relay | Accepted |  |  |
 | [0025](./0025-one-session-system.md) | One session system, and Relay writes the browser's | Accepted |  | 2026-08-26, 2026-09-05 |
 | [0026](./0026-isolate-invalid-input-at-the-smallest-scope.md) | Isolate invalid input at the smallest scope | Accepted |  |  |
-| [0027](./0027-one-token-per-client.md) | One token per client; QuotaCLI and the device grant retired | Accepted |  | 2026-09-02 |
+| [0027](./0027-one-token-per-client.md) | One token per client; QuotaCLI and the device grant retired | Accepted |  | 2026-09-02, 2026-09-21 |
 | [0028](./0028-the-boundary-answers-the-write.md) | The boundary answers the write, and a refusal leaves evidence | Accepted |  |  |
 | [0029](./0029-official-price-for-an-unnamed-channel.md) | Official price for an unnamed billing channel | Accepted |  |  |
 | [0030](./0030-a-rotation-never-received-did-not-happen.md) | A rotation whose successor was never presented did not happen | Accepted |  |  |
@@ -50,7 +50,7 @@ instructions. Stable ADR URLs stay.
 | [0037](./0037-a-public-profile-shows-usage-not-quota.md) | A public profile shows Usage, not quota | Accepted |  | 2026-09-07, 2026-09-21 |
 | [0038](./0038-sessions-are-a-local-view-of-files.md) | Sessions are a local view of files | Accepted |  |  |
 | [0039](./0039-project-attribution-stays-local.md) | Project attribution stays local | Accepted |  |  |
-| [0040](./0040-a-period-is-folded-where-its-days-already-are.md) | A period is folded where its days already are, and a budget never leaves the device | Partially superseded | [0055](./0055-an-account-period-is-a-local-date-range.md) | 2026-09-19, 2026-09-20 |
+| [0040](./0040-a-period-is-folded-where-its-days-already-are.md) | A period is folded where its days already are, and a budget never leaves the device | Partially superseded | [0055](./0055-an-account-period-is-a-local-date-range.md), [0061](./0061-alert-policy-and-the-budget-follow-the-account.md) | 2026-09-19, 2026-09-20, 2026-09-21 |
 | [0041](./0041-ios-is-a-device-when-sync-is-paid.md) | The phone is a Device, and paid sync is what its readings are worth | Partially superseded | [0048](./0048-sync-is-free-and-billing-is-gone.md) |  |
 | [0042](./0042-quota-history-is-local-samples.md) | Quota history is local samples | Accepted |  | 2026-09-19 |
 | [0043](./0043-one-widget-view-package-for-both-platforms.md) | One widget view package for both platforms | Accepted |  |  |
@@ -63,7 +63,7 @@ instructions. Stable ADR URLs stay.
 | [0050](./0050-the-worker-and-d1-are-retired.md) | The production Worker and D1 are retired | Accepted |  | 2026-09-21 |
 | [0051](./0051-the-panel-glances-and-the-windows-explain.md) | The panel glances, and the windows explain | Partially superseded | [0052](./0052-quotabar-is-the-app-and-the-menu-bar-is-part-of-it.md) |  |
 | [0052](./0052-quotabar-is-the-app-and-the-menu-bar-is-part-of-it.md) | QuotaBar is the app, and the menu bar is part of it | Accepted |  | 2026-09-18 |
-| [0053](./0053-one-alert-delivery-package-for-both-apps.md) | One alert delivery package for both Apple apps | Accepted |  |  |
+| [0053](./0053-one-alert-delivery-package-for-both-apps.md) | One alert delivery package for both Apple apps | Accepted |  | 2026-09-21 |
 | [0054](./0054-quotabar-is-resident-in-the-menu-bar.md) | QuotaBar is resident in the menu bar | Accepted |  |  |
 | [0055](./0055-an-account-period-is-a-local-date-range.md) | An Account period is a local-date range on the hour grid | Accepted |  |  |
 | [0056](./0056-a-period-export-is-the-period-on-screen.md) | A period export is the period on screen | Accepted |  |  |
@@ -71,3 +71,4 @@ instructions. Stable ADR URLs stay.
 | [0058](./0058-relay-runs-on-node-only.md) | Relay runs on Node only | Accepted |  |  |
 | [0059](./0059-the-leaderboard-is-retired.md) | The leaderboard is retired | Accepted |  |  |
 | [0060](./0060-provider-freeze-and-two-tiers.md) | Freeze new providers and keep two provider tiers | Accepted |  |  |
+| [0061](./0061-alert-policy-and-the-budget-follow-the-account.md) | Alert policy and the budget follow the Account | Accepted |  |  |

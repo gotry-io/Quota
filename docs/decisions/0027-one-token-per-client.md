@@ -6,15 +6,21 @@
   [ADR 0013](0013-readonly-ios-account-client.md), [ADR 0025](0025-one-session-system.md)
 - Amended: 2026-09-02 by [ADR 0030](0030-a-rotation-never-received-did-not-happen.md): a
   rotation whose successor was never presented can be repeated with the token it replaced
+- Amended: 2026-09-21 by [ADR 0061](0061-alert-policy-and-the-budget-follow-the-account.md):
+  web, device, and reader sessions all carry `account:settings` so every client can write the
+  Account settings document. Rotation copies the scopes the row already has.
 
 ## Decision
 
 **A client holds one session.** Migration 0021 merges `device_sessions` into `account_sessions` and
 renames the result `sessions`. A row either names the Device it speaks for, at the generation that
 Device had when the session opened, or names none. QuotaBar's login issues one access/refresh family
-scoped `[account:read, device:write]`; the iOS viewer's is `[account:read]`; a browser session is
-`[account:read, account:manage]` and carries no refresh token, because the cookie is the whole
-credential ([ADR 0025](0025-one-session-system.md)). `token_audience` is gone from the wire, and
+scoped `[account:read, device:write, account:settings]`; the iOS viewer's is
+`[account:read, account:settings]`; a browser session is
+`[account:read, account:manage, account:settings]` and carries no refresh token, because the cookie
+is the whole credential ([ADR 0025](0025-one-session-system.md)). `account:settings` is the one
+Account document a native client may write
+([ADR 0061](0061-alert-policy-and-the-budget-follow-the-account.md)). `token_audience` is gone from the wire, and
 `OAuthTokenResponse`, both refresh responses, and the local session envelope each carry one
 `session`. Quota iOS's persisted `AccountSession` adds `activation: pending | active` on that
 same record: exchange writes `pending`, only Continue promotes it to `active`, and token

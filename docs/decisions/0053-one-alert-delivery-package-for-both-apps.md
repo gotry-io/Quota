@@ -4,6 +4,9 @@
 - Date: 2026-09-18
 - Related: [ADR 0043](./0043-one-widget-view-package-for-both-platforms.md),
   [ADR 0014](./0014-nonsecret-ios-widget-snapshot.md)
+- Amended: 2026-09-21 by [ADR 0061](./0061-alert-policy-and-the-budget-follow-the-account.md):
+  the shipped UserDefaults keys remain; they are now a local copy of Account policy. `enabled`
+  and dedup state stay per device.
 
 ## Context
 
@@ -68,6 +71,10 @@ Widget extensions do not link `QuotaAlertDelivery`.
   platform it is for, in the shared store, where the other platform's behaviour is visible next to
   it.
 - Shipped UserDefaults keys and state file names stay what those releases wrote. Changing a prefix
-  or file name is a new decision, not an addition to this one.
+  or file name is a new decision, not an addition to this one. After
+  [ADR 0061](./0061-alert-policy-and-the-budget-follow-the-account.md) those keys are a local copy
+  of the Account settings document (`resetReminders`, `paceAlerts`, `thresholds`, and the budget
+  amount and its alert switch). `enabled` is still this device's notification permission, and the
+  state file is still this device's dedup.
 - `packages/apple-shared` is no longer Foundation-only in every target. Presentation, alerts, and
   observation merge stay Foundation-only; delivery is the target that talks to UserNotifications.

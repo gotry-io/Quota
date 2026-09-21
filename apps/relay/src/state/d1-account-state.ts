@@ -1,4 +1,7 @@
 import {
+  ACCOUNT_SETTINGS_UNSET_UPDATED_AT,
+  AccountSettingsSchema,
+  DEFAULT_ACCOUNT_SETTINGS,
   IOS_OAUTH_CLIENT_ID,
   type ProviderId,
   QuotaSnapshotSchema,
@@ -8,6 +11,9 @@ import type {
   AccountLoginGrantConsumeResult,
   AccountMaintenanceInput,
   AccountRecord,
+  AccountSettingsRecord,
+  AccountSettingsWriteInput,
+  AccountSettingsWriteResult,
   AccountState,
   AccountUsageVersionStamp,
   AccountVersionStamp,
@@ -1132,6 +1138,57 @@ export class D1AccountState implements AccountState {
     }
   }
 
+  async getAccountSettings(accountId: string): Promise<AccountSettingsRecord | null> {
+    const row = await this.database
+      .prepare(
+        `SELECT account_id, revision, settings_json, created_at, updated_at
+         FROM account_settings WHERE account_id = ?1`,
+      )
+      .bind(accountId)
+      .first<AccountSettingsRow>();
+    return row ? accountSettingsRecord(row) : null;
+  }
+
+  /**
+   * Compare-and-set one Account's settings document.
+   *
+   * Revision 0 is INSERT … WHERE NOT EXISTS. Any other revision is UPDATE … WHERE revision = ?.
+   * The write is that one statement; a lost race reads the current row only to name it.
+   */
+  async writeAccountSettings(
+    input: AccountSettingsWriteInput,
+  ): Promise<AccountSettingsWriteResult> {
+    const settingsJson = JSON.stringify(input.settings);
+    const row =
+      input.expected_revision === 0
+        ? await this.database
+            .prepare(
+              `INSERT INTO account_settings (
+                 account_id, revision, settings_json, created_at, updated_at
+               )
+               SELECT ?1, 1, ?2, ?3, ?3
+               WHERE NOT EXISTS (SELECT 1 FROM account_settings WHERE account_id = ?1)
+               RETURNING account_id, revision, settings_json, created_at, updated_at`,
+            )
+            .bind(input.account_id, settingsJson, input.written_at)
+            .first<AccountSettingsRow>()
+        : await this.database
+            .prepare(
+              `UPDATE account_settings
+               SET revision = revision + 1, settings_json = ?2, updated_at = ?3
+               WHERE account_id = ?1 AND revision = ?4
+               RETURNING account_id, revision, settings_json, created_at, updated_at`,
+            )
+            .bind(input.account_id, settingsJson, input.written_at, input.expected_revision)
+            .first<AccountSettingsRow>();
+    if (row) return { outcome: "written", record: accountSettingsRecord(row) };
+    const current = await this.getAccountSettings(input.account_id);
+    return {
+      outcome: "conflict",
+      current: current ?? synthesizedAccountSettings(input.account_id),
+    };
+  }
+
   async findEnabledPublicProfile(handle: string): Promise<PublicProfileRecord | null> {
     const row = await this.database
       .prepare(`${publicProfileSelect} WHERE handle = ?1 COLLATE NOCASE AND enabled = 1`)
@@ -1308,6 +1365,7 @@ export class D1AccountState implements AccountState {
         .bind(accountId),
       this.database.prepare("DELETE FROM account_identities WHERE account_id = ?1").bind(accountId),
       this.database.prepare("DELETE FROM public_profiles WHERE account_id = ?1").bind(accountId),
+      this.database.prepare("DELETE FROM account_settings WHERE account_id = ?1").bind(accountId),
       this.database.prepare("DELETE FROM devices WHERE account_id = ?1").bind(accountId),
       this.database.prepare("DELETE FROM accounts WHERE id = ?1 RETURNING id").bind(accountId),
     ]);
@@ -1554,6 +1612,34 @@ function publicProfile(row: PublicProfileRow): PublicProfileRecord {
     show_cost: row.show_cost === 1,
     created_at: row.created_at,
     updated_at: row.updated_at,
+  };
+}
+
+interface AccountSettingsRow {
+  account_id: string;
+  revision: number;
+  settings_json: string;
+  created_at: string;
+  updated_at: string;
+}
+
+function accountSettingsRecord(row: AccountSettingsRow): AccountSettingsRecord {
+  return {
+    account_id: row.account_id,
+    revision: row.revision,
+    settings: AccountSettingsSchema.parse(JSON.parse(row.settings_json)),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function synthesizedAccountSettings(accountId: string): AccountSettingsRecord {
+  return {
+    account_id: accountId,
+    revision: 0,
+    settings: DEFAULT_ACCOUNT_SETTINGS,
+    created_at: ACCOUNT_SETTINGS_UNSET_UPDATED_AT,
+    updated_at: ACCOUNT_SETTINGS_UNSET_UPDATED_AT,
   };
 }
 
