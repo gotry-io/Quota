@@ -52,6 +52,7 @@ struct DeviceUploadTests {
 
     #expect(transport.requests.map(\.path) == [
       "/api/v6/account/summary",
+      "/api/v2/account/settings",
       "/api/v2/device/sync",
       "/api/v6/device/snapshots",
     ])
@@ -76,7 +77,10 @@ struct DeviceUploadTests {
 
     await model.restore()
 
-    #expect(transport.requests.map(\.path) == ["/api/v6/account/summary"])
+    #expect(transport.requests.map(\.path) == [
+      "/api/v6/account/summary",
+      "/api/v2/account/settings",
+    ])
     #expect(model.localCollection?.snapshots.count == 1)
   }
 
@@ -151,6 +155,8 @@ private func collectingModel(
       collectors: { provider, _ in UploadStubCollector(provider: provider) },
       now: { collectedAt }
     ),
+    settingsDefaults: UserDefaults(suiteName: "QuotaTests.SettingsSync.\(UUID().uuidString)")!,
+    syncAccountSettings: true,
     installation: MemoryInstallationIdentity(value: "6eec1da2-8d8f-4e77-9a9a-3b6d61bf8998"),
     now: { collectedAt }
   )
@@ -185,6 +191,8 @@ private func connectModel(
         challenge: "challenge"
       )
     },
+    settingsDefaults: UserDefaults(suiteName: "QuotaTests.SettingsSync.\(UUID().uuidString)")!,
+    syncAccountSettings: true,
     installation: installation,
     now: { collectedAt }
   )
@@ -239,6 +247,17 @@ final class RecordingHTTPTransport: HTTPTransport, @unchecked Sendable {
   }
 
   func perform(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+    if request.url?.path == "/api/v2/account/settings" {
+      recordPath(request)
+      let body = defaultAccountSettingsBody(for: request)
+      let response = HTTPURLResponse(
+        url: request.url ?? URL(string: "https://quota.gotry.io")!,
+        statusCode: 200,
+        httpVersion: "HTTP/1.1",
+        headerFields: ["ETag": request.httpMethod == "PUT" ? "\"1\"" : "\"0\""]
+      )!
+      return (body, response)
+    }
     guard let exchange = record(request) else { throw HTTPTransportError.unavailable }
     let response = HTTPURLResponse(
       url: request.url ?? URL(string: "https://quota.gotry.io")!,
@@ -247,6 +266,18 @@ final class RecordingHTTPTransport: HTTPTransport, @unchecked Sendable {
       headerFields: nil
     )!
     return (exchange.body, response)
+  }
+
+  private func recordPath(_ request: URLRequest) {
+    lock.lock()
+    recorded.append(
+      Recorded(
+        method: request.httpMethod ?? "GET",
+        path: request.url?.path ?? "",
+        body: request.httpBody
+      )
+    )
+    lock.unlock()
   }
 
   private func record(_ request: URLRequest) -> Exchange? {
@@ -264,6 +295,19 @@ final class RecordingHTTPTransport: HTTPTransport, @unchecked Sendable {
 }
 
 private struct NotAnObject: Error {}
+
+private func defaultAccountSettingsBody(for request: URLRequest) -> Data {
+  if request.httpMethod == "PUT", let body = request.httpBody,
+    let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+  {
+    var response = object
+    response["revision"] = 1
+    response["updated_at"] = "2026-09-21T10:00:00Z"
+    return (try? JSONSerialization.data(withJSONObject: response))
+      ?? defaultAccountSettingsGETBody()
+  }
+  return defaultAccountSettingsGETBody()
+}
 
 /// The body of a recorded request, as the object it is.
 private func jsonObject(_ data: Data) throws -> [String: Any] {

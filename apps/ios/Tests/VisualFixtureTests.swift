@@ -1,4 +1,5 @@
 import Foundation
+import QuotaAlerts
 import QuotaPresentation
 import QuotaProviderStatus
 import QuotaRelay
@@ -373,6 +374,25 @@ struct VisualFixtureParserTests {
       await #expect(throws: HTTPTransportError.unavailable) {
         _ = try await transport.perform(
           URLRequest(url: URL(string: "https://quota.gotry.io/")!))
+      }
+    }
+
+    @Test
+    func fixtureTransportRefusesAccountSettings() async throws {
+      let transport = FixtureBlockedHTTPTransport()
+      let client = RelayClient(transport: transport)
+      await #expect(throws: RelayClientError.unavailable) {
+        _ = try await client.fetchAccountSettings(
+          accessToken: Fixtures.accessToken
+        )
+      }
+      let document = try AccountSettingsDocument.decode(defaultAccountSettingsGETBody())
+      await #expect(throws: RelayClientError.unavailable) {
+        _ = try await client.writeAccountSettings(
+          document,
+          accessToken: Fixtures.accessToken,
+          ifMatch: "\"0\""
+        )
       }
     }
 

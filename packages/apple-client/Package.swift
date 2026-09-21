@@ -37,11 +37,17 @@ let package = Package(
     ),
     .target(
       name: "QuotaRelay",
-      dependencies: ["QuotaWire"]
+      dependencies: [
+        "QuotaWire",
+        .product(name: "QuotaAlerts", package: "QuotaAppleShared"),
+      ]
     ),
     .target(
       name: "QuotaAccount",
-      dependencies: ["QuotaWire", "QuotaRelay", "QuotaKeychain"]
+      dependencies: [
+        "QuotaWire", "QuotaRelay", "QuotaKeychain",
+        .product(name: "QuotaAlerts", package: "QuotaAppleShared"),
+      ]
     ),
     .target(
       name: "QuotaProviderWeb",
@@ -92,6 +98,7 @@ let package = Package(
       name: "QuotaAppleClientTests",
       dependencies: [
         "QuotaWire", "QuotaRelay", "QuotaAccount", "QuotaWidgetData", "QuotaKeychain",
+        .product(name: "QuotaAlerts", package: "QuotaAppleShared"),
       ]
     ),
     .testTarget(

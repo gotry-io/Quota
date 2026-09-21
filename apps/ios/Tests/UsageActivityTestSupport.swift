@@ -45,6 +45,8 @@ func makeActivityAppModel(
     ),
     authenticator: CancelledAuthenticator(),
     activity: loader,
+    settingsDefaults: UserDefaults(suiteName: "QuotaTests.SettingsSync.\(UUID().uuidString)")!,
+    syncAccountSettings: false,
     now: now
   )
 }

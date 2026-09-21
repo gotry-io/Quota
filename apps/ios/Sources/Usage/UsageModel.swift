@@ -6,11 +6,12 @@ import QuotaPresentation
 import QuotaRelay
 import QuotaWire
 
-/// Selected Usage range, activity/rhythm/day reads, and the monthly budget this device keeps.
+/// Selected Usage range, activity/rhythm/day reads, and this device's copy of the monthly budget.
 ///
 /// The managed Account session stays on `AppModel`. This owner is told when a summary is
 /// accepted and when the account goes away; in-flight reads carry the session epoch and drop
-/// their completion when it no longer matches.
+/// their completion when it no longer matches. Signed in, the budget follows the Account
+/// ([ADR 0061](../../../../docs/decisions/0061-alert-policy-and-the-budget-follow-the-account.md)).
 @MainActor
 @Observable
 final class UsageModel {
@@ -26,9 +27,12 @@ final class UsageModel {
   @ObservationIgnored var onSessionExpired: () -> Void = {}
   @ObservationIgnored var onNotSignedIn: () -> Void = {}
   @ObservationIgnored var evaluateBudget: (UsageBudget, UsageBudgetProgress?) -> Void = { _, _ in }
+  /// Policy edits go through `AccountSettingsSync`. Local save still happens here so the editor
+  /// updates at once.
+  @ObservationIgnored var onBudgetEdited: (UsageBudget) -> Void = { _ in }
 
   var usagePeriod: UsagePeriodSelection = .last30Days
-  /// The monthly budget this device keeps, which is a preference and never leaves it.
+  /// The monthly budget this device holds. Signed in, it is a copy of the Account document.
   var budget: UsageBudget
   /// Last 365 UTC days. Memory only; a failed read stays here and does not block the period list.
   var activityChart: ActivityChartPhase = .idle
@@ -175,10 +179,16 @@ final class UsageModel {
 
   func setBudget(_ next: UsageBudget) {
     budget = budgetStore.save(next)
+    onBudgetEdited(next)
     Task { @MainActor in
       await loadBudgetPeriod(force: true)
     }
     evaluateBudgetAlerts()
+  }
+
+  /// After the Account document is applied, reread the shipped keys.
+  func reloadBudgetFromStore() {
+    budget = budgetStore.load()
   }
 
   /// Says once per month that 80% and then 100% of the budget has been spent.
@@ -279,7 +289,8 @@ final class UsageModel {
     applyPeriod(result, key: key, lastGood: lastGood)
   }
 
-  /// The monthly budget measures this local month through the same period read.
+  /// The monthly budget measures this iPhone's local month through the same Account period read.
+  /// Signed in, that month is the Account's spend; signed out, Usage does not load a period.
   func loadBudgetPeriod(force: Bool = false) async {
     guard isSignedIn(), budget.isSet,
       let range = UsagePeriodSelection.thisMonth.range(today: now())

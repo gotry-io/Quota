@@ -13,6 +13,7 @@
 		096EB905A1C2162EC56CA6C3 /* QuotaSmokeUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACD4F96B6680E816EA654315 /* QuotaSmokeUITests.swift */; };
 		09A1841A9BD857FCA1F9DD70 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6323E0A4D271F48CF0B7D3C6 /* SettingsView.swift */; };
 		1407AAFD84EA93FF477C6A1D /* UsageBudgetViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89854405C3C8EECC583A7C96 /* UsageBudgetViews.swift */; };
+		16A4F14C50052480851A41E9 /* AccountSettingsSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACEA89C7CFAED3B47C9AADA2 /* AccountSettingsSyncTests.swift */; };
 		1843EA48EF0230D16D1889C9 /* VisualFixtureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DAB666C3AD5BBB5CEED76A7 /* VisualFixtureTests.swift */; };
 		19A03C89EA9BBC0BEC3C9228 /* UsageActivityChartTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B533B5705609CA55289004F3 /* UsageActivityChartTests.swift */; };
 		1BC2967059F6419553075964 /* ProvidersModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83452C9E5D14C154AD2092C6 /* ProvidersModel.swift */; };
@@ -59,6 +60,7 @@
 		5EC92A21EA1BC5F2818DC8F8 /* QuotaPresentation in Frameworks */ = {isa = PBXBuildFile; productRef = 338CCAA9EF4ECD7B12AA34A0 /* QuotaPresentation */; };
 		5F6DF95B79D85A6A6E5374F9 /* QuotaProviderWeb in Frameworks */ = {isa = PBXBuildFile; productRef = BB19B9F74C7D4BD4D8F6A761 /* QuotaProviderWeb */; };
 		5F8702B6B81077F94BCD8015 /* SettingsAboutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73FAF27FA22BCF5434FE0602 /* SettingsAboutView.swift */; };
+		62928B40A568B979F07D859B /* AccountSettingsSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5BE7127472DCCF95D8369B2 /* AccountSettingsSync.swift */; };
 		66B3BD0ADFE526187C7AC2FB /* QuotaDesign.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B96B327FF66825178A6F492 /* QuotaDesign.swift */; };
 		6741F9EB068AECB4CBDAA5C7 /* SubscriptionDetailTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74341CA49827F1463DE52FDB /* SubscriptionDetailTests.swift */; };
 		6921286C731CE03E7E08E1AB /* InstallationIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8A9076FE7F3F12E50B59B10 /* InstallationIdentity.swift */; };
@@ -270,6 +272,7 @@
 		AA9C52BB5B706B67AAA8EFD9 /* UsageActivityView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageActivityView.swift; sourceTree = "<group>"; };
 		ABEBED6CF41C1D9E753ABE89 /* QuotaScreenUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaScreenUITests.swift; sourceTree = "<group>"; };
 		ACD4F96B6680E816EA654315 /* QuotaSmokeUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuotaSmokeUITests.swift; sourceTree = "<group>"; };
+		ACEA89C7CFAED3B47C9AADA2 /* AccountSettingsSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountSettingsSyncTests.swift; sourceTree = "<group>"; };
 		B533B5705609CA55289004F3 /* UsageActivityChartTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageActivityChartTests.swift; sourceTree = "<group>"; };
 		B83FF236D780793577FA7ED1 /* UsageActivityChart.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageActivityChart.swift; sourceTree = "<group>"; };
 		BA569843A5C8221A5E1B37F7 /* OverviewWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverviewWidget.swift; sourceTree = "<group>"; };
@@ -278,6 +281,7 @@
 		C2964ADF1879CBCD748A9548 /* AgentDisplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentDisplayTests.swift; sourceTree = "<group>"; };
 		C2D6608523B711CFB7FFFFEB /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
 		C44BCCD3B333361960497D05 /* DeepLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeepLink.swift; sourceTree = "<group>"; };
+		C5BE7127472DCCF95D8369B2 /* AccountSettingsSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountSettingsSync.swift; sourceTree = "<group>"; };
 		C71E71B70534179C771E17F7 /* LocalQuotaSamples.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalQuotaSamples.swift; sourceTree = "<group>"; };
 		C93FF0EFBA23DF68838B83A2 /* RecordingBackgroundRefreshScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingBackgroundRefreshScheduler.swift; sourceTree = "<group>"; };
 		CC35C3F705ED31BF2268C093 /* Formatters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Formatters.swift; sourceTree = "<group>"; };
@@ -369,6 +373,7 @@
 		11AF0ED22C478EC73885BA9E /* Sources */ = {
 			isa = PBXGroup;
 			children = (
+				C5BE7127472DCCF95D8369B2 /* AccountSettingsSync.swift */,
 				7EB6890AA6B3532E0089CAE0 /* ActivityLoading.swift */,
 				50438DF74EFAC847E8BA5A01 /* AppModel.swift */,
 				A3A92DE7F7321BA8D0CC1417 /* BackgroundRefresh.swift */,
@@ -458,6 +463,7 @@
 		63950DE6C35ADCD651C1650D /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+				ACEA89C7CFAED3B47C9AADA2 /* AccountSettingsSyncTests.swift */,
 				C2964ADF1879CBCD748A9548 /* AgentDisplayTests.swift */,
 				FE24F23209102B4AEFA59594 /* AlertCoordinatorTests.swift */,
 				9D8CCD89060177A07CA110FE /* AlertPersistenceConstraintTests.swift */,
@@ -765,6 +771,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				16A4F14C50052480851A41E9 /* AccountSettingsSyncTests.swift in Sources */,
 				746859C4C56A99A3638CEC9F /* AgentDisplayTests.swift in Sources */,
 				F7C0E34B3ACF4FAF4B9CDB31 /* AlertCoordinatorTests.swift in Sources */,
 				B8882FED9814AFD1725C2695 /* AlertPersistenceConstraintTests.swift in Sources */,
@@ -802,6 +809,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				62928B40A568B979F07D859B /* AccountSettingsSync.swift in Sources */,
 				53C98348A47113D409B79CBD /* ActivityLoading.swift in Sources */,
 				A6F62816DD782147849AD335 /* AlertCoordinator.swift in Sources */,
 				FC7E71B55000C7E8C43E9E96 /* AppModel+Scenario.swift in Sources */,

@@ -1,4 +1,5 @@
 import Foundation
+import QuotaAlerts
 import QuotaRelay
 import QuotaWire
 import Testing
@@ -7,7 +8,8 @@ struct RelayClientTests {
   /// What this client can reach. The device routes are the phone's own Device and nothing more:
   /// its readings and the control document behind them
   /// ([ADR 0041](../../../../docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md)). Usage is
-  /// a Mac's, and the Account's management routes stay the browser's.
+  /// a Mac's. Account management stays the browser's, except the settings document
+  /// ([ADR 0061](../../../../docs/decisions/0061-alert-policy-and-the-budget-follow-the-account.md)).
   @Test
   func publicAPIReachesOnlyThisDeviceAndTheAccountReads() {
     #expect(
@@ -17,6 +19,7 @@ struct RelayClientTests {
         "/oauth/v2/revoke",
         "/api/v2/account",
         "/api/v6/account/summary",
+        "/api/v2/account/settings",
         "/api/v6/account/usage/activity",
         "/api/v6/account/usage/period",
         "/api/v2/device/sync",
@@ -25,9 +28,11 @@ struct RelayClientTests {
     #expect(RelayRoute.allCases.allSatisfy { !$0.path.contains("/device/usage") })
     #expect(RelayRoute.allCases.allSatisfy { !$0.path.contains("/account/devices") })
     #expect(!RelayRoute.allCases.contains { $0.method == "DELETE" })
-    #expect(RelayRoute.allCases.filter { $0.method == "PUT" }.map(\.path) == [
-      "/api/v6/device/snapshots"
-    ])
+    #expect(
+      Set(RelayRoute.allCases.filter { $0.method == "PUT" }.map(\.path)) == [
+        "/api/v2/account/settings",
+        "/api/v6/device/snapshots",
+      ])
   }
 
   @Test
@@ -306,6 +311,102 @@ struct RelayClientTests {
       )
     }
     #expect(transport.recordedURLs.isEmpty)
+  }
+
+  @Test
+  func settingsReadIsConditionalAndKeepsTheCachedDocumentOn304() async throws {
+    let body = Fixtures.accountSettingsJSON()
+    let transport = ScriptedTransport([
+      .init(status: 200, body: body, headers: ["ETag": "\"0\""]),
+      .init(status: 304, body: Data(), headers: ["ETag": "\"0\""]),
+    ])
+    let client = RelayClient(transport: transport)
+
+    let first = try await client.fetchAccountSettings(accessToken: Fixtures.accessToken)
+    guard case .modified(let document, let etag) = first else {
+      Issue.record("expected modified settings, got \(first)")
+      return
+    }
+    #expect(document.revision == 0)
+    #expect(document.alerts.resetReminders)
+    #expect(document.budget.amountUSD == nil)
+    #expect(etag == "\"0\"")
+
+    let second = try await client.fetchAccountSettings(
+      accessToken: Fixtures.accessToken,
+      etag: "\"0\""
+    )
+    guard case .unchanged(let next) = second else {
+      Issue.record("expected unchanged, got \(second)")
+      return
+    }
+    #expect(next == "\"0\"")
+    #expect(transport.recordedURLs.map(\.path) == [
+      "/api/v2/account/settings",
+      "/api/v2/account/settings",
+    ])
+    #expect(transport.recordedMethods == ["GET", "GET"])
+    #expect(transport.recordedIfNoneMatch == [nil, "\"0\""])
+  }
+
+  @Test
+  func settingsWriteSendsIfMatchAndReturnsThe412BodyAsTheCurrentDocument() async throws {
+    let written = Fixtures.accountSettingsJSON(
+      revision: 1,
+      thresholds: ["a1b2c3d4e5f6": [20, 10]],
+      amountUSD: "250.00"
+    )
+    let conflict = Fixtures.accountSettingsJSON(
+      revision: 2,
+      thresholds: ["a1b2c3d4e5f6": [20, 10], "c3d4e5f6a1b2": [15]],
+      amountUSD: "75.50"
+    )
+    let transport = ScriptedTransport([
+      .init(status: 200, body: written, headers: ["ETag": "\"1\""]),
+      .init(status: 412, body: conflict, headers: ["ETag": "\"2\""]),
+    ])
+    let client = RelayClient(transport: transport)
+    let request = try AccountSettingsDocument.decode(written)
+
+    let first = try await client.writeAccountSettings(
+      request,
+      accessToken: Fixtures.accessToken,
+      ifMatch: "\"0\""
+    )
+    guard case .written(let document, let etag) = first else {
+      Issue.record("expected written, got \(first)")
+      return
+    }
+    #expect(document.revision == 1)
+    #expect(document.budget.amountUSD == Decimal(250))
+    #expect(etag == "\"1\"")
+
+    let second = try await client.writeAccountSettings(
+      request,
+      accessToken: Fixtures.accessToken,
+      ifMatch: "\"0\""
+    )
+    guard case .conflict(let current, let conflictETag) = second else {
+      Issue.record("expected conflict, got \(second)")
+      return
+    }
+    #expect(current.revision == 2)
+    #expect(current.budget.amountUSD == Decimal(string: "75.50"))
+    #expect(current.alerts.thresholds["c3d4e5f6a1b2"] == [15])
+    #expect(conflictETag == "\"2\"")
+
+    #expect(
+      transport.recordedURLs.map(\.path) == [
+        "/api/v2/account/settings",
+        "/api/v2/account/settings",
+      ])
+    #expect(transport.recordedMethods == ["PUT", "PUT"])
+    #expect(transport.recordedIfMatch == ["\"0\"", "\"0\""])
+    let body = String(data: transport.recordedBodies[0], encoding: .utf8) ?? ""
+    #expect(body.contains("\"protocol_version\":2"))
+    #expect(body.contains("\"amount_usd\":\"250.00\""))
+    #expect(!body.contains("\"revision\""))
+    #expect(!body.contains("\"updated_at\""))
   }
 
   @Test

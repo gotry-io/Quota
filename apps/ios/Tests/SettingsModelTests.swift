@@ -18,6 +18,12 @@ struct SettingsModelTests {
     #expect(SettingsCopy.enableNotifications == "Enable Notifications")
     #expect(SettingsCopy.resetReminders == "Reset Reminders")
     #expect(SettingsCopy.footer == "Alerts are checked when Quota refreshes.")
+    #expect(
+      SettingsCopy.footerSignedIn
+        == "Reset reminders, pace warnings, and thresholds follow the Account. Enable Notifications stays on this iPhone. Alerts are checked when Quota refreshes."
+    )
+    #expect(SettingsCopy.budgetStaysOnThisIPhone == "The monthly budget stays on this iPhone.")
+    #expect(SettingsCopy.accountSpendThisMonth == "Account spend this month")
     #expect(SettingsCopy.permissionDenied == "Allow notifications for Quota in Settings.")
     #expect(SettingsCopy.openSettings == "Open Settings")
     #expect(SettingsCopy.emptyAlerts == "No quota alerts are available yet.")

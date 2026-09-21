@@ -89,6 +89,13 @@ struct SettingsView: View {
       accountActionsSection
     }
     .task { await model.loadIdentities() }
+    .onAppear {
+      settings.accountSettings = model.accountSettings
+      settings.reload()
+    }
+    .onChange(of: model.accountSettings.generation) { _, _ in
+      settings.reload()
+    }
     .environment(\.defaultMinListRowHeight, QuotaTheme.minimumTouchTarget)
     .accessibilityIdentifier("settings.root")
     .navigationTitle("Settings")

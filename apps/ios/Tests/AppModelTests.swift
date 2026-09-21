@@ -1137,15 +1137,38 @@ final class ScriptedHTTPTransport: HTTPTransport, @unchecked Sendable {
   struct Exchange {
     var status: Int
     var body: Data
+    var headers: [String: String]
+
+    init(status: Int, body: Data, headers: [String: String] = [:]) {
+      self.status = status
+      self.body = body
+      self.headers = headers
+    }
   }
 
   private var exchanges: [Exchange]
+  private let autoAnswerAccountSettings: Bool
+  private(set) var requests: [URLRequest] = []
 
-  init(_ exchanges: [Exchange]) {
+  init(_ exchanges: [Exchange], autoAnswerAccountSettings: Bool = true) {
     self.exchanges = exchanges
+    self.autoAnswerAccountSettings = autoAnswerAccountSettings
   }
 
   func perform(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+    requests.append(request)
+    if autoAnswerAccountSettings, request.url?.path == "/api/v2/account/settings" {
+      let body = cannedAccountSettingsBody(for: request)
+      let url = request.url ?? URL(string: "https://quota.gotry.io")!
+      let etag = request.httpMethod == "PUT" ? "\"1\"" : "\"0\""
+      let response = HTTPURLResponse(
+        url: url,
+        statusCode: 200,
+        httpVersion: "HTTP/1.1",
+        headerFields: ["ETag": etag]
+      )!
+      return (body, response)
+    }
     guard !exchanges.isEmpty else { throw HTTPTransportError.unavailable }
     let exchange = exchanges.removeFirst()
     let url = request.url ?? URL(string: "https://quota.gotry.io")!
@@ -1153,10 +1176,30 @@ final class ScriptedHTTPTransport: HTTPTransport, @unchecked Sendable {
       url: url,
       statusCode: exchange.status,
       httpVersion: "HTTP/1.1",
-      headerFields: nil
+      headerFields: exchange.headers.isEmpty ? nil : exchange.headers
     )!
     return (exchange.body, response)
   }
+}
+
+func cannedAccountSettingsBody(for request: URLRequest) -> Data {
+  if request.httpMethod == "PUT", let body = request.httpBody,
+    let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+  {
+    var response = object
+    response["revision"] = 1
+    response["updated_at"] = "2026-09-21T10:00:00Z"
+    return (try? JSONSerialization.data(withJSONObject: response)) ?? defaultAccountSettingsGETBody()
+  }
+  return defaultAccountSettingsGETBody()
+}
+
+func defaultAccountSettingsGETBody() -> Data {
+  Data(
+    """
+    {"protocol_version":2,"revision":0,"updated_at":"1970-01-01T00:00:00Z","alerts":{"reset_reminders":true,"pace_alerts":true,"thresholds":{}},"budget":{"amount_usd":null,"alerts":true}}
+    """.utf8
+  )
 }
 
 @MainActor
@@ -1195,6 +1238,8 @@ func makeModel(
     localCollector: localCollector
       ?? LocalCollector(sessions: providerSessions, collectors: { _, _ in nil }, now: now),
     providerStatusClient: providerStatusClient,
+    settingsDefaults: UserDefaults(suiteName: "QuotaTests.SettingsSync.\(UUID().uuidString)")!,
+    syncAccountSettings: false,
     now: now
   )
 }
@@ -1262,7 +1307,9 @@ private func connectModel(
     authenticator: authenticator
       ?? ScriptedAuthenticator(result: .success(callback)),
     widgetPublisher: widgetPublisher,
-    makeAuthorizationAttempt: { connectAttempt() }
+    makeAuthorizationAttempt: { connectAttempt() },
+    settingsDefaults: UserDefaults(suiteName: "QuotaTests.SettingsSync.\(UUID().uuidString)")!,
+    syncAccountSettings: false
   )
   return (model, account)
 }
@@ -1298,11 +1345,12 @@ enum Fixtures {
   static let refreshToken = "qiar_synthetic_refresh_token"
 
   static func session(
+    accountID: String = "account_01",
     activation: AccountSessionActivation = .active,
     deviceID: String? = nil
   ) -> AccountSession {
     AccountSession(
-      accountID: "account_01",
+      accountID: accountID,
       deviceID: deviceID,
       accessToken: accessToken,
       accessExpiresAt: date("2026-08-14T12:15:00Z"),
