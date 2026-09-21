@@ -50,6 +50,18 @@ if [ -n "${QUOTA_IOS_RESULT_BUNDLE:-}" ]; then
   : >"$log_path"
 fi
 
+# The simulator is booted, and has finished booting, before any test launches the app. Left to
+# `xcodebuild`, it boots lazily when the first test asks for the app, and that first launch races
+# the system coming up: on a cold CI runner it timed out ("Failed to launch") after most of a
+# minute and took the next test down with it, while every test after them passed. The screen census
+# never saw this only because setting an appearance happened to boot the simulator first.
+# `bootstatus -b` returns once the boot, including data migration, is complete.
+xcrun simctl boot "$udid" >/dev/null 2>&1 || true
+if ! xcrun simctl bootstatus "$udid" -b >/dev/null 2>&1; then
+  echo "Quota iOS tests could not confirm that simulator $udid finished booting." >&2
+  exit 1
+fi
+
 # The runner reads the appearance and the text size it should launch with. TEST_RUNNER_* reaches
 # XCTest's environment; the files beside them are the fallback when a runner strips that prefix,
 # the same two channels scripts/ios-ui-screenshots.sh uses. Both are cleared on exit so a later
@@ -64,8 +76,6 @@ if [ -n "${QUOTA_IOS_APPEARANCE:-}" ] || [ -n "${QUOTA_IOS_TEXT_SIZE:-}" ]; then
     TEST_RUNNER_QUOTA_IOS_APPEARANCE="$QUOTA_IOS_APPEARANCE"
     export TEST_RUNNER_QUOTA_IOS_APPEARANCE
     printf '%s' "$QUOTA_IOS_APPEARANCE" >"$appearance_file"
-    xcrun simctl boot "$udid" >/dev/null 2>&1 || true
-    xcrun simctl bootstatus "$udid" -b >/dev/null 2>&1 || true
     xcrun simctl ui "$udid" appearance "$QUOTA_IOS_APPEARANCE" >/dev/null 2>&1 || true
   fi
   if [ -n "${QUOTA_IOS_TEXT_SIZE:-}" ]; then
