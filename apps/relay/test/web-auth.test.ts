@@ -537,6 +537,7 @@ describe("browser sign-in through GitHub", () => {
       "account_settings",
       "sessions",
       "devices",
+      "quota_history",
       "quota_snapshots",
       "usage_hourly",
       "usage_hour_scans",
@@ -943,6 +944,16 @@ async function seedDeviceData(accountId: string): Promise<void> {
       .prepare(
         `INSERT INTO login_grants (id, client_id, account_id, expires_at, created_at)
        VALUES ('grant_delete', 'quotabar', ?1, ?2, ?2)`,
+      )
+      .bind(accountId, stamp),
+    db
+      .prepare(
+        `INSERT INTO quota_history (
+           device_id, account_id, provider, fingerprint, window_id, resets_at, bucket_start,
+           used_percent, duration_seconds, updated_at, expires_at
+         ) VALUES ('device_delete', ?1, 'codex', 'fingerprint', 'five_hour',
+           '2026-08-10T15:00:00Z', '2026-08-10T10:00:00Z', 40, 18000, ?2,
+           '2026-08-12T10:00:00Z')`,
       )
       .bind(accountId, stamp),
   ]);

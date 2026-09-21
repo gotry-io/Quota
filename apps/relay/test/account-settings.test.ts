@@ -77,6 +77,7 @@ describe("Account settings", () => {
       revision: 1,
       updated_at: now.toISOString(),
       ...writtenSettings,
+      history: { sync: false },
     });
 
     const again = await app.request(`${origin}/api/v2/account/settings`, {
@@ -284,6 +285,18 @@ describe("Account settings", () => {
     });
     expect(unknown.status).toBe(400);
     expect(await storedSettings("account_rules")).toBe(0);
+  });
+
+  it("leaves history unchanged when a write omits it, and does not turn it off by omission", async () => {
+    await seedAccount("history");
+    const app = appFor("account_history");
+    const on = await put(app, { ...writtenSettings, history: { sync: true } });
+    expect(on.status).toBe(200);
+    expect(((await on.json()) as AccountSettingsResponse).history).toEqual({ sync: true });
+
+    const omitted = await put(app, writtenSettings, { ifMatch: '"1"' });
+    expect(omitted.status).toBe(200);
+    expect(((await omitted.json()) as AccountSettingsResponse).history).toEqual({ sync: true });
   });
 
   it("deletes the settings row with the Account", async () => {

@@ -207,8 +207,11 @@ fixtures named below; change the fixture, not a surface.
   percent used, so two windows of different cadences are read the same way; the horizontal axis
   is the window's start to its reset. It takes the meter's own colour. A window with no samples
   yet — a new install, a rebuilt cache, a reading that came from another device — shows no line
-  and takes no space. Only the device that took the samples can draw them; samples are never
-  uploaded ([ADR 0042](decisions/0042-quota-history-is-local-samples.md)).
+  and takes no space, unless the Account's history switch is on and the chart is drawing the
+  Account series. Samples stay on the device by default; they upload as downsampled buckets only
+  while that switch is on
+  ([ADR 0042](decisions/0042-quota-history-is-local-samples.md),
+  [ADR 0062](decisions/0062-quota-history-may-follow-the-account.md)).
 - **A provider group ends with the day it has had.** One secondary line, **Today: 3 windows ·
   82% / 40% / 12%**, oldest first, that opens into a row per window naming the local clock times
   it ran between and its peak. Singular is **1 window**. The day is the primary-cadence

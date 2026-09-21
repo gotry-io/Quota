@@ -1,12 +1,14 @@
 import {
   canonicalAmountUSD,
   mergeQuotaObservations,
+  quotaHistoryUploadHasOutOfRangePoint,
   quotaSubscriptionKey,
   validateModelCatalog,
   validatePricingCatalog,
 } from "@gotry-io/quota-model";
 import {
   ACCOUNT_SETTINGS_UNSET_UPDATED_AT,
+  canonicalRfc3339Utc,
   DEFAULT_ACCOUNT_SETTINGS,
   AccountResponseSchema,
   AccountSettingsResponseSchema,
@@ -35,19 +37,26 @@ import {
   identityProviderDisplayName,
   LogoutResponseSchema,
   MANAGED_DATA_PROTOCOL_VERSION,
+  MAXIMUM_QUOTA_HISTORY_UPLOAD_BYTES,
   MAXIMUM_USAGE_SUBMISSION_BYTES,
   MODEL_CATALOG,
   type ModelCatalog,
   ModelCatalogSchema,
   OAuthTokenResponseSchema,
   PROTOCOL_VERSION,
+  ProviderIdSchema,
   ProviderStatusResponseSchema,
   type PricingCatalog,
   PricingCatalogSchema,
   PublicProfileResponseSchema,
   PublicProfileUpdateRequestSchema,
+  type QuotaHistoryResponse,
+  QuotaHistoryResponseSchema,
+  QuotaHistoryUploadResponseSchema,
+  QuotaHistoryUploadSchema,
   QuotaSnapshotEnvelopeSchema,
   QuotaSnapshotUploadResponseSchema,
+  Rfc3339InstantSchema,
   type RelayErrorCode,
   type RelayErrorEnvelope,
   SessionRefreshRequestSchema,
@@ -137,6 +146,7 @@ const maximumSnapshotBodyBytes = 256 * 1024;
 const maximumAccountDevices = 256;
 const maximumAccountSnapshots = 8_192;
 const maximumAccountDailyRows = 100_000;
+const quotaHistoryAccountRowLimit = 50_000;
 const recentAuthenticationMilliseconds = 10 * 60 * 1000;
 const activeDeviceMilliseconds = 15 * 60 * 1000;
 const expiredSessionRetentionMilliseconds = 7 * 24 * 60 * 60 * 1000;
@@ -230,6 +240,8 @@ export interface RelayAppOptions {
   usageFoldVersion?: number;
   /** Test override for the period local-day scan cap. Production uses `maximumAccountDailyRows`. */
   usageLocalDayLimit?: number;
+  /** Test override for the per-Account quota-history row ceiling. Production uses 50 000. */
+  quotaHistoryRowLimit?: number;
   /** Test override for official status-page fetches. Production uses global `fetch`. */
   providerStatusFetch?: typeof fetch;
   /** Where the last-good status-page readings live. Each entry point supplies its platform's. */
@@ -251,6 +263,7 @@ export function accountMaintenanceInput(checkedAt: Date): AccountMaintenanceInpu
     usage_hour_before: `${daysBefore(checkedAt, usageHourRetentionDays).toISOString().slice(0, 19)}Z`,
     usage_day_before: utcDate(daysBefore(checkedAt, usageDayRetentionDays)),
     usage_fold_before: new Date(checkedAt.getTime() - usageFoldRetentionMilliseconds).toISOString(),
+    quota_history_now: canonicalRfc3339Utc(checkedAt),
     limit: maintenanceBatchLimit,
   };
 }
@@ -322,6 +335,10 @@ export function createRelayApp(options: RelayAppOptions): Hono {
   app.use(
     "/api/v6/device/usage",
     bodyLimit({ maxSize: MAXIMUM_USAGE_SUBMISSION_BYTES, onError: requestBodyTooLarge }),
+  );
+  app.use(
+    "/api/v6/device/quota-history",
+    bodyLimit({ maxSize: MAXIMUM_QUOTA_HISTORY_UPLOAD_BYTES, onError: requestBodyTooLarge }),
   );
   for (const path of [
     "/api/v2/device/profile",
@@ -1318,6 +1335,56 @@ export function createRelayApp(options: RelayAppOptions): Hono {
   });
 
   /**
+   * Downsampled remaining-quota buckets for this Device, while the Account switch is on.
+   *
+   * `fingerprint_scope` is implicitly global: a source-scoped identity embeds the device and
+   * is not stored. A producer that does not bucket is refused. A point older than the series'
+   * span plus one bucket of clock slack, or more than one bucket ahead of now, is 400.
+   * 409 `history_sync_off` is how a device that has not yet seen the settings document finds
+   * out the switch is off. 413 `quota_history_full` when the Account already holds 50 000 rows.
+   */
+  app.put("/api/v6/device/quota-history", async (context) => {
+    const principal = await deviceWriter(context, options, now());
+    if (principal instanceof Response) return principal;
+    const upload = await parseJSON(context, QuotaHistoryUploadSchema);
+    if (upload instanceof Response) return upload;
+    const receivedAt = now().toISOString();
+    if (quotaHistoryUploadHasOutOfRangePoint(upload, receivedAt)) return invalidRequest(context);
+    const written = await options.state.recordQuotaHistory(
+      principal,
+      upload,
+      receivedAt,
+      options.quotaHistoryRowLimit ?? quotaHistoryAccountRowLimit,
+    );
+    if (written.outcome === "stale_device") {
+      return relayError(context, 409, "stale_generation", "The device generation is stale.");
+    }
+    if (written.outcome === "invalid_request") return invalidRequest(context);
+    if (written.outcome === "history_sync_off") {
+      return relayError(
+        context,
+        409,
+        "history_sync_off",
+        "Quota history sync is off for this Account.",
+      );
+    }
+    if (written.outcome === "quota_history_full") {
+      return relayError(
+        context,
+        413,
+        "quota_history_full",
+        "This Account already holds the maximum number of quota-history rows.",
+      );
+    }
+    return context.json(
+      QuotaHistoryUploadResponseSchema.parse({
+        protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
+        series: written.series,
+      }),
+    );
+  });
+
+  /**
    * The owner's own view of their public page, whether or not it is on.
    *
    * An Account that has never chosen a handle has no row, and that is not a failure: it is a
@@ -1433,11 +1500,22 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     if (matched === "invalid") return invalidRequest(context);
     const update = await parseJSON(context, AccountSettingsUpdateRequestSchema);
     if (update instanceof Response) return update;
+    const current = await options.state.getAccountSettings(principal.account_id);
+    const currentRevision = current?.revision ?? 0;
+    if (currentRevision !== matched) {
+      const body = accountSettingsView(current);
+      context.header("ETag", accountSettingsETag(body.revision));
+      context.header("Cache-Control", "private, no-cache");
+      return context.json(body, 412);
+    }
+    const previousSync = current?.settings.history?.sync ?? false;
+    const nextHistory = update.history ?? current?.settings.history ?? { sync: false };
     const written = await options.state.writeAccountSettings({
       account_id: principal.account_id,
       expected_revision: matched,
       // Stored in one spelling whoever wrote it: "0.5", "0.50" and "00.5" are the same budget, and
       // a document that kept its writer's text would differ by which client saved last.
+      // `history` omitted means unchanged: the website and K6 clients send only alerts and budget.
       settings: {
         alerts: update.alerts,
         budget: {
@@ -1445,8 +1523,10 @@ export function createRelayApp(options: RelayAppOptions): Hono {
             update.budget.amount_usd === null ? null : canonicalAmountUSD(update.budget.amount_usd),
           alerts: update.budget.alerts,
         },
+        history: nextHistory,
       },
       written_at: now().toISOString(),
+      delete_quota_history: previousSync && !nextHistory.sync,
     });
     if (written.outcome === "conflict") {
       const body = accountSettingsView(written.current);
@@ -1458,6 +1538,84 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     context.header("ETag", accountSettingsETag(body.revision));
     context.header("Cache-Control", "private, no-cache");
     return context.json(body);
+  });
+
+  /**
+   * Merged remaining-quota history for one global-scope subscription.
+   *
+   * One subscription per request. The union is `MAX(used_percent)` in SQL. `since` is clamped
+   * per window to that window's span (`min(30 d, max(48 h, 4 × duration_seconds))`). ETag is
+   * the switch plus `(count, max(updated_at))` of the matching rows, so a matching
+   * `If-None-Match` returns 304 before the merged rows are read. With the switch off the body
+   * is `{ sync: false, windows: {} }`.
+   */
+  app.get("/api/v6/account/quota-history", async (context) => {
+    const checkedAt = now();
+    const principal = await accountReader(context, options, checkedAt);
+    if (principal instanceof Response) return principal;
+    if (!hasOnlyQueryKeys(context, ["provider", "fingerprint", "since"])) {
+      return invalidRequest(context);
+    }
+    const provider = ProviderIdSchema.safeParse(context.req.query("provider"));
+    const fingerprint = quotaHistoryFingerprint(context.req.query("fingerprint"));
+    const sinceRaw = Rfc3339InstantSchema.safeParse(context.req.query("since"));
+    if (!provider.success || fingerprint === null || !sinceRaw.success) {
+      return invalidRequest(context);
+    }
+    const since = canonicalRfc3339Utc(sinceRaw.data);
+    const checked = canonicalRfc3339Utc(checkedAt);
+    const sync = await options.state.isQuotaHistorySyncOn(principal.account_id);
+    const stamp = sync
+      ? await options.state.quotaHistoryStamp(
+          principal.account_id,
+          provider.data,
+          fingerprint,
+          since,
+          checked,
+        )
+      : { count: 0, updated_at: null };
+    const notModified = await answerQuotaHistoryIfNoneMatch(context, principal, {
+      sync,
+      count: stamp.count,
+      updated_at: stamp.updated_at,
+    });
+    if (notModified) return notModified;
+    if (!sync) {
+      return context.json(
+        QuotaHistoryResponseSchema.parse({
+          protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
+          sync: false,
+          windows: {},
+        }),
+      );
+    }
+    const rows = await options.state.readQuotaHistory(
+      principal.account_id,
+      provider.data,
+      fingerprint,
+      since,
+      checked,
+    );
+    const windows: QuotaHistoryResponse["windows"] = {};
+    for (const row of rows) {
+      const window = windows[row.window_id] ?? {
+        duration_seconds: row.duration_seconds,
+        points: [],
+      };
+      window.points.push({
+        resets_at: row.resets_at,
+        bucket_start: row.bucket_start,
+        used_percent: row.used_percent,
+      });
+      windows[row.window_id] = window;
+    }
+    return context.json(
+      QuotaHistoryResponseSchema.parse({
+        protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
+        sync: true,
+        windows,
+      }),
+    );
   });
 
   /**
@@ -2042,7 +2200,33 @@ function accountSettingsView(record: AccountSettingsRecord | null) {
     updated_at: record?.updated_at ?? ACCOUNT_SETTINGS_UNSET_UPDATED_AT,
     alerts: settings.alerts,
     budget: settings.budget,
+    history: settings.history ?? { sync: false },
   });
+}
+
+const QUOTA_HISTORY_FINGERPRINT = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+
+function quotaHistoryFingerprint(value: string | undefined): string | null {
+  if (value === undefined || !QUOTA_HISTORY_FINGERPRINT.test(value)) return null;
+  return value;
+}
+
+async function answerQuotaHistoryIfNoneMatch(
+  context: Context,
+  principal: SessionPrincipal,
+  stamp: { sync: boolean; count: number; updated_at: string | null },
+): Promise<Response | null> {
+  const url = new URL(context.req.url);
+  const entity = await canonicalDigest({
+    account: principal.account_id,
+    path: url.pathname,
+    query: url.search,
+    stamp,
+  });
+  const etag = `"${entity}"`;
+  context.header("ETag", etag);
+  context.header("Cache-Control", "private, no-cache");
+  return context.req.header("If-None-Match") === etag ? context.body(null, 304) : null;
 }
 
 function accountSettingsETag(revision: number): string {

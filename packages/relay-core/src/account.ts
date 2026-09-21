@@ -2,6 +2,7 @@ import type {
   AccountSettings,
   IdentityProvider,
   ProviderId,
+  QuotaHistoryUpload,
   QuotaSnapshot,
   QuotaSnapshotEnvelope,
 } from "@gotry-io/quota-protocol";
@@ -426,6 +427,8 @@ export interface AccountSettingsWriteInput {
   expected_revision: number;
   settings: AccountSettings;
   written_at: string;
+  /** Delete `quota_history` in the same transaction: `history.sync` moved true → false. */
+  delete_quota_history?: boolean;
 }
 
 export type AccountSettingsWriteResult =
@@ -461,7 +464,40 @@ export interface AccountMaintenanceInput {
    * retention.
    */
   usage_fold_before: string;
+  /**
+   * The clock the quota-history sweep uses. A row expires when `expires_at` is before this
+   * instant (`expires_at` = `bucket_start` + span(`duration_seconds`)). Own 5 000-row batch.
+   */
+  quota_history_now: string;
   limit: number;
+}
+
+export type QuotaHistoryWriteResult =
+  | { outcome: "stale_device" }
+  | { outcome: "history_sync_off" }
+  | { outcome: "invalid_request" }
+  | { outcome: "quota_history_full" }
+  | {
+      outcome: "written";
+      series: {
+        provider: ProviderId;
+        fingerprint: string;
+        window_id: string;
+        bucket_start: string;
+      }[];
+    };
+
+export interface QuotaHistoryStamp {
+  count: number;
+  updated_at: string | null;
+}
+
+export interface QuotaHistoryReadRow {
+  window_id: string;
+  duration_seconds: number;
+  resets_at: string;
+  bucket_start: string;
+  used_percent: number;
 }
 
 export type QuotaSnapshotSubmission = QuotaSnapshotEnvelope;
@@ -583,6 +619,35 @@ export interface AccountState {
    * any other value updates that revision. A lost race is `conflict` with the current document.
    */
   writeAccountSettings(input: AccountSettingsWriteInput): Promise<AccountSettingsWriteResult>;
+  /**
+   * Upsert this device's downsampled remaining-quota buckets. Refused while the Account switch
+   * is off. A retried chunk keeps the larger `used_percent`. `rowLimit` is the per-Account
+   * ceiling; production passes 50 000.
+   */
+  recordQuotaHistory(
+    principal: DeviceWriterPrincipal,
+    upload: QuotaHistoryUpload,
+    receivedAt: string,
+    rowLimit: number,
+  ): Promise<QuotaHistoryWriteResult>;
+  /** Count and newest `updated_at` for one subscription's rows on or after `since`, per-window span. */
+  quotaHistoryStamp(
+    accountId: string,
+    provider: string,
+    fingerprint: string,
+    since: string,
+    now: string,
+  ): Promise<QuotaHistoryStamp>;
+  /** Merged points for one subscription, oldest first, `since` clamped per window to its span. */
+  readQuotaHistory(
+    accountId: string,
+    provider: string,
+    fingerprint: string,
+    since: string,
+    now: string,
+  ): Promise<QuotaHistoryReadRow[]>;
+  /** Whether this Account's stored document has `history.sync` true. No row is off. */
+  isQuotaHistorySyncOn(accountId: string): Promise<boolean>;
   /**
    * The Account behind a published handle, matched without regard to case.
    *

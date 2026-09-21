@@ -7,6 +7,8 @@
   adds is a second reader of `projected_at_reset`, the point the dashed line ends on, so the
   line and the phrase can never state two different projections.
 - Amended: 2026-09-19: the printed words changed; the derivation did not.
+- Amended: 2026-09-21 by [ADR 0062](0062-quota-history-may-follow-the-account.md): pace is still
+  a pure function of one window. The history line beside it may now be the Account series.
 - Follows [ADR 0017](0017-derived-observation-freshness.md) and
   [ADR 0019](0019-one-statement-per-contract.md)
 

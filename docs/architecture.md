@@ -162,9 +162,11 @@ the local opaque subscription selector so two accounts of one provider keep two 
 Quota iOS keeps the same journal as a file in its own container. Both are kept thirty days, both
 are folded by one rule — `history` in `packages/service` and `QuotaHistory` in
 `packages/apple-shared`, judged by
-`packages/protocol/fixtures/quota-history-conformance.json` — and neither is uploaded: no wire
-contract names a sample, Relay gains no route, and the website shows no history. A reading that
-arrived from another device carries no history, because this device has no samples of it.
+`packages/protocol/fixtures/quota-history-conformance.json`. They stay on the device by default.
+While the Account's history switch is on, global-scope buckets upload to Relay and a read merges
+them ([ADR 0062](decisions/0062-quota-history-may-follow-the-account.md)). The website draws no
+history this cycle. A reading that arrived from another device still has no *local* samples; with
+the switch on, the chart may draw the Account series instead.
 `get_state` restates only the current-window slice Overview already draws; the main window reads the
 rest through `quota_history { since }`, a cache.sqlite read that collects nothing and reaches no
 network ([ADR 0051](decisions/0051-the-panel-glances-and-the-windows-explain.md)).
@@ -296,10 +298,12 @@ folds QuotaBar asked for, because the hours behind them moved. The website and Q
 route for every Usage selection except `all`, and for the budget month. QuotaBar Account reads it
 for week / month / custom. The year Activity heatmap still reads UTC activity days.
 
-Alert policy and the monthly spend budget follow the Account
-([ADR 0061](decisions/0061-alert-policy-and-the-budget-follow-the-account.md)). The document is
+Alert policy, the monthly spend budget, and the quota-history switch follow the Account
+([ADR 0061](decisions/0061-alert-policy-and-the-budget-follow-the-account.md),
+[ADR 0062](decisions/0062-quota-history-may-follow-the-account.md)). The document is
 `GET` / `PUT /api/v2/account/settings`: remaining-percent thresholds keyed by an opaque selector,
-reset and pace switches, and an optional budget amount. `enabled` and delivery stay per device.
+reset and pace switches, an optional budget amount, and `history.sync` (default false; omitted
+from a PUT means unchanged). `enabled` and delivery stay per device.
 `GET` is `account:read` with `ETag: "<revision>"` and `Cache-Control: private, no-cache`. `PUT`
 is `account:settings`, compare-and-set on `If-Match`, and a web session also presents a
 same-origin Origin. Signed in, every client measures the budget against the Account calendar

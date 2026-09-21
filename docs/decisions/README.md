@@ -45,14 +45,14 @@ instructions. Stable ADR URLs stay.
 | [0032](./0032-an-account-owns-its-identities.md) | An Account owns its identities | Accepted |  |  |
 | [0033](./0033-entitlement-is-read-from-revenuecat.md) | Entitlement is read from RevenueCat | Superseded | [0048](./0048-sync-is-free-and-billing-is-gone.md) | 2026-09-07 |
 | [0034](./0034-ios-collects-for-itself.md) | Quota iOS signs in to providers for itself | Accepted |  | 2026-09-06 |
-| [0035](./0035-quota-pace-is-derived-from-the-reading.md) | Quota pace is derived from the reading | Accepted |  | 2026-09-07, 2026-09-19 |
+| [0035](./0035-quota-pace-is-derived-from-the-reading.md) | Quota pace is derived from the reading | Accepted |  | 2026-09-07, 2026-09-19, 2026-09-21 |
 | [0036](./0036-usage-derived-metrics.md) | A derived Usage metric is one rule, answered by one fixture | Accepted |  |  |
 | [0037](./0037-a-public-profile-shows-usage-not-quota.md) | A public profile shows Usage, not quota | Accepted |  | 2026-09-07, 2026-09-21 |
 | [0038](./0038-sessions-are-a-local-view-of-files.md) | Sessions are a local view of files | Accepted |  |  |
 | [0039](./0039-project-attribution-stays-local.md) | Project attribution stays local | Accepted |  |  |
 | [0040](./0040-a-period-is-folded-where-its-days-already-are.md) | A period is folded where its days already are, and a budget never leaves the device | Partially superseded | [0055](./0055-an-account-period-is-a-local-date-range.md), [0061](./0061-alert-policy-and-the-budget-follow-the-account.md) | 2026-09-19, 2026-09-20, 2026-09-21 |
 | [0041](./0041-ios-is-a-device-when-sync-is-paid.md) | The phone is a Device, and paid sync is what its readings are worth | Partially superseded | [0048](./0048-sync-is-free-and-billing-is-gone.md) |  |
-| [0042](./0042-quota-history-is-local-samples.md) | Quota history is local samples | Accepted |  | 2026-09-19 |
+| [0042](./0042-quota-history-is-local-samples.md) | Quota history is local samples | Partially superseded | [0062](./0062-quota-history-may-follow-the-account.md) | 2026-09-19, 2026-09-21 |
 | [0043](./0043-one-widget-view-package-for-both-platforms.md) | One widget view package for both platforms | Accepted |  |  |
 | [0044](./0044-relay-publishes-provider-status.md) | Relay publishes official provider status | Accepted |  |  |
 | [0045](./0045-the-leaderboard-is-a-page-you-opt-into.md) | The leaderboard is a page you opt into | Superseded | [0059](./0059-the-leaderboard-is-retired.md) |  |
@@ -61,8 +61,8 @@ instructions. Stable ADR URLs stay.
 | [0048](./0048-sync-is-free-and-billing-is-gone.md) | Sync is free, and billing is gone | Accepted |  |  |
 | [0049](./0049-one-relay-two-runtimes.md) | One Relay, two runtimes | Superseded | [0058](./0058-relay-runs-on-node-only.md) |  |
 | [0050](./0050-the-worker-and-d1-are-retired.md) | The production Worker and D1 are retired | Accepted |  | 2026-09-21 |
-| [0051](./0051-the-panel-glances-and-the-windows-explain.md) | The panel glances, and the windows explain | Partially superseded | [0052](./0052-quotabar-is-the-app-and-the-menu-bar-is-part-of-it.md) |  |
-| [0052](./0052-quotabar-is-the-app-and-the-menu-bar-is-part-of-it.md) | QuotaBar is the app, and the menu bar is part of it | Accepted |  | 2026-09-18 |
+| [0051](./0051-the-panel-glances-and-the-windows-explain.md) | The panel glances, and the windows explain | Partially superseded | [0052](./0052-quotabar-is-the-app-and-the-menu-bar-is-part-of-it.md) | 2026-09-21 |
+| [0052](./0052-quotabar-is-the-app-and-the-menu-bar-is-part-of-it.md) | QuotaBar is the app, and the menu bar is part of it | Accepted |  | 2026-09-18, 2026-09-21 |
 | [0053](./0053-one-alert-delivery-package-for-both-apps.md) | One alert delivery package for both Apple apps | Accepted |  | 2026-09-21 |
 | [0054](./0054-quotabar-is-resident-in-the-menu-bar.md) | QuotaBar is resident in the menu bar | Accepted |  |  |
 | [0055](./0055-an-account-period-is-a-local-date-range.md) | An Account period is a local-date range on the hour grid | Accepted |  |  |
@@ -71,4 +71,5 @@ instructions. Stable ADR URLs stay.
 | [0058](./0058-relay-runs-on-node-only.md) | Relay runs on Node only | Accepted |  |  |
 | [0059](./0059-the-leaderboard-is-retired.md) | The leaderboard is retired | Accepted |  |  |
 | [0060](./0060-provider-freeze-and-two-tiers.md) | Freeze new providers and keep two provider tiers | Accepted |  |  |
-| [0061](./0061-alert-policy-and-the-budget-follow-the-account.md) | Alert policy and the budget follow the Account | Accepted |  |  |
+| [0061](./0061-alert-policy-and-the-budget-follow-the-account.md) | Alert policy and the budget follow the Account | Accepted |  | 2026-09-21 |
+| [0062](./0062-quota-history-may-follow-the-account.md) | Quota history may follow the Account, when the Account says so | Accepted |  | 2026-09-22 |

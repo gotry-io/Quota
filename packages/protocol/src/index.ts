@@ -46,6 +46,49 @@ export const MAXIMUM_USAGE_HOURS_PER_UPLOAD = 256;
 export const MAXIMUM_USAGE_ROWS_PER_HOUR = 512;
 export const MAXIMUM_USAGE_SUBMISSION_BYTES = 1_048_576;
 /**
+ * Downsampled quota-history upload: at most this many points, and at most 256 KiB of body.
+ *
+ * A backfill is chunked, oldest first. The producer buckets at 900 s when the window is a day
+ * or shorter, otherwise at 3 600 s ([ADR 0062](../../../docs/decisions/0062-quota-history-may-follow-the-account.md)).
+ */
+export const MAXIMUM_QUOTA_HISTORY_POINTS_PER_UPLOAD = 2_000;
+export const MAXIMUM_QUOTA_HISTORY_UPLOAD_BYTES = 256 * 1024;
+export const QUOTA_HISTORY_SHORT_WINDOW_BUCKET_SECONDS = 900;
+export const QUOTA_HISTORY_LONG_WINDOW_BUCKET_SECONDS = 3_600;
+export const QUOTA_HISTORY_SHORT_WINDOW_MAX_DURATION_SECONDS = 86_400;
+export const QUOTA_HISTORY_RETENTION_DAYS = 30;
+
+/** Bucket size the producer uses for a window of this duration. */
+export function quotaHistoryBucketSeconds(durationSeconds: number): number {
+  return durationSeconds <= QUOTA_HISTORY_SHORT_WINDOW_MAX_DURATION_SECONDS
+    ? QUOTA_HISTORY_SHORT_WINDOW_BUCKET_SECONDS
+    : QUOTA_HISTORY_LONG_WINDOW_BUCKET_SECONDS;
+}
+
+/** RFC3339 UTC with no fractional seconds, the spelling Relay stores for a bucket. */
+export function canonicalRfc3339Utc(value: string | number | Date): string {
+  const ms =
+    value instanceof Date ? value.getTime() : typeof value === "number" ? value : Date.parse(value);
+  return new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+/** `floor(observed_at / size) × size` in UTC, for the window's bucket size. */
+export function quotaHistoryBucketStartUtc(observedAt: string, durationSeconds: number): string {
+  const sizeMs = quotaHistoryBucketSeconds(durationSeconds) * 1_000;
+  const epoch = Date.parse(observedAt);
+  return canonicalRfc3339Utc(Math.floor(epoch / sizeMs) * sizeMs);
+}
+
+export function isAlignedQuotaHistoryBucketStart(
+  bucketStart: string,
+  durationSeconds: number,
+): boolean {
+  const sizeMs = quotaHistoryBucketSeconds(durationSeconds) * 1_000;
+  const epoch = Date.parse(bucketStart);
+  return Number.isFinite(epoch) && epoch % sizeMs === 0;
+}
+
+/**
  * No agent this Account accepts existed before this instant, so an hour reaching back past it
  * was computed from a missing lower bound rather than scanned.
  */
@@ -1813,13 +1856,15 @@ export const PublicProfileResponseSchema = z
 export type PublicProfileResponse = z.infer<typeof PublicProfileResponseSchema>;
 
 /**
- * The Account settings document: alert policy and the monthly budget, keyed so every device
- * names the same subscription without saying which provider it is.
+ * The Account settings document: alert policy, the monthly budget, and whether quota history
+ * follows the Account.
  *
  * A selector is `SHA-256(provider|fingerprint|scope|source_id)[0:12]` in hex. Absence of a
  * selector means the default remaining-percent pair `[20, 10]`. `enabled` is not in this
  * document: it is the per-device notification permission, and syncing it would turn alerts off
- * everywhere from one denied device.
+ * everywhere from one denied device. `history.sync` defaults to false; a write that omits
+ * `history` leaves the stored switch unchanged, so a client that only sends `alerts` and
+ * `budget` cannot turn it on or off.
  */
 export const ACCOUNT_SETTINGS_SELECTOR_PATTERN = /^[0-9a-f]{12}$/;
 export const MAXIMUM_ACCOUNT_SETTINGS_SELECTORS = 256;
@@ -1883,11 +1928,21 @@ const AccountSettingsBudgetSchema = z
   })
   .strict();
 
-/** The stored document: alert policy and the budget, with no revision envelope. */
+const AccountSettingsHistorySchema = z
+  .object({
+    sync: z.boolean(),
+  })
+  .strict();
+export type AccountSettingsHistory = z.infer<typeof AccountSettingsHistorySchema>;
+
+/** The stored document: alert policy, the budget, and the history switch. `history` may be
+ * absent on a write a predating client sent; the stored row and the GET/PUT answer always
+ * carry it. */
 export const AccountSettingsSchema = z
   .object({
     alerts: AccountSettingsAlertsSchema,
     budget: AccountSettingsBudgetSchema,
+    history: AccountSettingsHistorySchema.optional(),
   })
   .strict();
 export type AccountSettings = z.infer<typeof AccountSettingsSchema>;
@@ -1895,14 +1950,17 @@ export type AccountSettings = z.infer<typeof AccountSettingsSchema>;
 export const DEFAULT_ACCOUNT_SETTINGS: AccountSettings = {
   alerts: { reset_reminders: true, pace_alerts: true, thresholds: {} },
   budget: { amount_usd: null, alerts: true },
+  history: { sync: false },
 };
 
-/** What a write states. `revision` and `updated_at` are assigned by Relay, not the client. */
+/** What a write states. `revision` and `updated_at` are assigned by Relay, not the client.
+ * `history` omitted means unchanged. */
 export const AccountSettingsUpdateRequestSchema = z
   .object({
     protocol_version: z.literal(PROTOCOL_VERSION),
     alerts: AccountSettingsAlertsSchema,
     budget: AccountSettingsBudgetSchema,
+    history: AccountSettingsHistorySchema.optional(),
   })
   .strict();
 export type AccountSettingsUpdateRequest = z.infer<typeof AccountSettingsUpdateRequestSchema>;
@@ -1914,9 +1972,109 @@ export const AccountSettingsResponseSchema = z
     updated_at: Rfc3339InstantSchema,
     alerts: AccountSettingsAlertsSchema,
     budget: AccountSettingsBudgetSchema,
+    history: AccountSettingsHistorySchema,
   })
   .strict();
 export type AccountSettingsResponse = z.infer<typeof AccountSettingsResponseSchema>;
+
+/**
+ * One device's downsampled remaining-quota buckets for global-scope subscriptions.
+ *
+ * There is no `fingerprint_scope` field: only global-scope identities sync, and a producer that
+ * still has a source-scoped key must not send it. `bucket_start` is aligned to 900 s when
+ * `duration_seconds ≤ 86 400`, otherwise 3 600 s.
+ */
+const QuotaHistoryPointSchema = z
+  .object({
+    resets_at: Rfc3339InstantSchema,
+    bucket_start: Rfc3339InstantSchema,
+    used_percent: z.number().finite().min(0).max(100),
+  })
+  .strict();
+export type QuotaHistoryPoint = z.infer<typeof QuotaHistoryPointSchema>;
+
+const QuotaHistorySeriesSchema = z
+  .object({
+    provider: ProviderIdSchema,
+    fingerprint: z.string().min(1).max(128).regex(OPAQUE_ID_PATTERN),
+    window_id: z.string().min(1).max(64).regex(BILLING_DIMENSION_PATTERN),
+    duration_seconds: SafeNonnegativeIntegerSchema,
+    points: z.array(QuotaHistoryPointSchema),
+  })
+  .strict();
+export type QuotaHistorySeries = z.infer<typeof QuotaHistorySeriesSchema>;
+
+export const QuotaHistoryUploadSchema = z
+  .object({
+    protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
+    generation: SafePositiveIntegerSchema,
+    series: z.array(QuotaHistorySeriesSchema),
+  })
+  .strict()
+  .superRefine((upload, context) => {
+    let points = 0;
+    for (const [seriesIndex, series] of upload.series.entries()) {
+      points += series.points.length;
+      for (const [pointIndex, point] of series.points.entries()) {
+        if (!isAlignedQuotaHistoryBucketStart(point.bucket_start, series.duration_seconds)) {
+          context.addIssue({
+            code: "custom",
+            message: "bucket_start must be aligned to the window's bucket size.",
+            path: ["series", seriesIndex, "points", pointIndex, "bucket_start"],
+          });
+          return;
+        }
+      }
+    }
+    if (points > MAXIMUM_QUOTA_HISTORY_POINTS_PER_UPLOAD) {
+      context.addIssue({
+        code: "custom",
+        path: ["series"],
+        message: `At most ${MAXIMUM_QUOTA_HISTORY_POINTS_PER_UPLOAD} points.`,
+      });
+    }
+  });
+export type QuotaHistoryUpload = z.infer<typeof QuotaHistoryUploadSchema>;
+
+export const QuotaHistoryUploadResponseSchema = z
+  .object({
+    protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
+    series: z.array(
+      z
+        .object({
+          provider: ProviderIdSchema,
+          fingerprint: z.string().min(1).max(128).regex(OPAQUE_ID_PATTERN),
+          window_id: z.string().min(1).max(64).regex(BILLING_DIMENSION_PATTERN),
+          bucket_start: Rfc3339InstantSchema,
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+export type QuotaHistoryUploadResponse = z.infer<typeof QuotaHistoryUploadResponseSchema>;
+
+const QuotaHistoryWindowSchema = z
+  .object({
+    duration_seconds: SafeNonnegativeIntegerSchema,
+    points: z.array(QuotaHistoryPointSchema),
+  })
+  .strict();
+
+/**
+ * Merged Account history for one subscription, or `{ sync: false, windows: {} }` while the
+ * switch is off.
+ */
+export const QuotaHistoryResponseSchema = z
+  .object({
+    protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
+    sync: z.boolean(),
+    windows: z.record(
+      z.string().min(1).max(64).regex(BILLING_DIMENSION_PATTERN),
+      QuotaHistoryWindowSchema,
+    ),
+  })
+  .strict();
+export type QuotaHistoryResponse = z.infer<typeof QuotaHistoryResponseSchema>;
 
 /** A public page names at most this many models in a period, largest first. */
 export const MAXIMUM_PUBLIC_USAGE_MODELS = 12;
@@ -2130,8 +2288,13 @@ export type UsageActivityDayRead = z.infer<typeof UsageActivityDayReadSchema>;
 export const PublicProfileResponseReadSchema = PublicProfileResponseSchema.loose();
 export type PublicProfileResponseRead = z.infer<typeof PublicProfileResponseReadSchema>;
 
-export const AccountSettingsResponseReadSchema = AccountSettingsResponseSchema.loose();
+export const AccountSettingsResponseReadSchema = AccountSettingsResponseSchema.extend({
+  history: AccountSettingsHistorySchema.optional(),
+}).loose();
 export type AccountSettingsResponseRead = z.infer<typeof AccountSettingsResponseReadSchema>;
+
+export const QuotaHistoryResponseReadSchema = QuotaHistoryResponseSchema.loose();
+export type QuotaHistoryResponseRead = z.infer<typeof QuotaHistoryResponseReadSchema>;
 
 export type UsageUnpricedItemRead = z.infer<typeof UsageUnpricedItemReadSchema>;
 export type UsageCostOutcomeRead = z.infer<typeof UsageCostOutcomeReadSchema>;
@@ -2278,6 +2441,8 @@ const RelayErrorCodeSchema = z.enum([
   "device_deleted",
   "client_upgrade_required",
   "conflict",
+  "history_sync_off",
+  "quota_history_full",
   "precondition_required",
   "precondition_failed",
   "internal_error",

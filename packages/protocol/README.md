@@ -49,12 +49,14 @@ shape of a released contract still moves its version.
   `packages/quota-model`, `packages/service`, and `packages/apple-shared` each answer the rule;
   `apps/web/src/lib/format.ts` and `QuotaPaceCopy` answer the copy
   ([ADR 0035](../../docs/decisions/0035-quota-pace-is-derived-from-the-reading.md)).
-- `fixtures/quota-history-conformance.json` states how a window's own local samples fold into the
+- `fixtures/quota-history-conformance.json` states how a window's own samples fold into the
   curve behind the reader, the dashed projection to its reset, and the windows the reader's day
   holds. Samples are keyed by the local subscription selector, not by provider.
-  `packages/service` (`history`) and `packages/apple-shared` (`QuotaHistory`) each answer it;
-  no sample is a wire field, so no other runtime does
-  ([ADR 0042](../../docs/decisions/0042-quota-history-is-local-samples.md)).
+  `packages/service` (`history`) and `packages/apple-shared` (`QuotaHistory`) each answer it.
+  The samples stay on the device by default; they upload only while the Account's history switch
+  is on, as downsampled buckets judged by `quota-history-sync-conformance.json`
+  ([ADR 0042](../../docs/decisions/0042-quota-history-is-local-samples.md),
+  [ADR 0062](../../docs/decisions/0062-quota-history-may-follow-the-account.md)).
 - `fixtures/quota-observation-conformance.json` states how long a reading describes current quota
   and how observations resolve into subscriptions. Relay resolves them once for every reader
   ([ADR 0024](../../docs/decisions/0024-hour-versioned-usage-and-daily-rollups.md)), so the merge
@@ -67,10 +69,17 @@ shape of a released contract still moves its version.
   the period already on screen. The website and QuotaBar both answer it
   ([ADR 0056](../../docs/decisions/0056-a-period-export-is-the-period-on-screen.md)).
 - `fixtures/account-settings-conformance.json` states the Account settings document: remaining-quota
-  thresholds keyed by an opaque selector, reset/pace switches, and an optional monthly budget
-  amount. It covers normalization, first-sync seed/adopt/merge-once, and 412 re-apply.
-  `packages/quota-model` answers it; Swift and Rust answer the same file
-  ([ADR 0061](../../docs/decisions/0061-alert-policy-and-the-budget-follow-the-account.md)).
+  thresholds keyed by an opaque selector, reset/pace switches, an optional monthly budget amount,
+  and `history.sync` (default false; omitted from a write means unchanged). It covers
+  normalization, first-sync seed/adopt/merge-once, and 412 re-apply. The history switch is never
+  seeded from a device. `packages/quota-model` answers it; Swift and Rust answer the same file
+  ([ADR 0061](../../docs/decisions/0061-alert-policy-and-the-budget-follow-the-account.md),
+  [ADR 0062](../../docs/decisions/0062-quota-history-may-follow-the-account.md)).
+- `fixtures/quota-history-sync-conformance.json` states how local samples downsample into upload
+  buckets and how several devices' buckets merge. The span of a window is
+  `min(30 d, max(48 h, 4 × duration_seconds))`. `packages/quota-model` (`bucketQuotaSamples`,
+  `mergeQuotaHistory`, `quotaHistorySpanSeconds`) answers it; Swift and Rust answer the same file
+  ([ADR 0062](../../docs/decisions/0062-quota-history-may-follow-the-account.md)).
 - A Usage upload names whole UTC hours. `UsageRow` carries what it measures and no instant: the hour
   that carries it says when, and its `scan_version` says whether this reading of that hour is newer
   than the stored one. `DatedUsageRow` is the same row projected out of the daily rollup for
