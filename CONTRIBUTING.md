@@ -70,6 +70,14 @@ release still publishes and warns that main was left on the released version. A 
 app narrows the token to the permissions it needs, so granting the app a new one for some other job
 never widens an existing one.
 
+GitHub starts no `pull_request` workflow for a pull request that conflicts with main, and none when
+the conflict later clears because main moved rather than because someone pushed. Such a pull request
+would wait forever on checks that never started, so `kick-unchecked-prs` runs whenever main moves
+and starts `ci` by `workflow_dispatch` on the branch of any open pull request whose head commit has
+no check run, once it is ten minutes old and mergeable. Before opening a pull request,
+`git merge-tree --write-tree origin/main HEAD` says whether it would be born in conflict; and "no
+checks reported" in the first minute after opening one means they have not registered yet.
+
 Required checks are the ones a merge must not break. The iOS accessibility audit and the screen
 census are not among them: they run in the advisory `ios-screens` workflow, whose own concurrency
 namespace keeps it from cancelling a required run, while `verify-ios-ui` runs the journeys in
