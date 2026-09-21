@@ -34,6 +34,7 @@ public enum RelayRoute: CaseIterable, Sendable {
   case accountUsagePeriod(from: String, to: String, timezone: String, breakdown: Bool)
   case deviceSync
   case deviceSnapshots
+  case providersStatus
 
   public static var allCases: [RelayRoute] {
     [
@@ -48,6 +49,7 @@ public enum RelayRoute: CaseIterable, Sendable {
       .accountUsagePeriod(from: "1970-01-01", to: "1970-01-01", timezone: "UTC", breakdown: false),
       .deviceSync,
       .deviceSnapshots,
+      .providersStatus,
     ]
   }
 
@@ -55,7 +57,7 @@ public enum RelayRoute: CaseIterable, Sendable {
     switch self {
     case .token, .appleSignIn, .revoke: "POST"
     case .accountIdentities, .accountSummary, .accountSettings, .accountUsageActivity,
-      .accountUsagePeriod, .deviceSync:
+      .accountUsagePeriod, .deviceSync, .providersStatus:
       "GET"
     case .updateAccountSettings, .deviceSnapshots: "PUT"
     }
@@ -73,6 +75,7 @@ public enum RelayRoute: CaseIterable, Sendable {
     case .accountUsagePeriod: "/api/v6/account/usage/period"
     case .deviceSync: "/api/v2/device/sync"
     case .deviceSnapshots: "/api/v6/device/snapshots"
+    case .providersStatus: "/api/v2/providers/status"
     }
   }
 
@@ -97,7 +100,7 @@ public enum RelayRoute: CaseIterable, Sendable {
       }
       return items
     case .token, .appleSignIn, .revoke, .accountIdentities, .accountSummary, .accountSettings,
-      .updateAccountSettings, .deviceSync, .deviceSnapshots:
+      .updateAccountSettings, .deviceSync, .deviceSnapshots, .providersStatus:
       return []
     }
   }
@@ -115,6 +118,12 @@ public enum AccountSummaryRead: Sendable {
 /// The outcome of a conditional Account period read. `unchanged` is an answer, not a failure.
 public enum AccountUsagePeriodRead: Sendable {
   case modified(AccountUsagePeriodResponse, etag: String?)
+  case unchanged(etag: String?)
+}
+
+/// The outcome of a conditional Account activity read. `unchanged` keeps the cached body.
+public enum AccountUsageActivityRead: Sendable {
+  case modified(AccountUsageActivityResponse, etag: String?)
   case unchanged(etag: String?)
 }
 
@@ -302,29 +311,62 @@ public struct RelayClient: Sendable {
     }
   }
 
-  /// Reads UTC activity days. This client does not send `If-None-Match` and does not store the
-  /// body: activity has no last-good cache.
+  /// Reads UTC activity days. Passing `etag` turns the read conditional: an unchanged body
+  /// answers 304 and sends no body.
   public func fetchAccountUsageActivity(
     accessToken: String,
     from: String,
     to: String,
     detail: ActivityDetail? = nil,
-    timeZone: String? = nil
-  ) async throws -> AccountUsageActivityResponse {
+    timeZone: String? = nil,
+    etag: String? = nil
+  ) async throws -> AccountUsageActivityRead {
     guard WireValidation.isCalendarDate(from), WireValidation.isCalendarDate(to) else {
       throw RelayClientError.invalidQuery
     }
     guard WireValidation.isIOSAccessToken(accessToken) else {
       throw RelayClientError.unauthorized
     }
-    return try await send(
+    let (data, response) = try await perform(
       route: .accountUsageActivity(from: from, to: to, detail: detail, timeZone: timeZone),
       query: [],
       body: nil,
       bearer: accessToken,
       expectedStatus: 200,
-      decode: AccountUsageActivityResponse.self
+      ifNoneMatch: etag
     )
+    let nextETag = Self.entityTag(response)
+    if response.statusCode == 304 {
+      return .unchanged(etag: nextETag ?? etag)
+    }
+    do {
+      return .modified(
+        try WireCodec.decode(AccountUsageActivityResponse.self, from: data),
+        etag: nextETag
+      )
+    } catch is WireLimitError {
+      throw RelayClientError.responseTooLarge
+    } catch {
+      throw RelayClientError.invalidResponse
+    }
+  }
+
+  /// Public catalog status-page readings. No session ([ADR 0044](../../../../docs/decisions/0044-relay-publishes-provider-status.md)).
+  public func fetchProviderStatus() async throws -> ProviderStatusResponse {
+    let (data, _) = try await perform(
+      route: .providersStatus,
+      query: [],
+      body: nil,
+      bearer: nil,
+      expectedStatus: 200
+    )
+    do {
+      return try WireCodec.decode(ProviderStatusResponse.self, from: data)
+    } catch is WireLimitError {
+      throw RelayClientError.responseTooLarge
+    } catch {
+      throw RelayClientError.invalidResponse
+    }
   }
 
   /// Reads one inclusive local-date range in a required IANA timezone.

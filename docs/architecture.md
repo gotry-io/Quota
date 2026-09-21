@@ -526,8 +526,13 @@ readings for ten minutes, and answers `unknown` when a poll fails with nothing s
   settings document (`GET` / `PUT /api/v2/account/settings` under `account:settings`,
   [ADR 0061](decisions/0061-alert-policy-and-the-budget-follow-the-account.md) — this is the one
   write `quota-ios` may make; identities, Delete Account, and profile stay the browser's),
-  the activity read (not cached), the Foundation-only `QuotaWidgetData` snapshot types and store, and
-  `QuotaProviderStatus`, which polls catalog Statuspage v2 URLs on the device. `apps/ios`
+  the activity and period reads (last-good bodies and ETags stored beside the Account summary cache,
+  cleared on sign-out; a matching `If-None-Match` is a 304), the Foundation-only `QuotaWidgetData`
+  snapshot types and store, and
+  `QuotaProviderStatus`, which reads public `GET /api/v2/providers/status` and falls back to
+  catalog Statuspage v2 URLs on the device. The Account session Keychain item is
+  `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` so a background refresh can still see it.
+  `apps/ios`
   owns SwiftUI, `ASWebAuthenticationSession`, the provider sign-in sheet's `WKWebView` and its
   non-persistent data store, the local collection pass over its stored provider sessions and the
   app-container file holding its result, the app-private selection-salt Keychain item, and the
@@ -544,8 +549,8 @@ readings for ten minutes, and answers `unknown` when a poll fails with nothing s
   `ProviderID.brandIconAssetName`); apps link it, widget extensions do not. `QuotaWidgets` and
   `QuotaBarWidgets` depend only on `QuotaWidgetViews`, `QuotaWidgetData`, and `QuotaPresentation`,
   and must not import `QuotaWire`, `QuotaRelay`, `QuotaAccount`, `QuotaProviderStatus`,
-  `QuotaBrandIcons`, or Security, or use `URLSession` or Keychain. Relay does not forward provider
-  status pages.
+  `QuotaBrandIcons`, or Security, or use `URLSession` or Keychain. Quota iOS reads provider status
+  from Relay's public catalog and keeps on-device Statuspage polls as the fallback.
 - `QuotaProviderWeb`, in `packages/apple-client`, reads a provider's own web session with the cookie
   a sign-in left behind — the last rung of the collection ladder, on the device the reader signed in
   on. It depends on QuotaWire for `ProviderID`, the catalog's browser-session spec, and the snapshot

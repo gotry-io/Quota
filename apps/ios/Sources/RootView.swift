@@ -22,22 +22,17 @@ struct RootView: View {
 
   @ViewBuilder
   private var phaseContent: some View {
-    switch model.phase {
-    case .launching:
+    if model.showsRootLoading {
       loading
-    // A sign-in in flight owns the screen, because it is a question waiting for an answer.
-    case .connecting, .pendingRefreshFailed:
-      ConnectAccountView(model: model)
-    case .confirmingAccount(let label):
-      ConfirmAccountView(model: model, label: label)
-    // Signing in to Quota is one of two ways to get quota onto this phone, so it is an invitation
-    // inside the app rather than a wall in front of it
-    // ([ADR 0034](../../../docs/decisions/0034-ios-collects-for-itself.md)).
-    case .signedOut, .signedIn:
-      if model.summary == nil && model.subscriptions.isEmpty && model.isRefreshing {
-        loading
-      } else {
+    } else {
+      switch model.phase {
+      case .launching, .signedOut, .signedIn:
         signedInTabs
+      // A sign-in in flight owns the screen, because it is a question waiting for an answer.
+      case .connecting, .pendingRefreshFailed:
+        ConnectAccountView(model: model)
+      case .confirmingAccount(let label):
+        ConfirmAccountView(model: model, label: label)
       }
     }
   }

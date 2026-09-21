@@ -21,19 +21,9 @@ public enum WireCodec {
     decoder.dateDecodingStrategy = .custom { decoder in
       let container = try decoder.singleValueContainer()
       let value = try container.decode(String.self)
-
-      let fractionalFormatter = ISO8601DateFormatter()
-      fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-      if let date = fractionalFormatter.date(from: value) {
+      if let date = WireDates.date(from: value) {
         return date
       }
-
-      let formatter = ISO8601DateFormatter()
-      formatter.formatOptions = [.withInternetDateTime]
-      if let date = formatter.date(from: value) {
-        return date
-      }
-
       throw DecodingError.dataCorruptedError(
         in: container,
         debugDescription: "Expected an ISO 8601 date-time."
@@ -46,9 +36,7 @@ public enum WireCodec {
     let encoder = JSONEncoder()
     encoder.dateEncodingStrategy = .custom { date, encoder in
       var container = encoder.singleValueContainer()
-      let formatter = ISO8601DateFormatter()
-      formatter.formatOptions = [.withInternetDateTime]
-      try container.encode(formatter.string(from: date))
+      try container.encode(WireDates.string(from: date))
     }
     encoder.outputFormatting = [.sortedKeys]
     return encoder
@@ -78,6 +66,33 @@ public enum WireCodec {
 
 public enum WireLimitError: Error, Sendable, Equatable {
   case responseTooLarge
+}
+
+/// Shared ISO-8601 formatters. Creating one per field is the expensive part of decode.
+private enum WireDates {
+  private static let lock = NSLock()
+  nonisolated(unsafe) private static let fractional: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter
+  }()
+  nonisolated(unsafe) private static let internet: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    return formatter
+  }()
+
+  static func date(from value: String) -> Date? {
+    lock.lock()
+    defer { lock.unlock() }
+    return fractional.date(from: value) ?? internet.date(from: value)
+  }
+
+  static func string(from date: Date) -> String {
+    lock.lock()
+    defer { lock.unlock() }
+    return internet.string(from: date)
+  }
 }
 
 public enum QuotaIOSOAuth {

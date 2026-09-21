@@ -32,14 +32,18 @@ struct UsageView: View {
     .listStyle(.insetGrouped)
     .task(id: model.selectedTab) {
       guard model.selectedTab == .usage else { return }
-      await usage.loadPeriod()
-      await usage.loadBudgetPeriod()
-      await usage.loadActivity()
+      let usage = model.usage
+      async let period: Void = usage.loadPeriod()
+      async let budget: Void = usage.loadBudgetPeriod()
+      async let activity: Void = usage.loadActivity()
+      _ = await (period, budget, activity)
     }
     .task(id: "\(model.selectedTab)-\(usage.usagePeriodTitle)") {
       guard model.selectedTab == .usage else { return }
-      await usage.loadPeriod()
-      await usage.loadRhythm()
+      let usage = model.usage
+      async let period: Void = usage.loadPeriod()
+      async let rhythm: Void = usage.loadRhythm()
+      _ = await (period, rhythm)
     }
     .sheet(item: $usage.activityDaySheet) { _ in
       UsageDayDetailSheet(model: model)
@@ -106,6 +110,14 @@ struct UsageView: View {
         .foregroundStyle(Color.primary)
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityIdentifier("usage.period.title")
+
+      if let fetchedAt = model.usage.displayedFetchedAt {
+        Text(QuotaFormat.updated(fetchedAt, now: model.displayNow))
+          .font(QuotaDesign.Typography.support)
+          .foregroundStyle(QuotaTheme.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityIdentifier("usage.period.age")
+      }
     }
   }
 

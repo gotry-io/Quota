@@ -127,7 +127,8 @@ final class AppModel {
   var linkingProvider: IdentityProvider?
   /// Why the last bind did not happen, said under the Sign-in methods group.
   var linkFailure: String?
-  /// Last-good official status-page readings, fetched on this device. Relay does not carry them.
+  /// Last-good official status-page readings. Restored from disk, then refreshed from Relay's
+  /// public catalog (`GET /api/v2/providers/status`) with direct Statuspage polls as fallback.
   var providerStatus: [ProviderID: ProviderStatusReading] = [:]
   /// How often the foreground app polls official status pages. The helper uses the same interval.
   static let providerStatusInterval: TimeInterval = 600
@@ -135,6 +136,14 @@ final class AppModel {
   private var providerStatusTimer: Timer?
   @ObservationIgnored
   private var sceneObservers: [any NSObjectProtocol] = []
+  @ObservationIgnored
+  private var providerStatusTask: Task<Void, Never>?
+  @ObservationIgnored
+  private var uploadTask: Task<Void, Never>?
+  #if DEBUG
+    @ObservationIgnored private var firstContentSignaled = false
+    @ObservationIgnored private var firstContentWaiter: CheckedContinuation<Void, Never>?
+  #endif
 
   #if DEBUG
     /// When true, `QuotaApp` skips `restore()` so visual fixtures stay offline and deterministic.
@@ -247,13 +256,17 @@ final class AppModel {
   }
 
   convenience init(backgroundRefresh: any BackgroundRefreshScheduling) {
+    let relay = RelayClient()
     self.init(
       account: AccountClient(
+        relay: relay,
         sessionStore: KeychainAccountSessionStore(),
         summaryStore: (try? ProtectedFileAccountSummaryStore.applicationSupport())
           ?? MemoryAccountSummaryStore(),
         settingsStore: (try? ProtectedFileAccountSettingsStore.applicationSupport())
-          ?? MemoryAccountSettingsStore()
+          ?? MemoryAccountSettingsStore(),
+        usageStore: (try? ProtectedFileAccountUsageStore.applicationSupport())
+          ?? MemoryAccountUsageStore()
       ),
       authenticator: SystemBrowserAuthenticator(),
       widgetPublisher: AppGroupWidgetSnapshotPublisher.make(),
@@ -269,9 +282,27 @@ final class AppModel {
       localStore: FileLocalCollectionStore.applicationSupport() ?? MemoryLocalCollectionStore(),
       sampleStore: FileLocalQuotaSampleStore.applicationSupport()
         ?? MemoryLocalQuotaSampleStore(),
-      providerStatusClient: ProviderStatusClient(),
+      providerStatusClient: ProviderStatusClient(
+        catalog: RelayProviderStatusCatalog(relay: relay),
+        store: try? ProtectedFileProviderStatusStore.applicationSupport()
+      ),
       syncAccountSettings: true
     )
+  }
+
+  /// Cached Account summary or local readings the Overview can already show.
+  var hasContent: Bool {
+    summary != nil || !subscriptions.isEmpty
+  }
+
+  /// Spinner until there is something to show, or until the first signed-in summary answers.
+  var showsRootLoading: Bool {
+    if hasContent { return false }
+    switch phase {
+    case .launching: return true
+    case .signedIn: return isRefreshing
+    default: return false
+    }
   }
 
   /// What this phone presents when it signs in, so its session names a Device and what it reads
@@ -337,27 +368,55 @@ final class AppModel {
   }
 
   func restore() async {
-    localCollection = try? localStore.load()
-    localSamples = (try? sampleStore.load()) ?? LocalQuotaSamples()
+    let restoreInterval = LaunchSignposts.begin("restore")
+    defer { LaunchSignposts.end("restore", restoreInterval) }
+    let localStore = self.localStore
+    let sampleStore = self.sampleStore
+    let loaded = await Task.detached(priority: .userInitiated) {
+      (
+        try? localStore.load(),
+        (try? sampleStore.load()) ?? LocalQuotaSamples()
+      )
+    }.value
+    localCollection = loaded.0
+    localSamples = loaded.1
     providers.markNeedsSignIn(localCollection?.needsSignIn ?? [])
-    let cached = try? await account.loadCachedSummary()
-    let session = try? await account.loadSession()
-    sessionActivation = session?.activation
-    sessionDeviceID = session?.deviceID
-    summary = cached?.summary
-    fetchedAt = cached?.fetchedAt
-    summaryETag = cached?.etag
-    usage.accountSummaryAccepted(cached?.summary, etag: cached?.etag)
-    fromCache = cached != nil
-    switch session?.activation {
+    let persistedStatus = await providerStatusClient.persistedReadings()
+    if !persistedStatus.isEmpty {
+      providerStatus = Dictionary(
+        uniqueKeysWithValues: persistedStatus.map { ($0.provider, $0) })
+    }
+    let restored: RestoredAccountState
+    do {
+      restored = try await account.restoreLocalState()
+    } catch AccountStoreError.unreadable {
+      restored = RestoredAccountState(session: nil, summary: nil, usage: nil)
+    } catch {
+      restored = RestoredAccountState(session: nil, summary: nil, usage: nil)
+    }
+    sessionActivation = restored.session?.activation
+    sessionDeviceID = restored.session?.deviceID
+    summary = restored.summary?.summary
+    fetchedAt = restored.summary?.fetchedAt
+    summaryETag = restored.summary?.etag
+    usage.accountSummaryAccepted(restored.summary?.summary, etag: restored.summary?.etag)
+    if let usage = restored.usage {
+      self.usage.applyDiskCache(usage)
+    }
+    fromCache = restored.summary != nil
+    LaunchSignposts.event("first-content")
+    #if DEBUG
+      signalFirstContent()
+    #endif
+    switch restored.session?.activation {
     case .active:
       phase = .signedIn
       // Publish what was already on disk so the widget is current before the network is.
-      if cached != nil { publishWidget() }
+      if restored.summary != nil { publishWidget() }
       resolvePendingSubscriptionSelection()
-      await refresh()
+      await refresh(awaitUpload: false)
     case .pending:
-      if let label = PlanDisplay.accountLabel(cached?.summary.account.displayLabel) {
+      if let label = PlanDisplay.accountLabel(restored.summary?.summary.account.displayLabel) {
         phase = .confirmingAccount(label: label)
       } else {
         await refresh()
@@ -373,8 +432,9 @@ final class AppModel {
       // what that comes to; the widget keeps the previous snapshot until it does.
       phase = .signedOut
       resolvePendingSubscriptionSelection()
-      await refresh()
+      await refresh(awaitUpload: false)
     }
+    LaunchSignposts.event("fresh-content")
   }
 
   /// Open the one page that offers every way in. Nothing is started until a way is chosen.
@@ -628,37 +688,85 @@ final class AppModel {
   /// The next window is only worth asking for while something is left to read. A phone with
   /// neither an account nor a provider session withdraws the standing ask on its way out.
   @discardableResult
-  func refresh(budget: Duration = LocalCollector.foregroundBudget) async -> Bool {
+  func refresh(
+    budget: Duration = LocalCollector.foregroundBudget,
+    awaitUpload: Bool = true
+  ) async -> Bool {
     guard !isRefreshing else { return false }
     isRefreshing = true
     defer { isRefreshing = false }
-    #if DEBUG
-      if !skipsRestore {
-        await refreshProviderStatus()
-      }
-    #else
-      await refreshProviderStatus()
-    #endif
+    kickProviderStatus()
     let collector = localCollector
     let collects = !providers.sessions.isEmpty
+    let localInterval = LaunchSignposts.begin("local-collection")
     async let collected: LocalCollection? =
       collects ? await collector.collect(within: budget) : nil
     // The session is read from its store rather than from what a previous read left in memory: a
-    // background refresh can run before anything has restored.
-    let reads = (try? await account.hasSession()) ?? false
-    let result: AccountRefreshResult? = reads ? await account.fetchTodaySummary() : nil
+    // background refresh can run before anything has restored. An unreadable Keychain is not a
+    // sign-out: the phone may be locked.
+    let presence = await account.sessionPresence()
+    let result: AccountRefreshResult?
+    switch presence {
+    case .signedIn:
+      let summaryInterval = LaunchSignposts.begin("summary")
+      result = await account.fetchTodaySummary()
+      LaunchSignposts.end("summary", summaryInterval)
+    case .signedOut, .unknown:
+      result = nil
+    }
     let collection = await collected
+    LaunchSignposts.end("local-collection", localInterval)
     if let collection { applyLocalCollection(collection) }
-    if let result {
-      await apply(result, collected: collection != nil)
-      await uploadLocalReadings(collection)
-      scheduleBackgroundRefresh()
-    } else {
+    switch presence {
+    case .signedIn:
+      if let result {
+        await apply(result, collected: collection != nil)
+        await finishUpload(collection, wait: awaitUpload)
+        scheduleBackgroundRefresh()
+      }
+    case .signedOut:
       applyWithoutAccount()
+    case .unknown:
+      if collection != nil {
+        if summary != nil {
+          publishWidget()
+        }
+        evaluateAlerts()
+      }
     }
     // `result?.error == nil` would answer true for a refresh that never read at all, so what
     // each side actually answered is asked separately.
     return (result.map { $0.error == nil } ?? false) || collection != nil
+  }
+
+  func waitForDetachedLaunchWork() async {
+    await providerStatusTask?.value
+    await uploadTask?.value
+  }
+
+  /// One upload at a time. The launch path detaches; background refresh awaits so
+  /// `BGAppRefreshTask` does not complete before the Device write (ADR 0041).
+  ///
+  /// The chain is `Task.detached`, not `Task { @MainActor }`: a MainActor task cannot start
+  /// while `refresh()` still holds the main actor, so a second refresh would run beside it
+  /// and two `GET /device/sync` would overlap.
+  private func finishUpload(_ collection: LocalCollection?, wait: Bool) async {
+    let previous = uploadTask
+    let snapshots = collection
+    let task = Task.detached { [weak self] in
+      await previous?.value
+      await self?.uploadLocalReadings(snapshots)
+    }
+    uploadTask = task
+    if wait {
+      // A detached task does not inherit cancellation, and the background path's expiration
+      // handler has to reach the upload it is waiting on.
+      await withTaskCancellationHandler {
+        await task.value
+      } onCancel: {
+        task.cancel()
+      }
+    }
   }
 
   /// A provider sign-in was kept or removed. What this phone can read changed, so the readings
@@ -676,7 +784,13 @@ final class AppModel {
   private func uploadLocalReadings(_ collection: LocalCollection?) async {
     guard let collection, !collection.snapshots.isEmpty else { return }
     guard sessionDeviceID != nil, sessionActivation == .active else { return }
-    _ = await account.uploadSnapshots(collection.snapshots)
+    let uploadInterval = LaunchSignposts.begin("upload")
+    defer { LaunchSignposts.end("upload", uploadInterval) }
+    if let error = await account.uploadSnapshots(collection.snapshots) {
+      if error == .sessionExpired {
+        applyExpired()
+      }
+    }
   }
 
   /// Keep what this pass read, and let Settings say which sessions the provider refused.
@@ -706,10 +820,11 @@ final class AppModel {
   func setForeground(_ isForeground: Bool) async {
     if isForeground {
       await startProviderStatusPolling()
-      await usage.loadActivity(force: true)
-      await usage.loadPeriod(force: true)
-      await usage.loadBudgetPeriod(force: true)
-      await usage.loadRhythm(force: true)
+      async let activity: Void = usage.loadActivity(force: true)
+      async let period: Void = usage.loadPeriod(force: true)
+      async let budget: Void = usage.loadBudgetPeriod(force: true)
+      async let rhythm: Void = usage.loadRhythm(force: true)
+      _ = await (activity, period, budget, rhythm)
     } else {
       stopProviderStatusPolling()
     }
@@ -751,8 +866,23 @@ final class AppModel {
     #if DEBUG
       if skipsRestore { return }
     #endif
+    let statusInterval = LaunchSignposts.begin("status")
+    defer { LaunchSignposts.end("status", statusInterval) }
     let readings = await providerStatusClient.refresh()
     providerStatus = Dictionary(uniqueKeysWithValues: readings.map { ($0.provider, $0) })
+  }
+
+  private func kickProviderStatus() {
+    #if DEBUG
+      if skipsRestore { return }
+    #endif
+    guard providerStatusTask == nil else { return }
+    providerStatusTask = Task { [weak self] in
+      await self?.refreshProviderStatus()
+      await MainActor.run {
+        self?.providerStatusTask = nil
+      }
+    }
   }
 
   private func startProviderStatusPolling() async {
@@ -760,10 +890,12 @@ final class AppModel {
       if skipsRestore { return }
     #endif
     guard providerStatusTimer == nil else { return }
-    await refreshProviderStatus()
+    if providerStatusTask == nil {
+      kickProviderStatus()
+    }
     let timer = Timer(timeInterval: Self.providerStatusInterval, repeats: true) { [weak self] _ in
       Task { @MainActor in
-        await self?.refreshProviderStatus()
+        self?.kickProviderStatus()
       }
     }
     RunLoop.main.add(timer, forMode: .common)
@@ -1152,6 +1284,18 @@ final class AppModel {
   }
 
   #if DEBUG
+    func waitForFirstContent() async {
+      if firstContentSignaled { return }
+      await withCheckedContinuation { firstContentWaiter = $0 }
+    }
+
+    private func signalFirstContent() {
+      firstContentSignaled = true
+      let waiter = firstContentWaiter
+      firstContentWaiter = nil
+      waiter?.resume()
+    }
+
     /// Test/fixture seam: set the Account session the way `restore()` would after reading Keychain.
     func poseSession(activation: AccountSessionActivation?, deviceID: String? = nil) {
       sessionActivation = activation

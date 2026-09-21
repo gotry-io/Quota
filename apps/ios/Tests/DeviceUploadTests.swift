@@ -1,6 +1,7 @@
 import Foundation
 import QuotaAccount
 import QuotaProviderSessions
+import QuotaProviderStatus
 import QuotaProviderWeb
 import QuotaRelay
 import QuotaWire
@@ -49,13 +50,15 @@ struct DeviceUploadTests {
     let model = collectingModel(transport: transport, deviceID: "device_phone")
 
     await model.restore()
+    await model.waitForDetachedLaunchWork()
 
-    #expect(transport.requests.map(\.path) == [
-      "/api/v6/account/summary",
-      "/api/v2/account/settings",
-      "/api/v2/device/sync",
-      "/api/v6/device/snapshots",
-    ])
+    #expect(
+      transport.requests.map(\.path).filter { $0 != "/api/v2/providers/status" } == [
+        "/api/v6/account/summary",
+        "/api/v2/account/settings",
+        "/api/v2/device/sync",
+        "/api/v6/device/snapshots",
+      ])
     let upload = try #require(transport.requests.last)
     #expect(upload.method == "PUT")
     let envelope = try jsonObject(try #require(upload.body))
@@ -76,12 +79,108 @@ struct DeviceUploadTests {
     let model = collectingModel(transport: transport, deviceID: nil)
 
     await model.restore()
+    await model.waitForDetachedLaunchWork()
 
-    #expect(transport.requests.map(\.path) == [
-      "/api/v6/account/summary",
-      "/api/v2/account/settings",
-    ])
+    #expect(
+      transport.requests.map(\.path).filter { $0 != "/api/v2/providers/status" } == [
+        "/api/v6/account/summary",
+        "/api/v2/account/settings",
+      ])
     #expect(model.localCollection?.snapshots.count == 1)
+  }
+
+  @Test
+  func aForegroundLaunchDetachesUploadAndABackgroundRefreshAwaitsIt() async throws {
+    let delayed = RecordingHTTPTransport([
+      .init(status: 200, body: try Fixtures.accountSummaryJSON()),
+      .init(status: 200, body: try deviceSyncJSON(generation: 4), delayNanoseconds: 200_000_000),
+      .init(status: 200, body: try uploadResponseJSON(generation: 4)),
+    ])
+    let launched = collectingModel(transport: delayed, deviceID: "device_phone")
+    await launched.restore()
+    #expect(!delayed.requests.map(\.path).contains("/api/v6/device/snapshots"))
+    await launched.waitForDetachedLaunchWork()
+    #expect(delayed.requests.map(\.path).contains("/api/v6/device/snapshots"))
+
+    let awaited = RecordingHTTPTransport([
+      .init(status: 200, body: try Fixtures.accountSummaryJSON()),
+      .init(status: 200, body: try deviceSyncJSON(generation: 4), delayNanoseconds: 50_000_000),
+      .init(status: 200, body: try uploadResponseJSON(generation: 4)),
+    ])
+    let background = collectingModel(transport: awaited, deviceID: "device_phone")
+    background.poseSession(activation: .active, deviceID: "device_phone")
+    #expect(await background.refresh(awaitUpload: true))
+    #expect(awaited.requests.map(\.path).contains("/api/v6/device/snapshots"))
+  }
+
+  @Test
+  func aSecondRefreshJoinsAnInFlightUpload() async throws {
+    let summary = try Fixtures.accountSummaryJSON()
+    let sync = try deviceSyncJSON(generation: 4)
+    let uploaded = try uploadResponseJSON(generation: 4)
+    let transport = RecordingHTTPTransport(
+      byPath: [
+        "/api/v6/account/summary": [
+          .init(status: 200, body: summary),
+          .init(status: 200, body: summary),
+        ],
+        "/api/v2/device/sync": [
+          .init(status: 200, body: sync, delayNanoseconds: 200_000_000),
+          .init(status: 200, body: sync, delayNanoseconds: 200_000_000),
+        ],
+        "/api/v6/device/snapshots": [
+          .init(status: 200, body: uploaded),
+          .init(status: 200, body: uploaded),
+        ],
+      ]
+    )
+    let model = collectingModel(transport: transport, deviceID: "device_phone")
+    await model.restore()
+    #expect(!transport.requests.map(\.path).contains("/api/v6/device/snapshots"))
+    #expect(await model.refresh(awaitUpload: true))
+    let syncs = transport.requests.filter { $0.path == "/api/v2/device/sync" }
+    #expect(syncs.count == 2)
+    #expect(transport.requests.map(\.path).contains("/api/v6/device/snapshots"))
+    #expect(transport.maxInFlightSync == 1)
+  }
+
+  @Test
+  func aColdLaunchThatNeverOpensUsageDoesNotReadUsage() async throws {
+    let range = UsageActivityCalendar.range(
+      endingOn: UsageActivityCalendar.utcDay(from: collectedAt))
+    let usageStore = MemoryAccountUsageStore(
+      value: CachedAccountUsage(
+        accountID: "account_01",
+        activity: CachedUsageActivity(
+          from: range.from,
+          to: range.to,
+          etag: "\"a\"",
+          fetchedAt: collectedAt,
+          response: AccountUsageActivityResponse(days: [])
+        )
+      )
+    )
+    let transport = RecordingHTTPTransport([
+      .init(status: 200, body: try Fixtures.accountSummaryJSON()),
+      .init(status: 200, body: try deviceSyncJSON(generation: 4)),
+      .init(status: 200, body: try uploadResponseJSON(generation: 4)),
+    ])
+    let model = collectingModel(
+      transport: transport,
+      deviceID: "device_phone",
+      usageStore: usageStore,
+      syncAccountSettings: false
+    )
+    await model.restore()
+    await model.setForeground(true)
+    await model.waitForDetachedLaunchWork()
+    let paths = Set(transport.requests.map(\.path))
+    #expect(paths.contains("/api/v6/account/summary"))
+    #expect(paths.contains("/api/v2/providers/status"))
+    #expect(paths.contains("/api/v2/device/sync"))
+    #expect(paths.contains("/api/v6/device/snapshots"))
+    #expect(!paths.contains("/api/v6/account/usage/activity"))
+    #expect(!paths.contains("/api/v6/account/usage/period"))
   }
 
   @Test
@@ -124,7 +223,10 @@ private let collectedAt = Fixtures.date("2026-08-14T16:00:00Z")
 @MainActor
 private func collectingModel(
   transport: RecordingHTTPTransport,
-  deviceID: String?
+  deviceID: String?,
+  usageStore: any AccountUsageStore = MemoryAccountUsageStore(),
+  providerStatusClient: (any ProviderStatusServing)? = nil,
+  syncAccountSettings: Bool = true
 ) -> AppModel {
   let providerSessions = MemoryProviderSessionStore(
     sessions: [
@@ -138,13 +240,15 @@ private func collectingModel(
       )
     ]
   )
+  let relay = RelayClient(transport: transport)
   return AppModel(
     account: AccountClient(
-      relay: RelayClient(transport: transport),
+      relay: relay,
       sessionStore: MemoryAccountSessionStore(
         session: Fixtures.session(deviceID: deviceID)
       ),
       summaryStore: MemoryAccountSummaryStore(value: nil),
+      usageStore: usageStore,
       now: { collectedAt }
     ),
     authenticator: ScriptedAuthenticator(result: .failure(AuthorizationError.cancelled)),
@@ -155,8 +259,10 @@ private func collectingModel(
       collectors: { provider, _ in UploadStubCollector(provider: provider) },
       now: { collectedAt }
     ),
+    providerStatusClient: providerStatusClient
+      ?? ProviderStatusClient(catalog: RelayProviderStatusCatalog(relay: relay)),
     settingsDefaults: UserDefaults(suiteName: "QuotaTests.SettingsSync.\(UUID().uuidString)")!,
-    syncAccountSettings: true,
+    syncAccountSettings: syncAccountSettings,
     installation: MemoryInstallationIdentity(value: "6eec1da2-8d8f-4e77-9a9a-3b6d61bf8998"),
     now: { collectedAt }
   )
@@ -224,6 +330,13 @@ final class RecordingHTTPTransport: HTTPTransport, @unchecked Sendable {
   struct Exchange {
     var status: Int
     var body: Data
+    var delayNanoseconds: UInt64
+
+    init(status: Int, body: Data, delayNanoseconds: UInt64 = 0) {
+      self.status = status
+      self.body = body
+      self.delayNanoseconds = delayNanoseconds
+    }
   }
 
   struct Recorded {
@@ -234,10 +347,25 @@ final class RecordingHTTPTransport: HTTPTransport, @unchecked Sendable {
 
   private let lock = NSLock()
   private var exchanges: [Exchange]
+  private var exchangesByPath: [String: [Exchange]]
   private var recorded: [Recorded] = []
+  private var inFlightSync = 0
+  private var maxInFlightSyncValue = 0
+
+  var maxInFlightSync: Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return maxInFlightSyncValue
+  }
 
   init(_ exchanges: [Exchange]) {
     self.exchanges = exchanges
+    self.exchangesByPath = [:]
+  }
+
+  init(byPath: [String: [Exchange]]) {
+    self.exchanges = []
+    self.exchangesByPath = byPath
   }
 
   var requests: [Recorded] {
@@ -247,6 +375,19 @@ final class RecordingHTTPTransport: HTTPTransport, @unchecked Sendable {
   }
 
   func perform(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+    if request.url?.path == "/api/v2/providers/status" {
+      recordPath(request)
+      let body = Data(
+        #"{"providers":[{"id":"claude","indicator":"none","description":"All Systems Operational","checked_at":"2026-08-14T16:00:00Z"}]}"#
+          .utf8)
+      let response = HTTPURLResponse(
+        url: request.url ?? URL(string: "https://quota.gotry.io")!,
+        statusCode: 200,
+        httpVersion: "HTTP/1.1",
+        headerFields: nil
+      )!
+      return (body, response)
+    }
     if request.url?.path == "/api/v2/account/settings" {
       recordPath(request)
       let body = defaultAccountSettingsBody(for: request)
@@ -259,6 +400,19 @@ final class RecordingHTTPTransport: HTTPTransport, @unchecked Sendable {
       return (body, response)
     }
     guard let exchange = record(request) else { throw HTTPTransportError.unavailable }
+    let path = request.url?.path ?? ""
+    let trackingSync = path == "/api/v2/device/sync"
+    if trackingSync {
+      beginSync()
+    }
+    defer {
+      if trackingSync {
+        endSync()
+      }
+    }
+    if exchange.delayNanoseconds > 0 {
+      try await Task.sleep(nanoseconds: exchange.delayNanoseconds)
+    }
     let response = HTTPURLResponse(
       url: request.url ?? URL(string: "https://quota.gotry.io")!,
       statusCode: exchange.status,
@@ -283,14 +437,34 @@ final class RecordingHTTPTransport: HTTPTransport, @unchecked Sendable {
   private func record(_ request: URLRequest) -> Exchange? {
     lock.lock()
     defer { lock.unlock() }
+    let path = request.url?.path ?? ""
     recorded.append(
       Recorded(
         method: request.httpMethod ?? "GET",
-        path: request.url?.path ?? "",
+        path: path,
         body: request.httpBody
       )
     )
+    if var queued = exchangesByPath[path] {
+      guard !queued.isEmpty else { return nil }
+      let exchange = queued.removeFirst()
+      exchangesByPath[path] = queued
+      return exchange
+    }
     return exchanges.isEmpty ? nil : exchanges.removeFirst()
+  }
+
+  private func beginSync() {
+    lock.lock()
+    inFlightSync += 1
+    maxInFlightSyncValue = max(maxInFlightSyncValue, inFlightSync)
+    lock.unlock()
+  }
+
+  private func endSync() {
+    lock.lock()
+    inFlightSync -= 1
+    lock.unlock()
   }
 }
 
@@ -325,9 +499,9 @@ private func tokenResponseJSON(device: String?) throws -> Data {
     "display_label": "octocat",
     "session": [
       "access_token": Fixtures.accessToken,
-      "access_expires_at": "2026-08-14T12:15:00Z",
+      "access_expires_at": "2999-01-01T00:00:00Z",
       "refresh_token": Fixtures.refreshToken,
-      "refresh_expires_at": "2026-11-01T12:00:00Z",
+      "refresh_expires_at": "2999-01-01T00:00:00Z",
     ],
   ]
   if let device {

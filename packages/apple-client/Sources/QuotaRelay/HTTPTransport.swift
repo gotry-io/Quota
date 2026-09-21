@@ -89,16 +89,12 @@ public final class URLSessionHTTPTransport: HTTPTransport, @unchecked Sendable {
       throw HTTPTransportError.responseTooLarge
     }
 
-    var data = Data()
-    if let expected = contentLength(http), expected > 0 {
-      data.reserveCapacity(min(expected, maximumResponseBytes))
-    }
-    for try await byte in bytes {
-      data.append(byte)
-      if data.count > maximumResponseBytes {
-        bytes.task.cancel()
-        throw HTTPTransportError.responseTooLarge
-      }
+    let data: Data
+    do {
+      data = try await BoundedHTTPBody.collect(
+        bytes, maximum: maximumResponseBytes, expected: contentLength(http))
+    } catch BoundedHTTPBody.Overflow.tooLarge {
+      throw HTTPTransportError.responseTooLarge
     }
     return (data, http)
   }
@@ -110,5 +106,46 @@ public final class URLSessionHTTPTransport: HTTPTransport, @unchecked Sendable {
       return nil
     }
     return length
+  }
+}
+
+/// Bounded body from `URLSession.bytes`. Kept instead of `data(for:)` so a body over the cap
+/// is cancelled while it arrives. `AsyncBytes` is still `UInt8`; we restore `reserveCapacity`
+/// from Content-Length and append in 16 KiB batches so the buffer is not grown a byte at a time.
+enum BoundedHTTPBody {
+  static let chunkSize = 16 * 1024
+
+  enum Overflow: Error {
+    case tooLarge
+  }
+
+  static func collect(
+    _ bytes: URLSession.AsyncBytes, maximum: Int, expected: Int? = nil
+  ) async throws -> Data {
+    var data = Data()
+    if let expected, expected > 0 {
+      data.reserveCapacity(min(expected, maximum))
+    }
+    var chunk = [UInt8]()
+    chunk.reserveCapacity(min(chunkSize, maximum))
+    for try await byte in bytes {
+      chunk.append(byte)
+      if chunk.count >= chunkSize {
+        data.append(contentsOf: chunk)
+        chunk.removeAll(keepingCapacity: true)
+        if data.count > maximum {
+          bytes.task.cancel()
+          throw Overflow.tooLarge
+        }
+      }
+    }
+    if !chunk.isEmpty {
+      data.append(contentsOf: chunk)
+    }
+    if data.count > maximum {
+      bytes.task.cancel()
+      throw Overflow.tooLarge
+    }
+    return data
   }
 }

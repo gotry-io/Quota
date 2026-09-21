@@ -2,7 +2,7 @@ import Foundation
 import QuotaPresentation
 import QuotaWire
 
-public struct ProviderStatusReading: Sendable, Equatable {
+public struct ProviderStatusReading: Sendable, Equatable, Codable {
   public var provider: ProviderID
   public var indicator: ProviderServiceStatusIndicator
   public var description: String
@@ -23,6 +23,11 @@ public struct ProviderStatusReading: Sendable, Equatable {
 
 public protocol ProviderStatusServing: Sendable {
   func refresh() async -> [ProviderStatusReading]
+  func persistedReadings() async -> [ProviderStatusReading]
+}
+
+extension ProviderStatusServing {
+  public func persistedReadings() async -> [ProviderStatusReading] { [] }
 }
 
 public struct IdleProviderStatusClient: ProviderStatusServing {
@@ -31,6 +36,17 @@ public struct IdleProviderStatusClient: ProviderStatusServing {
   public func refresh() async -> [ProviderStatusReading] {
     []
   }
+}
+
+/// Relay's public catalog read. Injected so this module does not depend on QuotaRelay.
+public protocol ProviderStatusCatalogFetching: Sendable {
+  func fetchReadings() async throws -> [ProviderStatusReading]
+}
+
+public protocol ProviderStatusStoring: Sendable {
+  func load() throws -> [ProviderStatusReading]?
+  func save(_ readings: [ProviderStatusReading]) throws
+  func clear() throws
 }
 
 public protocol ProviderStatusTransport: Sendable {
@@ -49,17 +65,24 @@ public actor ProviderStatusClient: ProviderStatusServing {
   public static let timeout: TimeInterval = 10
   public static let maximumResponseBytes = 64 * 1024
 
+  private let catalog: (any ProviderStatusCatalogFetching)?
   private let transport: any ProviderStatusTransport
+  private let store: (any ProviderStatusStoring)?
   private let userAgent: String
   private let now: @Sendable () -> Date
   private var lastGood: [ProviderID: ProviderStatusReading] = [:]
+  private var didLoadStore = false
 
   public init(
+    catalog: (any ProviderStatusCatalogFetching)? = nil,
     transport: (any ProviderStatusTransport)? = nil,
+    store: (any ProviderStatusStoring)? = nil,
     userAgent: String = ProviderStatusClient.defaultUserAgent,
     now: @escaping @Sendable () -> Date = { Date() }
   ) {
+    self.catalog = catalog
     self.transport = transport ?? URLSessionProviderStatusTransport()
+    self.store = store
     self.userAgent = userAgent
     self.now = now
   }
@@ -70,7 +93,25 @@ public actor ProviderStatusClient: ProviderStatusServing {
     return "Quota/\(version)"
   }
 
+  public func persistedReadings() async -> [ProviderStatusReading] {
+    loadStoreIfNeeded()
+    return currentReadings()
+  }
+
   public func refresh() async -> [ProviderStatusReading] {
+    loadStoreIfNeeded()
+    if let catalog {
+      do {
+        let readings = try await catalog.fetchReadings()
+        if !readings.isEmpty {
+          apply(readings)
+          persist()
+          return currentReadings()
+        }
+      } catch {
+        // Direct polls are the fallback when the Relay catalog read fails.
+      }
+    }
     let checkedAt = now()
     for (provider, url) in ProviderStatusPages.endpoints {
       do {
@@ -82,7 +123,31 @@ public actor ProviderStatusClient: ProviderStatusServing {
         continue
       }
     }
-    return ProviderID.allCases.compactMap { lastGood[$0] }
+    persist()
+    return currentReadings()
+  }
+
+  private func loadStoreIfNeeded() {
+    guard !didLoadStore else { return }
+    didLoadStore = true
+    if let store, let stored = try? store.load() {
+      lastGood = Dictionary(uniqueKeysWithValues: stored.map { ($0.provider, $0) })
+    }
+  }
+
+  private func apply(_ readings: [ProviderStatusReading]) {
+    for reading in readings {
+      lastGood[reading.provider] = reading
+    }
+  }
+
+  private func persist() {
+    guard let store else { return }
+    try? store.save(currentReadings())
+  }
+
+  private func currentReadings() -> [ProviderStatusReading] {
+    ProviderID.allCases.compactMap { lastGood[$0] }
   }
 
   public static func parse(
@@ -148,12 +213,28 @@ final class URLSessionProviderStatusTransport: ProviderStatusTransport, @uncheck
         throw ProviderStatusTransportError.responseTooLarge
       }
       var data = Data()
+      if let length = contentLength(http), length > 0 {
+        data.reserveCapacity(min(length, ProviderStatusClient.maximumResponseBytes))
+      }
+      var chunk = [UInt8]()
+      chunk.reserveCapacity(16 * 1024)
       for try await byte in bytes {
-        data.append(byte)
-        if data.count > ProviderStatusClient.maximumResponseBytes {
-          bytes.task.cancel()
-          throw ProviderStatusTransportError.responseTooLarge
+        chunk.append(byte)
+        if chunk.count >= 16 * 1024 {
+          data.append(contentsOf: chunk)
+          chunk.removeAll(keepingCapacity: true)
+          if data.count > ProviderStatusClient.maximumResponseBytes {
+            bytes.task.cancel()
+            throw ProviderStatusTransportError.responseTooLarge
+          }
         }
+      }
+      if !chunk.isEmpty {
+        data.append(contentsOf: chunk)
+      }
+      if data.count > ProviderStatusClient.maximumResponseBytes {
+        bytes.task.cancel()
+        throw ProviderStatusTransportError.responseTooLarge
       }
       guard (200..<300).contains(http.statusCode) else {
         throw ProviderStatusTransportError.unavailable

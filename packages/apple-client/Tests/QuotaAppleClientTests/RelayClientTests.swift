@@ -1,5 +1,6 @@
 import Foundation
 import QuotaAlerts
+import QuotaPresentation
 import QuotaRelay
 import QuotaWire
 import Testing
@@ -24,6 +25,7 @@ struct RelayClientTests {
         "/api/v6/account/usage/period",
         "/api/v2/device/sync",
         "/api/v6/device/snapshots",
+        "/api/v2/providers/status",
       ])
     #expect(RelayRoute.allCases.allSatisfy { !$0.path.contains("/device/usage") })
     #expect(RelayRoute.allCases.allSatisfy { !$0.path.contains("/account/devices") })
@@ -132,20 +134,28 @@ struct RelayClientTests {
     ])
     let client = RelayClient(transport: transport)
 
-    let omitted = try await client.fetchAccountUsageActivity(
+    let omittedRead = try await client.fetchAccountUsageActivity(
       accessToken: Fixtures.accessToken,
       from: "2026-08-01",
       to: "2026-08-10"
     )
+    guard case .modified(let omitted, _) = omittedRead else {
+      Issue.record("expected modified activity, got \(omittedRead)")
+      return
+    }
     #expect(omitted.days.map(\.date) == ["2026-08-10"])
     #expect(omitted.days.first?.agents == nil)
 
-    let detailed = try await client.fetchAccountUsageActivity(
+    let detailedRead = try await client.fetchAccountUsageActivity(
       accessToken: Fixtures.accessToken,
       from: "2026-08-10",
       to: "2026-08-10",
       detail: .agents
     )
+    guard case .modified(let detailed, _) = detailedRead else {
+      Issue.record("expected modified activity, got \(detailedRead)")
+      return
+    }
     #expect(detailed.days.first?.date == "2026-08-10")
 
     #expect(
@@ -214,6 +224,56 @@ struct RelayClientTests {
       )
     }
     #expect(transport.recordedURLs.isEmpty)
+  }
+
+  @Test
+  func providersStatusIsUnauthenticatedAndDecodesCatalogRows() async throws {
+    let body = Data(
+      """
+      {"providers":[{"id":"claude","indicator":"minor","description":"Partial System Outage","checked_at":"2026-08-14T16:00:00Z"},{"id":"codex","indicator":"unknown","description":"","checked_at":"2026-08-14T16:00:00Z"}]}
+      """.utf8)
+    let transport = ScriptedTransport([.init(status: 200, body: body)])
+    let client = RelayClient(transport: transport)
+    let response = try await client.fetchProviderStatus()
+    #expect(response.providers.map(\.id) == [.claude])
+    #expect(response.providers.first?.indicator == .minor)
+    #expect(transport.recordedURLs.map(\.path) == ["/api/v2/providers/status"])
+    #expect(transport.recordedAuthorization == [nil])
+  }
+
+  @Test
+  func activityAnswers304WithoutABody() async throws {
+    let body = try Fixtures.usageActivityJSON(days: [
+      Fixtures.usageActivityDay(date: "2026-08-10")
+    ])
+    let transport = ScriptedTransport([
+      .init(status: 200, body: body, headers: ["ETag": "\"act-one\""]),
+      .init(status: 304, body: Data(), headers: ["ETag": "\"act-one\""]),
+    ])
+    let client = RelayClient(transport: transport)
+    let first = try await client.fetchAccountUsageActivity(
+      accessToken: Fixtures.accessToken,
+      from: "2026-08-01",
+      to: "2026-08-14",
+      etag: nil
+    )
+    guard case .modified(_, let etag) = first else {
+      Issue.record("expected modified, got \(first)")
+      return
+    }
+    #expect(etag == "\"act-one\"")
+    let second = try await client.fetchAccountUsageActivity(
+      accessToken: Fixtures.accessToken,
+      from: "2026-08-01",
+      to: "2026-08-14",
+      etag: etag
+    )
+    guard case .unchanged(let again) = second else {
+      Issue.record("expected unchanged, got \(second)")
+      return
+    }
+    #expect(again == "\"act-one\"")
+    #expect(transport.recordedIfNoneMatch == [nil, "\"act-one\""])
   }
 
   @Test

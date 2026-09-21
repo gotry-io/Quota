@@ -59,6 +59,10 @@ final class UsageModel {
   /// The Account usage fold last accepted from a summary. Nil after the account goes away.
   @ObservationIgnored private var acceptedSummary: AccountSummary?
   @ObservationIgnored private var summaryETag: String?
+  @ObservationIgnored private var activityFetchedAt: Date?
+  @ObservationIgnored private var periodFetchedAt: [PeriodLoadKey: Date] = [:]
+  /// Disk last-good for the current activity range. Not `.loaded`, so a launch does not fetch.
+  @ObservationIgnored private var activityDiskDays: [UsageActivityDay]?
 
   init(
     activity: any ActivityLoading,
@@ -95,6 +99,9 @@ final class UsageModel {
     lastPeriodSummaryETag = nil
     periodCache = [:]
     budgetPeriod = nil
+    activityFetchedAt = nil
+    periodFetchedAt = [:]
+    activityDiskDays = nil
     activityGeneration += 1
     rhythmGeneration += 1
     dayGeneration += 1
@@ -196,6 +203,36 @@ final class UsageModel {
     evaluateBudget(budget, budgetProgress)
   }
 
+  /// Age of the period (or activity) body currently on screen.
+  var displayedFetchedAt: Date? {
+    if let range = usagePeriodRange {
+      let key = currentPeriodKey(from: range.from, to: range.to, breakdown: true)
+      if let fetched = periodFetchedAt[key] { return fetched }
+    }
+    return activityFetchedAt
+  }
+
+  /// Hydrate last-good bodies without marking Usage loaded, so a launch does not fetch them.
+  func applyDiskCache(_ cache: CachedAccountUsage) {
+    let range = activityDateRange
+    if let activity = cache.activity, activity.from == range.from, activity.to == range.to {
+      activityDiskDays = activity.response.days
+      activityFetchedAt = activity.fetchedAt
+    }
+    for (raw, period) in cache.periods {
+      let parts = raw.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+      guard parts.count == 4 else { continue }
+      let key = PeriodLoadKey(
+        from: parts[0],
+        to: parts[1],
+        timezone: parts[2],
+        breakdown: parts[3] == "1"
+      )
+      periodCache[key] = period.response
+      periodFetchedAt[key] = period.fetchedAt
+    }
+  }
+
   /// First visit to Usage asks once. Last-good stays on screen while a later read revalidates.
   func loadActivity(force: Bool = false) async {
     guard isSignedIn() else { return }
@@ -209,7 +246,6 @@ final class UsageModel {
       }
     #endif
     if force, case .idle = activityChart { return }
-    let lastGood = activityChart.days
     if !force {
       switch activityChart {
       case .idle, .failed:
@@ -223,6 +259,7 @@ final class UsageModel {
     activityGeneration += 1
     let generation = activityGeneration
     let epoch = sessionEpoch()
+    let lastGood = activityChart.days ?? activityDiskDays
     if let lastGood {
       activityChart = .refreshing(lastGood)
     } else {
@@ -495,6 +532,7 @@ final class UsageModel {
       periodCache[key] = response
       lastPeriodKey = key
       lastPeriodSummaryETag = summaryETag
+      periodFetchedAt[key] = now()
       periodRead = .loaded(response)
     case .failure(.sessionExpired):
       onSessionExpired()
@@ -516,6 +554,7 @@ final class UsageModel {
       activityChart = .loaded(response.days)
       lastActivityToday = activityToday
       lastActivitySummaryETag = summaryETag
+      activityFetchedAt = now()
       evaluateBudgetAlerts()
     case .failure(.sessionExpired):
       onSessionExpired()

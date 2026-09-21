@@ -17,7 +17,7 @@ struct KeychainStoreTests {
     try store.save(Fixtures.session())
     #expect(keychain.calls == ["add"])
     #expect(keychain.items.count == 1)
-    #expect(keychain.lastAddAccessible == kSecAttrAccessibleWhenUnlockedThisDeviceOnly as String)
+    #expect(keychain.lastAddAccessible == kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly as String)
     #expect(try store.load()?.accountID == "account_01")
   }
 
@@ -35,7 +35,7 @@ struct KeychainStoreTests {
     #expect(keychain.calls == ["add", "add", "update"])
     #expect(keychain.deleteCount == 0)
     #expect(keychain.items.count == 1)
-    #expect(keychain.lastUpdateAccessible == kSecAttrAccessibleWhenUnlockedThisDeviceOnly as String)
+    #expect(keychain.lastUpdateAccessible == kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly as String)
     #expect(try store.load()?.accessToken == Fixtures.rotatedAccess)
   }
 
@@ -75,6 +75,35 @@ struct KeychainStoreTests {
     #expect(keychain.deleteCount == 0)
     #expect(try store.load() == nil)
   }
+
+  @Test
+  func loadRewritesAccessibilityToAfterFirstUnlock() throws {
+    let keychain = FakeKeychain()
+    let store = KeychainAccountSessionStore(
+      service: "io.gotry.quota.test-session",
+      account: "account-session",
+      keychain: keychain
+    )
+    try store.save(Fixtures.session())
+    keychain.lastUpdateAccessible = nil
+    let loaded = try store.load()
+    #expect(loaded?.accountID == "account_01")
+    #expect(keychain.lastUpdateAccessible == kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly as String)
+  }
+
+  @Test
+  func unreadableKeychainThrowsRatherThanReturningNil() throws {
+    let keychain = FakeKeychain()
+    keychain.copyStatus = errSecInteractionNotAllowed
+    let store = KeychainAccountSessionStore(
+      service: "io.gotry.quota.test-session",
+      account: "account-session",
+      keychain: keychain
+    )
+    #expect(throws: AccountStoreError.unreadable) {
+      _ = try store.load()
+    }
+  }
 }
 
 final class FakeKeychain: KeychainOperating, @unchecked Sendable {
@@ -83,6 +112,7 @@ final class FakeKeychain: KeychainOperating, @unchecked Sendable {
   var deleteCount = 0
   var addStatus: OSStatus?
   var updateStatus: OSStatus = errSecSuccess
+  var copyStatus: OSStatus?
   var lastAddAccessible: String?
   var lastUpdateAccessible: String?
 
@@ -113,6 +143,9 @@ final class FakeKeychain: KeychainOperating, @unchecked Sendable {
   }
 
   func copyMatching(_ query: [String: Any]) -> (OSStatus, Data?) {
+    if let copyStatus {
+      return (copyStatus, nil)
+    }
     let key = identity(query)
     guard let data = items[key] else { return (errSecItemNotFound, nil) }
     return (errSecSuccess, data)
