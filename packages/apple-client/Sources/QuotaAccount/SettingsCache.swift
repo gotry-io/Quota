@@ -143,14 +143,16 @@ private enum AccountSettingsCacheFile {
   }
 }
 
-/// GET-shaped encoding of a cached document. Nested `alerts` / `budget` already spell
-/// snake_case keys, and this wrapper does the same for the envelope.
+/// GET-shaped encoding of a cached document. Nested `alerts` / `budget` / `history` already
+/// spell snake_case keys, and this wrapper does the same for the envelope. A K6 file with no
+/// `history` still loads: `AccountSettingsDocument.decode` treats that as `sync: false`.
 private struct ResponseDocument: Encodable {
   var protocolVersion = 2
   var revision: Int
   var updatedAt: String?
   var alerts: AccountSettingsDocument.Alerts
   var budget: AccountSettingsDocument.Budget
+  var history: AccountSettingsDocument.History
 
   init(_ document: AccountSettingsDocument) {
     revision = document.revision
@@ -163,6 +165,7 @@ private struct ResponseDocument: Encodable {
     }
     alerts = document.alerts
     budget = document.budget
+    history = document.history
   }
 
   enum CodingKeys: String, CodingKey {
@@ -171,5 +174,6 @@ private struct ResponseDocument: Encodable {
     case updatedAt = "updated_at"
     case alerts
     case budget
+    case history
   }
 }
