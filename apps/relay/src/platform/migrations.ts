@@ -3,12 +3,10 @@ import { join } from "node:path";
 import type { RelayDatabase } from "./database.ts";
 
 /**
- * Wrangler's own ledger table, byte for byte.
- *
- * A self-hosted deployment is expected to start from `wrangler d1 export`, so the imported file
- * already carries this table with every migration named in it; writing a differently shaped one
- * would make the Node runtime replay migrations D1 had already applied
- * ([ADR 0049](../../../../docs/decisions/0049-one-relay-two-runtimes.md)).
+ * The migration ledger table, named `d1_migrations` because that is the table the Node runner
+ * writes and the table a database imported from the retired D1 export already carries
+ * ([ADR 0050](../../../../docs/decisions/0050-the-worker-and-d1-are-retired.md),
+ * [ADR 0058](../../../../docs/decisions/0058-relay-runs-on-node-only.md)).
  */
 const MIGRATIONS_TABLE = `CREATE TABLE IF NOT EXISTS d1_migrations(
 		id         INTEGER PRIMARY KEY AUTOINCREMENT,

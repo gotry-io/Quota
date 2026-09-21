@@ -270,8 +270,8 @@ export class WebSessions implements WebSessionPort {
 /**
  * One session read per request, shared by the document render and the Account read it streams.
  *
- * Both run inside the same Worker invocation against the same cookie, and the second would
- * otherwise repeat the first's D1 round trip.
+ * Both run inside the same request against the same cookie, and the second would otherwise
+ * repeat the first's storage round trip.
  */
 export function memoizeWebSessionAuthorization(inner: WebSessionPort): WebSessionPort {
   let principal: Promise<SessionPrincipal | null> | undefined;

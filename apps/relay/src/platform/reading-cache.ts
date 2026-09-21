@@ -1,27 +1,12 @@
 /**
  * Where the provider status route keeps the last reading it got from an official status page.
  *
- * It is the `Cache` shape narrowed to the two calls that route makes, so Workers can hand it
- * `caches.default` unchanged and Node can hand it a Map
- * ([ADR 0049](../../../../docs/decisions/0049-one-relay-two-runtimes.md)).
+ * Node hands this a process-local Map
+ * ([ADR 0058](../../../../docs/decisions/0058-relay-runs-on-node-only.md)).
  */
 export interface LastReadingCache {
   match(request: Request): Promise<Response | undefined>;
   put(request: Request, response: Response): Promise<void>;
-}
-
-/** The Workers cache shared by every isolate in a colo. */
-export class WorkersReadingCache implements LastReadingCache {
-  /** The DOM `CacheStorage` the type check also loads has no `default`; the Workers one does. */
-  private readonly cache = (caches as unknown as { default: Cache }).default;
-
-  match(request: Request): Promise<Response | undefined> {
-    return this.cache.match(request);
-  }
-
-  put(request: Request, response: Response): Promise<void> {
-    return this.cache.put(request, response);
-  }
 }
 
 /**

@@ -11,7 +11,7 @@ instructions. Stable ADR URLs stay.
 
 | ADR | Title | Status | Superseded by | Amended |
 | --- | --- | --- | --- | --- |
-| [0001](./0001-persistent-relay-storage.md) | Persistent managed Relay storage | Accepted |  | 2026-08-10 |
+| [0001](./0001-persistent-relay-storage.md) | Persistent managed Relay storage | Accepted |  | 2026-08-10, 2026-09-21 |
 | [0002](./0002-relay-device-code-pairing.md) | Relay device-code pairing | Superseded | [0006](./0006-managed-account-device-usage.md) | 2026-08-10 |
 | [0003](./0003-observation-preserving-subscription-merge.md) | Preserve observations and merge subscriptions for presentation | Accepted |  | 2026-08-29, 2026-09-06 |
 | [0004](./0004-anonymous-relay-owners.md) | Anonymous Relay owners | Superseded | [0006](./0006-managed-account-device-usage.md) | 2026-08-10 |
@@ -21,7 +21,7 @@ instructions. Stable ADR URLs stay.
 | [0008](./0008-data-integrity-and-diagnostics.md) | Complete local data and unified diagnostics | Superseded | [0022](./0022-minimal-diagnostics.md) | 2026-08-25 |
 | [0009](./0009-versioned-model-catalog.md) | Versioned report-time model catalog | Accepted |  |  |
 | [0010](./0010-provider-browser-session-auth.md) | Provider browser-session authentication | Accepted |  |  |
-| [0011](./0011-sveltekit-document-worker.md) | Quota Web document SSR via SvelteKit on the existing Relay Worker | Accepted |  | 2026-08-26 |
+| [0011](./0011-sveltekit-document-worker.md) | Quota Web document SSR via SvelteKit on the existing Relay Worker | Partially superseded | [0058](./0058-relay-runs-on-node-only.md) | 2026-08-26, 2026-09-21 |
 | [0012](./0012-managed-data-v3.md) | Managed-data v3 | Superseded | [0018](./0018-single-managed-data-contract.md), [0024](./0024-hour-versioned-usage-and-daily-rollups.md) |  |
 | [0013](./0013-readonly-ios-account-client.md) | Read-only Quota iOS account client | Accepted |  | 2026-08-26 |
 | [0014](./0014-nonsecret-ios-widget-snapshot.md) | Non-secret iOS widget snapshot via App Group | Accepted |  | 2026-09-04, 2026-09-06, 2026-09-07, 2026-09-19 |
@@ -59,11 +59,12 @@ instructions. Stable ADR URLs stay.
 | [0046](./0046-a-read-only-quota-command.md) | A read-only `quota` command | Accepted |  |  |
 | [0047](./0047-quota-pro-is-one-product-and-a-code-is-a-grant.md) | Quota Pro is one product, and a code is a grant | Superseded | [0048](./0048-sync-is-free-and-billing-is-gone.md) |  |
 | [0048](./0048-sync-is-free-and-billing-is-gone.md) | Sync is free, and billing is gone | Accepted |  |  |
-| [0049](./0049-one-relay-two-runtimes.md) | One Relay, two runtimes | Accepted |  |  |
-| [0050](./0050-the-worker-and-d1-are-retired.md) | The production Worker and D1 are retired | Accepted |  |  |
+| [0049](./0049-one-relay-two-runtimes.md) | One Relay, two runtimes | Superseded | [0058](./0058-relay-runs-on-node-only.md) |  |
+| [0050](./0050-the-worker-and-d1-are-retired.md) | The production Worker and D1 are retired | Accepted |  | 2026-09-21 |
 | [0051](./0051-the-panel-glances-and-the-windows-explain.md) | The panel glances, and the windows explain | Partially superseded | [0052](./0052-quotabar-is-the-app-and-the-menu-bar-is-part-of-it.md) |  |
 | [0052](./0052-quotabar-is-the-app-and-the-menu-bar-is-part-of-it.md) | QuotaBar is the app, and the menu bar is part of it | Accepted |  | 2026-09-18 |
 | [0053](./0053-one-alert-delivery-package-for-both-apps.md) | One alert delivery package for both Apple apps | Accepted |  |  |
 | [0054](./0054-quotabar-is-resident-in-the-menu-bar.md) | QuotaBar is resident in the menu bar | Accepted |  |  |
 | [0055](./0055-an-account-period-is-a-local-date-range.md) | An Account period is a local-date range on the hour grid | Accepted |  |  |
 | [0056](./0056-a-period-export-is-the-period-on-screen.md) | A period export is the period on screen | Accepted |  |  |
+| [0058](./0058-relay-runs-on-node-only.md) | Relay runs on Node only | Accepted |  |  |

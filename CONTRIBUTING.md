@@ -70,8 +70,8 @@ A change that moves nothing but a product's version string answers the macOS che
 them (`scripts/ci-changed-paths.sh`, judged on file content, not on the pull request's author); the
 Linux jobs still run in full. `update-bump-prs` re-syncs an open bump pull request when main moves.
 
-Relay/website production is the owner action in `docs/relay-self-host.md`. Local builds and Wrangler
-dry runs are verification; do not deploy without explicit authorization.
+Relay/website production is the owner action in `docs/relay-self-host.md`. Local builds are
+verification; do not deploy without explicit authorization.
 
 ## Review
 

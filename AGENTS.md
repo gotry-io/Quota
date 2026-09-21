@@ -49,9 +49,10 @@ Do not create a second description of a canonical rule. Update its source and li
   `docs/usage-sources.md`), then run `pnpm generate:provider-catalog` and `pnpm generate:reference`
   so protocol ids, Swift `ProviderID`, and the generated reference stay aligned. Follow
   `docs/security.md` for credentials and redaction.
-- Persistence changes require a new explicit migration, in the right store: D1 for Relay, and
-  locally either `identity.sqlite` or the disposable `cache.sqlite`, whose migration ladders are
-  separate. Do not rewrite an applied migration.
+- Persistence changes require a new explicit migration, in the right store: Relay SQLite
+  (`apps/relay/migrations`, `d1_migrations` ledger), and locally either `identity.sqlite` or the
+  disposable `cache.sqlite`, whose migration ladders are separate. Do not rewrite an applied
+  migration.
 - The private IPC surface — including the `ready` event, `ping`, and the `diagnose` report's
   `schema_version: 3` — ships atomically with QuotaBar. Change both sides together and delete the
   replaced one; the local reports carried inside IPC state name no version of their own.
@@ -121,7 +122,8 @@ Development commands, hooks, the merge queue, and review expectations live in
   (`docs/decisions/0027-one-token-per-client.md`). Cover the session that writes a Device, the one
   that only reads, and the browser cookie, and keep the case proving a token from a Device's earlier
   generation is refused.
-- Relay change: run Vitest, local D1 migration verification, and the Cloudflare dry-run build.
+- Relay change: run Vitest (`test` and `test:node:integration` after a website build). Node
+  applies `apps/relay/migrations` on start; cover that ladder in `test/platform`.
 - QuotaBar account-path change: on macOS, run affected Swift and Relay tests plus the signed-service
   integration tests available in the app package.
 - Local-state change: cover both stores. A damaged `cache.sqlite` must be rebuilt without touching
@@ -133,18 +135,18 @@ Development commands, hooks, the merge queue, and review expectations live in
   checked-in Xcode project in the same change.
 - Web change: run its type check, existing and component tests, e2e smoke, and production build;
   inspect desktop and mobile rendering when browser tooling is available.
-- Deployment change: validate the Cloudflare workflow and the complete Worker + Static Assets
-  dry-run build.
+- Deployment change: validate `.github/workflows/release-relay-image.yml` and read the
+  Dockerfile; a Docker image build is an owner action, not local verification.
 - Cross-cutting change: run the full root format, check, test, and build sequence.
 
 If platform-specific verification cannot run, report exactly what was skipped and why.
 
 ## Deployment safety
 
-- Local builds and Wrangler dry runs are verification. Do not manually deploy Workers, apply remote
-  D1 migrations, publish packages, push images, create releases, or change DNS without explicit user
-  authorization. Relay/website production is the Node/SQLite image on dmit; deploying it is the
-  owner action in `docs/relay-self-host.md` (tag `relay-v*`, pull, redeploy the Portainer stack).
+- Local builds are verification. Do not publish packages, push images, create releases, or change
+  DNS without explicit user authorization. Relay/website production is the Node/SQLite image on
+  dmit; deploying it is the owner action in `docs/relay-self-host.md` (tag `relay-v*`, pull,
+  redeploy the Portainer stack).
 - Keep production identifiers and secrets out of tracked files.
 - Treat migration and retained-data changes as security-sensitive and review them against
   `docs/security.md`.

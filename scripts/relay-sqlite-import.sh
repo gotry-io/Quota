@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Create a new SQLite database from a wrangler D1 SQL dump and check that
+# Create a new SQLite database from a D1 SQL dump and check that
 # d1_migrations matches the checked-in apps/relay/migrations files.
 set -euo pipefail
 

@@ -24,7 +24,7 @@ beforeEach(async () => {
   db = await testDatabase();
 });
 
-describe("managed Relay on real Workers and D1", () => {
+describe("managed Relay on SQLite", () => {
   it("refuses to rebuild an hour this device's deletion watermark covers", async () => {
     await db.batch([
       db

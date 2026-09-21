@@ -28,7 +28,7 @@ and is not in force until review removes the Draft label.
 
 > Draft — pending review
 
-- Cloudflare, for QuotaRelay on Workers and D1
+- Cloudflare, as the CDN in front of QuotaRelay (Node and SQLite on the origin host)
 - GitHub, for Account sign-in
 
 ## How long data is kept
