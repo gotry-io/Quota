@@ -87,6 +87,8 @@ final class MenuBarViewModel {
   let browserConnection: BrowserConnectionModel
   /// Sign-in phases, session identity/epoch, and sign-out.
   let accountFlow: AccountFlowModel
+  /// Seed, adopt, merge, and 412 re-apply of the Account settings document.
+  let accountSettings: AccountSettingsModel
   private(set) var errorMessage: String?
   private(set) var isRefreshing = false
   private(set) var isUpdatingUsageUpload = false
@@ -292,6 +294,8 @@ final class MenuBarViewModel {
       unavailableMessage: initializationError,
       loginPollInterval: loginPollInterval
     )
+    self.accountSettings = AccountSettingsModel(
+      transport: self.client, defaults: notificationDefaults)
     self.usage.onRequestError = { [weak self] message in
       self?.errorMessage = message
     }
@@ -300,6 +304,22 @@ final class MenuBarViewModel {
     }
     self.usage.sessionEpoch = { [weak self] in self?.accountFlow.sessionEpoch ?? 0 }
     self.browserConnection.sessionEpoch = { [weak self] in self?.accountFlow.sessionEpoch ?? 0 }
+    self.accountSettings.sessionEpoch = { [weak self] in self?.accountFlow.sessionEpoch ?? 0 }
+    self.accountSettings.currentPolicy = { [weak self] in
+      guard let self else { return AccountSettingsPolicy(rules: AlertRules(), budget: .none) }
+      return AccountSettingsPolicy(rules: self.notificationRules, budget: self.usage.budget)
+    }
+    self.accountSettings.applyPolicy = { [weak self] policy in
+      self?.applyAccountSettingsPolicy(policy)
+    }
+    self.accountSettings.onNeedsReload = { [weak self] in
+      await self?.reloadState()
+    }
+    self.usage.onLocalBudgetEdit = { [weak self] budget in
+      self?.accountSettings.noteLocalEdit(
+        .setBudget(amount: budget.amountUSD, alerts: budget.alerts)
+      )
+    }
     self.accountFlow.onNeedsReload = { [weak self] in
       await self?.reloadState()
     }
@@ -307,6 +327,7 @@ final class MenuBarViewModel {
       guard let self else { return }
       self.usage.accountDidGoAway()
       self.browserConnection.accountDidGoAway()
+      self.accountSettings.accountDidGoAway()
       try? self.notificationStore.clear()
       self.resetScheduler.removeAll()
     }
@@ -344,6 +365,7 @@ final class MenuBarViewModel {
         transport: nil,
         loginURLOpener: loginURLOpener
       )
+      self.accountSettings = AccountSettingsModel(transport: nil, defaults: notificationDefaults)
       let center = NoOpNotificationCenter()
       notificationCenter = center
       resetScheduler = ResetReminderScheduler(center: center)
@@ -599,6 +621,7 @@ final class MenuBarViewModel {
     statePollTask?.cancel()
     statePollTask = nil
     accountFlow.shutdown()
+    accountSettings.shutdown()
     browserConnection.shutdown()
     guard let client else { return }
     // A race whose loser is abandoned rather than awaited: the deadline is the thing waited on,
@@ -918,6 +941,7 @@ final class MenuBarViewModel {
     let previouslySignedIn = accountFlow.hasAccountSession
     accountFlow.acceptState(state)
     usage.acceptState(state)
+    accountSettings.accountSettingsAccepted(state)
     applyOverview(state.overview)
     advanceMenuBarClock(to: Date(), forNewReadings: true)
     providerConfigurations = Dictionary(
@@ -1031,10 +1055,12 @@ final class MenuBarViewModel {
 
   func setResetReminders(_ enabled: Bool) {
     persistNotificationRules { $0.resetReminders = enabled }
+    accountSettings.noteLocalEdit(.setResetReminders(enabled))
   }
 
   func setPaceAlerts(_ enabled: Bool) {
     persistNotificationRules { $0.paceAlerts = enabled }
+    accountSettings.noteLocalEdit(.setPaceAlerts(enabled))
   }
 
   func setNotificationFirstThreshold(_ value: Int, for selector: String) {
@@ -1044,6 +1070,7 @@ final class MenuBarViewModel {
       next.append(current[1])
     }
     persistNotificationRules { $0.setThresholds(next, for: selector) }
+    accountSettings.noteLocalEdit(.setThresholds(selector: selector, next))
   }
 
   func setNotificationSecondThreshold(_ value: Int?, for selector: String) {
@@ -1053,6 +1080,7 @@ final class MenuBarViewModel {
       next.append(value)
     }
     persistNotificationRules { $0.setThresholds(next, for: selector) }
+    accountSettings.noteLocalEdit(.setThresholds(selector: selector, next))
   }
 
   func refreshNotificationAuthorization() async {
@@ -1073,6 +1101,11 @@ final class MenuBarViewModel {
 
   func openNotificationSystemSettings() {
     _ = loginURLOpener.open(NotificationsSettingsCopy.systemSettingsURL)
+  }
+
+  private func applyAccountSettingsPolicy(_ policy: AccountSettingsPolicy) {
+    persistNotificationRules { $0 = $0.applying(policy) }
+    usage.replaceBudget(UsageBudget(policy: policy))
   }
 
   private func persistNotificationRules(_ update: (inout AlertRules) -> Void) {

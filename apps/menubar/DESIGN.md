@@ -236,9 +236,11 @@ for the Today period. A provider or window with no sample today is omitted. The 
 hourly strip for the same period.
 
 When this Mac has a monthly budget, a **Monthly budget** card sits above the summary with a
-progress bar and one line of `spent / budget · percent`. The bar measures this month's local spend,
-folded the same way any other custom period is, and it is shown whatever period the page is
-otherwise on. The budget is set in Notifications settings; it never leaves this Mac.
+progress bar, one line of `spent / budget · percent`, and a basis line: **Account spend this month**
+when signed in, **This Mac** when signed out. Signed in, the bar measures the Account calendar
+month (`usage_period` with `source: account`); signed out, this Mac's hours. The amount is set in
+Notifications settings and follows the Account when signed in
+([ADR 0061](../../docs/decisions/0061-alert-policy-and-the-budget-follow-the-account.md)).
 
 The default page contains:
 
@@ -717,16 +719,22 @@ writes the existing storage keys and takes effect immediately.
 
 ### Notifications
 
-Notifications is a Settings-group page. It holds the local remaining-quota rules this Mac evaluates
-itself: one master switch, remaining-percent thresholds on each subscription Overview is showing,
-and a switch for window-reset reminders.
+Notifications is a Settings-group page. It holds the remaining-quota rules this Mac evaluates:
+one master switch, remaining-percent thresholds on each subscription Overview is showing, a
+switch for window-reset reminders, pace warnings, and the monthly budget.
+
+What follows the Account when signed in: remaining-percent thresholds, reset reminders, pace
+warnings, and the budget amount and its alert switch
+([ADR 0061](../../docs/decisions/0061-alert-policy-and-the-budget-follow-the-account.md)). What
+stays on this Mac: the master switch (`enabled`), delivery, and the fired/pending reminder
+state. Signing out leaves the last local values in place.
 
 - The master switch is off until the person turns it on and macOS grants alerts and sound. Turning
   it on asks `UNUserNotificationCenter` for `.alert` and `.sound`. A refusal puts the switch back
   to off and shows **Allow notifications for QuotaBar in System Settings.** with **Open System
   Settings**, which opens `x-apple.systempreferences:com.apple.Notifications-Settings.extension`.
   Opening the page re-reads the system permission; a later grant in System Settings does not turn
-  the switch on by itself.
+  the switch on by itself. Sync never writes this switch.
 - Each visible subscription is one group: the catalog `display_name` and the masked account label.
   Two pickers choose remaining percent from **5 / 10 / 15 / 20 / 25 / 30 / 40 / 50**. The first
   defaults to **20**; the second defaults to **10** and may be **Off**, which stores a single
@@ -735,6 +743,8 @@ and a switch for window-reset reminders.
   subscription's primary window `resets_at` and replaces it when a new reading arrives. Signing out
   or turning the master switch off removes every pending reminder. A `windowReset` the evaluator
   emits for a window that already has a reminder is left to that reminder.
+- The monthly budget footer says which spend the amount is measured against: **Account spend this
+  month** when signed in, **This Mac** when signed out.
 - The page footer is **Quota reminds you when a refresh brings new data.** Quota does not promise
   real-time.
 - Delivery is native.

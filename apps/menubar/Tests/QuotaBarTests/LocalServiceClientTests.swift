@@ -1,4 +1,5 @@
 import Foundation
+import QuotaAlerts
 import Testing
 
 @testable import QuotaBar
@@ -192,6 +193,106 @@ struct LocalServiceClientTests {
     )
     #expect(history.utcOffsetSeconds == 0)
     #expect(history.samplesBySubscription["ccfc96629357"]?["five_hour"]?.first?.usedPercent == 40)
+    await client.shutdown()
+  }
+
+  @Test
+  func setAccountSettingsWritesTheStoredShapeAndDecodesWrittenAndConflict() async throws {
+    let service = try TemporaryService(
+      python: #"""
+        import json
+        import sys
+
+        document = {
+            "protocol_version": 2,
+            "revision": 1,
+            "updated_at": "2026-09-21T10:00:00Z",
+            "alerts": {
+                "reset_reminders": True,
+                "pace_alerts": True,
+                "thresholds": {"a1b2c3d4e5f6": [20, 10]},
+            },
+            "budget": {"amount_usd": "250.00", "alerts": True},
+        }
+        request = json.loads(sys.stdin.readline())
+        assert request["operation"] == "set_account_settings"
+        payload = request["payload"]
+        assert set(payload.keys()) == {"document", "if_match"}
+        assert payload["if_match"] == '"0"'
+        assert "protocol_version" not in payload["document"]
+        assert "revision" not in payload["document"]
+        assert payload["document"]["alerts"]["reset_reminders"] is True
+        assert payload["document"]["budget"]["amount_usd"] == "250.00"
+        print(json.dumps({
+            "type": "response",
+            "request_id": request["request_id"],
+            "result": {"outcome": "written", "document": document, "revision": 1},
+        }), flush=True)
+
+        request = json.loads(sys.stdin.readline())
+        assert request["operation"] == "set_account_settings"
+        print(json.dumps({
+            "type": "response",
+            "request_id": request["request_id"],
+            "result": {"outcome": "conflict", "document": document, "revision": 1},
+        }), flush=True)
+        """#
+    )
+    defer { service.remove() }
+    let client = try client(for: service)
+    let document = accountSettingsDocument(revision: 0, amountUSD: 250)
+    let written = try await client.setAccountSettings(document: document, ifMatch: "\"0\"")
+    if case .written(let decoded) = written {
+      #expect(decoded.revision == 1)
+      #expect(decoded.budget.amountUSD == Decimal(250))
+    } else {
+      Issue.record("expected written")
+    }
+    let conflict = try await client.setAccountSettings(document: document, ifMatch: "\"0\"")
+    if case .conflict(let decoded) = conflict {
+      #expect(decoded.revision == 1)
+    } else {
+      Issue.record("expected conflict")
+    }
+    await client.shutdown()
+  }
+
+  @Test
+  func refreshAccountSettingsDecodesTheStateFragment() async throws {
+    let service = try TemporaryService(
+      python: #"""
+        import json
+        import sys
+
+        request = json.loads(sys.stdin.readline())
+        assert request["operation"] == "refresh_account_settings"
+        assert request["payload"] == {}
+        print(json.dumps({
+            "type": "response",
+            "request_id": request["request_id"],
+            "result": {
+                "document": {
+                    "protocol_version": 2,
+                    "revision": 0,
+                    "updated_at": "1970-01-01T00:00:00Z",
+                    "alerts": {
+                        "reset_reminders": True,
+                        "pace_alerts": True,
+                        "thresholds": {},
+                    },
+                    "budget": {"amount_usd": None, "alerts": True},
+                },
+                "revision": 0,
+            },
+        }), flush=True)
+        """#
+    )
+    defer { service.remove() }
+    let client = try client(for: service)
+    let settings = try await client.refreshAccountSettings()
+    #expect(settings.revision == 0)
+    #expect(settings.document.budget.amountUSD == nil)
+    #expect(settings.document.alerts.resetReminders)
     await client.shutdown()
   }
 
@@ -708,7 +809,7 @@ private struct TemporaryService {
       count = int(launch_count_path.read_text()) if launch_count_path.exists() else 0
       launch_count_path.write_text(str(count + 1))
       def ready():
-          print(_json.dumps({"type": "event", "event": "ready", "ipc_version": 3}), flush=True)
+          print(_json.dumps({"type": "event", "event": "ready", "ipc_version": 4}), flush=True)
       def component(status, value=None):
           return {
               "status": status,
@@ -721,7 +822,7 @@ private struct TemporaryService {
           return {"rebuilding": False, "reset_at": None}
       def state(revision):
           return {
-              "ipc_version": 3,
+              "ipc_version": 4,
               "revision": revision,
               "usage_upload_enabled": True,
               "group_usage_by_project": True,

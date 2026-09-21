@@ -9,7 +9,11 @@ a private Rust child at `Contents/Helpers/quota-service`, and the public `quota`
 QuotaBar launches the fixed signed service path and keeps a persistent stdin/stdout NDJSON IPC v4
 connection. The helper emits `{"type":"event","event":"ready","ipc_version":4}` once it has opened
 its local state; QuotaBar sends nothing before that and shows its loading state, restarts one start
-that stays silent for a minute, and reports the service unavailable after a second. Requests have no
+that stays silent for a minute, and reports the service unavailable after a second. `get_state`
+carries `account_settings { document, revision }` while signed in. A write is
+`set_account_settings { document, if_match }` and answers `written` or `conflict` with the current
+document; `refresh_account_settings` forces a GET. Seed, adopt, merge, and 412 re-apply stay in
+Swift. Requests have no
 deadline. While one is outstanding QuotaBar pings every five seconds, and a helper that misses two
 consecutive pings is terminated, killed if it will not exit, and replaced on the next request. If
 the helper cannot initialize its owner-only state, it stays on the IPC boundary and returns only a
@@ -95,8 +99,9 @@ anything about another, and QuotaBar cannot alter another Device or request cred
 Provider API keys entered in Settings go directly over child stdin. Swift does not put them in argv,
 UserDefaults, logs, or response models; subsequent state exposes only a masked tip.
 
-Notifications are local: remaining-quota rules are evaluated on this Mac and delivered through the
-system notification center; nothing is uploaded.
+Notifications are evaluated on this Mac and delivered through the system notification center.
+Alert policy and the monthly budget follow the Account when signed in; the master switch and
+delivery stay on this Mac.
 
 The detailed system boundary is in [`docs/architecture.md`](../../docs/architecture.md), security
 requirements are in [`docs/security.md`](../../docs/security.md), shared visual language is in
