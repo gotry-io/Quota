@@ -18,3 +18,10 @@ export function ladderThroughCutover<T extends { name: string }>(
   if (cutover < 0) throw new Error("The account identities cutover is missing from the ladder");
   return migrations.slice(from, cutover);
 }
+
+/** Migrations after a named file, in ladder order. */
+export function ladderAfter<T extends { name: string }>(migrations: T[], name: string): T[] {
+  const index = migrations.findIndex((migration) => migration.name.endsWith(name));
+  if (index < 0) throw new Error(`${name} is missing from the ladder`);
+  return migrations.slice(index + 1);
+}

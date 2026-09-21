@@ -13,7 +13,6 @@ function profileResponse(
     enabled: boolean;
     show_models: boolean;
     show_cost: boolean;
-    on_leaderboard: boolean;
   }> = {},
 ) {
   return {
@@ -23,7 +22,6 @@ function profileResponse(
       enabled: false,
       show_models: true,
       show_cost: false,
-      on_leaderboard: false,
       ...overrides,
     },
   };
@@ -36,7 +34,7 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-it("fills the form from the Account's own profile and writes all four values back", async () => {
+it("fills the form from the Account's own profile and writes the handle and switches back", async () => {
   const requests: Array<{ url: string; method: string; body: unknown }> = [];
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     requests.push({
@@ -72,7 +70,6 @@ it("fills the form from the Account's own profile and writes all four values bac
         enabled: true,
         show_models: true,
         show_cost: true,
-        on_leaderboard: false,
       },
     },
   });

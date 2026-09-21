@@ -13,8 +13,8 @@ subscription quota and privacy-preserving Usage together across a user's devices
 - **QuotaRelay** — managed account/device service: one Hono source tree, run in production as a
   Node + SQLite image on a VPS ([ADR 0050](docs/decisions/0050-the-worker-and-d1-are-retired.md));
   the Cloudflare Workers + D1 adapters remain a supported runtime and are not deployed.
-- **Quota Web** — public site, GitHub sign-in, account dashboard, the opt-in public Usage page at
-  `quota.gotry.io/u/<handle>`, and the opt-in leaderboard at `quota.gotry.io/leaderboard`.
+- **Quota Web** — public site, GitHub sign-in, account dashboard, and the opt-in public Usage page at
+  `quota.gotry.io/u/<handle>`.
 
 Provider credentials, prompts, completions, raw events, local paths, and conversation identifiers
 never upload. See the [security baseline](docs/security.md).

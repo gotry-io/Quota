@@ -26,15 +26,14 @@ let handle = $state("");
 let enabled = $state(false);
 let showModels = $state(true);
 let showCost = $state(false);
-let onLeaderboard = $state(false);
 let published = $state<string | null>(null);
 
 /**
  * The page is configured from one read and written back whole.
  *
- * There is no partial update: the four values are one statement about what this Account
- * publishes, and sending them together is what makes the answer Relay stores the same thing
- * the form shows.
+ * There is no partial update: the handle and the three switches are one statement about what
+ * this Account publishes, and sending them together is what makes the answer Relay stores
+ * the same thing the form shows.
  */
 async function load(): Promise<void> {
   loading = true;
@@ -54,7 +53,6 @@ function apply(profile: PublicProfile): void {
   enabled = profile.enabled;
   showModels = profile.show_models;
   showCost = profile.show_cost;
-  onLeaderboard = profile.on_leaderboard;
   published = profile.enabled ? profile.handle : null;
 }
 
@@ -70,9 +68,6 @@ async function save(): Promise<void> {
     enabled,
     show_models: showModels,
     show_cost: showCost,
-    // A page that is not published has nowhere to be listed from, so switching it off takes
-    // the row off the board rather than leaving a link nobody can follow.
-    on_leaderboard: enabled && onLeaderboard,
   });
   saving = false;
   if (result.status === "handle_taken") {
@@ -149,20 +144,6 @@ $effect(() => {
       <label for="public-profile-cost">Show API-equivalent cost</label>
       <input id="public-profile-cost" type="checkbox" bind:checked={showCost} />
     </div>
-    <div class="settings-row">
-      <label for="public-profile-leaderboard">Show on the leaderboard</label>
-      <input
-        id="public-profile-leaderboard"
-        type="checkbox"
-        bind:checked={onLeaderboard}
-        disabled={!enabled}
-        aria-describedby="public-profile-leaderboard-help"
-      />
-    </div>
-    <p id="public-profile-leaderboard-help" class="settings-note">
-      Ranks your handle and 30-day token total at <code>quota.gotry.io/leaderboard</code>. Off
-      until you ask for it, and only while this page is published.
-    </p>
 
     <div class="settings-actions">
       <button

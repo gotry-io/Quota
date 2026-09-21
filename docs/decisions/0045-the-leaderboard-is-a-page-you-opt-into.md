@@ -1,7 +1,12 @@
 # ADR 0045: The leaderboard is a page you opt into
 
-- Status: Accepted
+> Superseded by [ADR 0059](0059-the-leaderboard-is-retired.md): the board is cut. Ranking rewards
+> burning the resource the product conserves, and this record already admitted it cannot resist
+> inflated uploads.
+
+- Status: Superseded
 - Date: 2026-09-07
+- Superseded by: 0059
 - Amends [ADR 0037](./0037-a-public-profile-shows-usage-not-quota.md), which ruled a leaderboard out
 
 ## Context

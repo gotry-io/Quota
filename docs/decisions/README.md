@@ -47,7 +47,7 @@ instructions. Stable ADR URLs stay.
 | [0034](./0034-ios-collects-for-itself.md) | Quota iOS signs in to providers for itself | Accepted |  | 2026-09-06 |
 | [0035](./0035-quota-pace-is-derived-from-the-reading.md) | Quota pace is derived from the reading | Accepted |  | 2026-09-07, 2026-09-19 |
 | [0036](./0036-usage-derived-metrics.md) | A derived Usage metric is one rule, answered by one fixture | Accepted |  |  |
-| [0037](./0037-a-public-profile-shows-usage-not-quota.md) | A public profile shows Usage, not quota | Accepted |  | 2026-09-07 |
+| [0037](./0037-a-public-profile-shows-usage-not-quota.md) | A public profile shows Usage, not quota | Accepted |  | 2026-09-07, 2026-09-21 |
 | [0038](./0038-sessions-are-a-local-view-of-files.md) | Sessions are a local view of files | Accepted |  |  |
 | [0039](./0039-project-attribution-stays-local.md) | Project attribution stays local | Accepted |  |  |
 | [0040](./0040-a-period-is-folded-where-its-days-already-are.md) | A period is folded where its days already are, and a budget never leaves the device | Partially superseded | [0055](./0055-an-account-period-is-a-local-date-range.md) | 2026-09-19, 2026-09-20 |
@@ -55,7 +55,7 @@ instructions. Stable ADR URLs stay.
 | [0042](./0042-quota-history-is-local-samples.md) | Quota history is local samples | Accepted |  | 2026-09-19 |
 | [0043](./0043-one-widget-view-package-for-both-platforms.md) | One widget view package for both platforms | Accepted |  |  |
 | [0044](./0044-relay-publishes-provider-status.md) | Relay publishes official provider status | Accepted |  |  |
-| [0045](./0045-the-leaderboard-is-a-page-you-opt-into.md) | The leaderboard is a page you opt into | Accepted |  |  |
+| [0045](./0045-the-leaderboard-is-a-page-you-opt-into.md) | The leaderboard is a page you opt into | Superseded | [0059](./0059-the-leaderboard-is-retired.md) |  |
 | [0046](./0046-a-read-only-quota-command.md) | A read-only `quota` command | Accepted |  |  |
 | [0047](./0047-quota-pro-is-one-product-and-a-code-is-a-grant.md) | Quota Pro is one product, and a code is a grant | Superseded | [0048](./0048-sync-is-free-and-billing-is-gone.md) |  |
 | [0048](./0048-sync-is-free-and-billing-is-gone.md) | Sync is free, and billing is gone | Accepted |  |  |
@@ -67,3 +67,4 @@ instructions. Stable ADR URLs stay.
 | [0054](./0054-quotabar-is-resident-in-the-menu-bar.md) | QuotaBar is resident in the menu bar | Accepted |  |  |
 | [0055](./0055-an-account-period-is-a-local-date-range.md) | An Account period is a local-date range on the hour grid | Accepted |  |  |
 | [0056](./0056-a-period-export-is-the-period-on-screen.md) | A period export is the period on screen | Accepted |  |  |
+| [0059](./0059-the-leaderboard-is-retired.md) | The leaderboard is retired | Accepted |  |  |

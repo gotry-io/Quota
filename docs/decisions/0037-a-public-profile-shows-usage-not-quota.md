@@ -2,10 +2,11 @@
 
 - Status: Accepted
 - Date: 2026-09-06
-- Amended: 2026-09-07 by [ADR 0045](./0045-the-leaderboard-is-a-page-you-opt-into.md), which adds an
-  opt-in leaderboard. The refusal below stands for a board every published page is on; a page is
-  now listed only when its owner asks, and being listed publishes nothing this record's field list
-  does not already allow.
+- Amended: 2026-09-07 by [ADR 0045](./0045-the-leaderboard-is-a-page-you-opt-into.md), which added an
+  opt-in board. The refusal below stood for a board every published page is on.
+- Amended: 2026-09-21 by [ADR 0059](./0059-the-leaderboard-is-retired.md), which retires that board.
+  The refusal below is the current rule again: no ranking, no comparison between accounts. The
+  `on_leaderboard` field ADR 0045 added is dropped; public profiles themselves are unchanged.
 - Amends [ADR 0011](./0011-sveltekit-document-worker.md) for one route
 
 ## Context
@@ -28,7 +29,7 @@ An Account may publish one read-only page of Usage totals at `quota.gotry.io/u/<
 no ranking, no leaderboard, and no comparison between accounts.
 
 - **What is public is a table, not a field list.** `public_profiles` holds `account_id`, `handle`,
-  `enabled`, `show_models`, `show_cost`, `on_leaderboard`, and the two instants. Nothing is published because it
+  `enabled`, `show_models`, `show_cost`, and the two instants. Nothing is published because it
   happens to sit beside something that is.
 - **What the page carries is its own contract.** `PublicUsageResponseSchema` states it exactly:
   tokens, messages, an optional cost, provider and model shares, and a year of heatmap intensity.
@@ -79,9 +80,9 @@ no ranking, no leaderboard, and no comparison between accounts.
 ## What was given up
 
 A leaderboard is the obvious next thing and is deliberately absent: it would make the page's
-numbers into a score, and a score is a reason to inflate what is uploaded. (Revisited by
-[ADR 0045](./0045-the-leaderboard-is-a-page-you-opt-into.md): a board nobody is on until they ask
-carries that reason only to the people who accepted it.) Publishing remaining
+numbers into a score, and a score is a reason to inflate what is uploaded. ([ADR 0045](./0045-the-leaderboard-is-a-page-you-opt-into.md)
+tried an opt-in board; [ADR 0059](./0059-the-leaderboard-is-retired.md) retired it, so that
+absence is the current rule again.) Publishing remaining
 quota was never on the table — it says what a person is paying for and how close they are to
 running out. Reusing `AccountUsageSchema` with fields stripped at the route would have been less
 code and would have made every future field on that schema public until someone remembered to

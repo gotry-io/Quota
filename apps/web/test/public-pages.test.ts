@@ -21,7 +21,7 @@ test("public pages exist and set head metadata", () => {
 
 test("footer links to the public pages", () => {
   const layout = readFileSync(join(root, "src/routes/+layout.svelte"), "utf8");
-  for (const href of ["/leaderboard", "/download", "/support", "/privacy", "/terms"]) {
+  for (const href of ["/download", "/support", "/privacy", "/terms"]) {
     assert.match(layout, new RegExp(`href="${href}"`));
   }
 });
