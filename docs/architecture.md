@@ -481,8 +481,15 @@ readings for ten minutes, and answers `unknown` when a poll fails with nothing s
   UserNotifications delivery layer both Apple apps share: the sink, reset-reminder scheduler,
   notification-center slice, rules UserDefaults adapter, and alert-state file store
   ([ADR 0053](decisions/0053-one-alert-delivery-package-for-both-apps.md)). It depends on neither
-  app and does not own `ProviderID`, decode wire types, network, or reach Relay; `QuotaAlerts` may
-  depend on `QuotaPresentation` and stays Foundation-only. `QuotaAlertDelivery` may depend on
+  app and does not own `ProviderID`, network, or reach Relay; `QuotaAlerts` may depend on
+  `QuotaPresentation` and stays Foundation-only. The one wire document it decodes is the Account
+  settings document of
+  [ADR 0061](decisions/0061-alert-policy-and-the-budget-follow-the-account.md), which sits in
+  `QuotaAlerts` beside the rules it carries: the seed / adopt / merge-once and 412 re-apply
+  decisions are pure functions over it, answering `account-settings-conformance.json` as
+  `packages/quota-model` does, because Quota iOS reads that document from Relay while QuotaBar is
+  handed it over IPC and both keep their effective values in `UserDefaults`.
+  `QuotaAlertDelivery` may depend on
   `QuotaAlerts`, `QuotaPresentation`, and UserNotifications; each app passes its own key prefix
   and state file so shipped Quota iOS `alerts.*` / `alert-state.json` and QuotaBar
   `notifications.*` / `QuotaBar/notification-state.json` stay those names.

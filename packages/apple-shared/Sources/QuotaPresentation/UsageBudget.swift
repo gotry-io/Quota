@@ -1,10 +1,11 @@
 import Foundation
 
-/// A monthly API-equivalent spend budget, which is this device's own preference.
+/// A monthly API-equivalent spend budget, which follows the Account (ADR 0061).
 ///
-/// The amount is whole US dollars. It is never uploaded: a budget says what someone wants to be
-/// warned about, which is not a fact about their Account. Each app persists it in its own
-/// `UserDefaults`; the website keeps the same two fields in `localStorage`.
+/// The amount is US dollars. Signed in, these two fields are the Account's: one settings document
+/// carries them and every client of that Account applies the same pair. Signed out, the last
+/// values stay and keep working. Each app persists them in its own `UserDefaults`; the website
+/// keeps the same two fields in `localStorage`.
 public struct UsageBudget: Equatable, Sendable {
   /// Nil means no budget is set, which is the state a device starts in.
   public var amountUSD: Decimal?
