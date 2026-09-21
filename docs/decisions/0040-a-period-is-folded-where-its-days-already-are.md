@@ -2,7 +2,7 @@
 
 - Status: Partially superseded
 - Date: 2026-09-06
-- Superseded by: 0055
+- Superseded by: 0055, 0061
 - Amended: 2026-09-19 by [ADR 0055](0055-an-account-period-is-a-local-date-range.md): Relay now
   answers an additive local-date period read. The website reads that route for every Usage
   selection except `all`, and for the budget month. Quota iOS still folds UTC activity days until
@@ -13,6 +13,9 @@
   Account. `usage_period` now names `source` (`local` | `account`) and, for Account, the caller's
   IANA timezone; Account answers from Relay's period read. The monthly budget stays this Mac's
   fold. There is no alias for a request that omitted `source`.
+- Amended: 2026-09-21 by [ADR 0061](0061-alert-policy-and-the-budget-follow-the-account.md): the
+  budget section is superseded. The amount and its alert switch follow the Account; signed in,
+  every client measures the Account calendar month.
 - Extends [ADR 0024](0024-hour-versioned-usage-and-daily-rollups.md) and
   [ADR 0031](0031-the-usage-fold-is-stored.md)
 
@@ -53,11 +56,12 @@ QuotaBar does not fold UTC activity days. The sentence that QuotaBar refuses the
 Account is superseded by [ADR 0055](0055-an-account-period-is-a-local-date-range.md) as of
 2026-09-19. The sentence that Quota iOS folds UTC activity days is superseded as of 2026-09-20.
 
-**The monthly budget is a device preference and is never uploaded.** One amount in whole US dollars
-and one alert switch, in `UserDefaults` on Apple and `localStorage` on the website. Crossing 80%
-and then 100% of it fires once each per calendar month, evaluated by `QuotaAlerts` under the same
-dedup keys the quota thresholds use with `budget` as the selector and the month as the window, and
-stated in `budget_cases` of `packages/protocol/fixtures/alert-transition-conformance.json`.
+**The monthly budget followed the device when this decision was written.** That sentence is
+superseded by [ADR 0061](0061-alert-policy-and-the-budget-follow-the-account.md): the amount and
+its alert switch follow the Account. Crossing 80% and then 100% of it still fires once each per
+calendar month, evaluated by `QuotaAlerts` under the same dedup keys the quota thresholds use with
+`budget` as the selector and the month as the window, and stated in `budget_cases` of
+`packages/protocol/fixtures/alert-transition-conformance.json`.
 
 ## Consequences
 
@@ -68,5 +72,6 @@ change invalidates the folds QuotaBar asked for, because the hours behind them m
 The 366-day bound on `usage_period` is the local mirror of the 400-day bound the activity read
 already carries; a range wider than a year and a leap day is refused rather than answered slowly.
 
-Because no managed store names a budget, a budget does not follow someone to a second device, and
-signing out does not clear it. That is the cost of not turning a preference into an account fact.
+The budget now follows the Account
+([ADR 0061](0061-alert-policy-and-the-budget-follow-the-account.md)). Signing out keeps the last
+local copy working, as the other policy fields do.

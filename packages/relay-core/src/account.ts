@@ -1,4 +1,5 @@
 import type {
+  AccountSettings,
   IdentityProvider,
   ProviderId,
   QuotaSnapshot,
@@ -10,10 +11,16 @@ import type {
  *
  * One vocabulary, because there is one session table. `device:write` is the whole write side of a
  * collection client — quota, Usage, and the device profile and sync control behind them — and it
- * is meaningful only on a session that names a Device. Ending a session is not a scope: holding
- * its refresh token is the proof, which is what `POST /oauth/v2/revoke` asks for.
+ * is meaningful only on a session that names a Device. `account:settings` is the one Account
+ * document a native client may write: alert policy and the budget. Ending a session is not a
+ * scope: holding its refresh token is the proof, which is what `POST /oauth/v2/revoke` asks for.
  */
-export const SESSION_SCOPES = ["account:read", "account:manage", "device:write"] as const;
+export const SESSION_SCOPES = [
+  "account:read",
+  "account:manage",
+  "account:settings",
+  "device:write",
+] as const;
 export type SessionScope = (typeof SESSION_SCOPES)[number];
 
 /** Which client holds a session. It decides the rules, not what the session is stored in. */
@@ -400,6 +407,31 @@ export type PublicProfileWriteResult =
   | { outcome: "written"; profile: PublicProfileRecord }
   | { outcome: "handle_taken" };
 
+/**
+ * One Account's alert policy and budget, as Relay stores it.
+ *
+ * The row exists after the first successful write. Revision 0 is synthesized on read when there
+ * is no row, and is the `If-Match` a first write presents.
+ */
+export interface AccountSettingsRecord {
+  account_id: string;
+  revision: number;
+  settings: AccountSettings;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AccountSettingsWriteInput {
+  account_id: string;
+  expected_revision: number;
+  settings: AccountSettings;
+  written_at: string;
+}
+
+export type AccountSettingsWriteResult =
+  | { outcome: "written"; record: AccountSettingsRecord }
+  | { outcome: "conflict"; current: AccountSettingsRecord };
+
 export interface AccountMaintenanceInput {
   grant_expired_before: string;
   session_expired_before: string;
@@ -544,6 +576,13 @@ export interface AccountState {
   getPublicProfile(accountId: string): Promise<PublicProfileRecord | null>;
   /** Claim or restate this Account's handle and switches, refusing a handle already claimed. */
   writePublicProfile(input: PublicProfileWriteInput): Promise<PublicProfileWriteResult>;
+  /** This Account's settings row, or null when nothing has been written. */
+  getAccountSettings(accountId: string): Promise<AccountSettingsRecord | null>;
+  /**
+   * Compare-and-set the settings document. `expected_revision` 0 inserts when no row exists;
+   * any other value updates that revision. A lost race is `conflict` with the current document.
+   */
+  writeAccountSettings(input: AccountSettingsWriteInput): Promise<AccountSettingsWriteResult>;
   /**
    * The Account behind a published handle, matched without regard to case.
    *

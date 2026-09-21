@@ -5,7 +5,11 @@ import {
   validatePricingCatalog,
 } from "@gotry-io/quota-model";
 import {
+  ACCOUNT_SETTINGS_UNSET_UPDATED_AT,
+  DEFAULT_ACCOUNT_SETTINGS,
   AccountResponseSchema,
+  AccountSettingsResponseSchema,
+  AccountSettingsUpdateRequestSchema,
   AccountSummarySchema,
   type AccountUsage,
   AccountUsageActivityResponseSchema,
@@ -55,6 +59,7 @@ import {
 } from "@gotry-io/quota-protocol";
 import type {
   AccountMaintenanceInput,
+  AccountSettingsRecord,
   AccountState,
   AccountUsageVersionStamp,
   AccountVersionStamp,
@@ -317,7 +322,11 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     "/api/v6/device/usage",
     bodyLimit({ maxSize: MAXIMUM_USAGE_SUBMISSION_BYTES, onError: requestBodyTooLarge }),
   );
-  for (const path of ["/api/v2/device/profile", "/api/v2/account/profile"]) {
+  for (const path of [
+    "/api/v2/device/profile",
+    "/api/v2/account/profile",
+    "/api/v2/account/settings",
+  ]) {
     app.use(path, bodyLimit({ maxSize: maximumCredentialBodyBytes, onError: requestBodyTooLarge }));
   }
   app.get("/readyz", async (context) => {
@@ -1372,6 +1381,76 @@ export function createRelayApp(options: RelayAppOptions): Hono {
   });
 
   /**
+   * Alert policy and the monthly budget for this Account.
+   *
+   * No row is the default document at revision 0, the same way an unpublished profile is not a
+   * 404. The ETag is the revision, quoted, so a client that already holds the document can be
+   * told 304 without reading the row's JSON.
+   */
+  app.get("/api/v2/account/settings", async (context) => {
+    const principal = await accountReader(context, options, now());
+    if (principal instanceof Response) return principal;
+    if (!hasOnlyQueryKeys(context, [])) return invalidRequest(context);
+    const record = await options.state.getAccountSettings(principal.account_id);
+    const body = accountSettingsView(record);
+    const etag = accountSettingsETag(body.revision);
+    context.header("ETag", etag);
+    context.header("Cache-Control", "private, no-cache");
+    if (context.req.header("If-None-Match") === etag) return context.body(null, 304);
+    return context.json(body);
+  });
+
+  /**
+   * Replace the Account settings document.
+   *
+   * `account:settings` is granted to web, device, and reader sessions. A browser still has to
+   * present a same-origin Origin; a native client presents its bearer token and does not. The
+   * write is compare-and-set on `If-Match`: missing is 428, stale is 412 with the current
+   * document so the client can replay its one edit.
+   */
+  app.put("/api/v2/account/settings", async (context) => {
+    const principal = await authorizeAccount(context, options, "account:settings", now());
+    if (principal instanceof Response) return principal;
+    if (principal.client_kind === "web") {
+      const unsafe = requireWebOrigin(context, principal);
+      if (unsafe) return unsafe;
+    }
+    const limited = await enforceRateLimit(
+      context,
+      options.state,
+      options.hasher,
+      "account-settings-update",
+      principal.account_id,
+      rateLimits.profileMutation,
+      now(),
+    );
+    if (limited) return limited;
+    const matched = parseIfMatchRevision(context.req.header("If-Match"));
+    if (matched === "missing") {
+      return relayError(context, 428, "precondition_required", "If-Match is required.");
+    }
+    if (matched === "invalid") return invalidRequest(context);
+    const update = await parseJSON(context, AccountSettingsUpdateRequestSchema);
+    if (update instanceof Response) return update;
+    const written = await options.state.writeAccountSettings({
+      account_id: principal.account_id,
+      expected_revision: matched,
+      settings: { alerts: update.alerts, budget: update.budget },
+      written_at: now().toISOString(),
+    });
+    if (written.outcome === "conflict") {
+      const body = accountSettingsView(written.current);
+      context.header("ETag", accountSettingsETag(body.revision));
+      context.header("Cache-Control", "private, no-cache");
+      return context.json(body, 412);
+    }
+    const body = accountSettingsView(written.record);
+    context.header("ETag", accountSettingsETag(body.revision));
+    context.header("Cache-Control", "private, no-cache");
+    return context.json(body);
+  });
+
+  /**
    * One public page's Usage, to whoever asks.
    *
    * This is the only route that answers account data with no principal, so it is also the only
@@ -1945,6 +2024,29 @@ async function enforceRateLimit(
  * The defaults are what a page would carry if it were published now: models named, cost not.
  * Cost is the one figure a person may not want beside their name, so it is off until asked for.
  */
+function accountSettingsView(record: AccountSettingsRecord | null) {
+  const settings = record?.settings ?? DEFAULT_ACCOUNT_SETTINGS;
+  return AccountSettingsResponseSchema.parse({
+    protocol_version: PROTOCOL_VERSION,
+    revision: record?.revision ?? 0,
+    updated_at: record?.updated_at ?? ACCOUNT_SETTINGS_UNSET_UPDATED_AT,
+    alerts: settings.alerts,
+    budget: settings.budget,
+  });
+}
+
+function accountSettingsETag(revision: number): string {
+  return `"${revision}"`;
+}
+
+function parseIfMatchRevision(value: string | undefined): number | "missing" | "invalid" {
+  if (value === undefined || value === "") return "missing";
+  const match = /^"(0|[1-9]\d*)"$/.exec(value);
+  if (!match || match[1] === undefined) return "invalid";
+  const revision = Number(match[1]);
+  return Number.isSafeInteger(revision) ? revision : "invalid";
+}
+
 function publicProfileView(profile: PublicProfileRecord | null) {
   return {
     handle: profile?.handle ?? null,
@@ -2150,7 +2252,7 @@ function browserSignInFailure(
 
 function relayError(
   context: Context,
-  status: 400 | 401 | 403 | 404 | 409 | 413 | 429 | 500 | 502,
+  status: 400 | 401 | 403 | 404 | 409 | 412 | 413 | 428 | 429 | 500 | 502,
   code: RelayErrorCode,
   message: string,
 ): Response {

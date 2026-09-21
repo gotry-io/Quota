@@ -261,7 +261,7 @@ describe("Sign in with Apple inside the iOS app", () => {
     ).toMatchObject({
       client_kind: "ios",
       device_id: body.device_id,
-      scopes_json: '["account:read","device:write"]',
+      scopes_json: '["account:read","device:write","account:settings"]',
     });
 
     // Signing in again on the same phone is the same Device, and one live session.
@@ -326,7 +326,7 @@ describe("Sign in with Apple inside the iOS app", () => {
     expect(stored).toMatchObject({
       client_kind: "ios",
       device_id: null,
-      scopes_json: '["account:read"]',
+      scopes_json: '["account:read","account:settings"]',
     });
     // The session it answered with is the one that reads the Account.
     expect(

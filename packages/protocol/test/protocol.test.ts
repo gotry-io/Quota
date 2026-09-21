@@ -5,6 +5,13 @@ import { describe, expect, it } from "vitest";
 import * as protocol from "../src/index.ts";
 import {
   AccountResponseSchema,
+  AccountSettingsResponseReadSchema,
+  AccountSettingsResponseSchema,
+  AccountSettingsSchema,
+  AccountSettingsUpdateRequestSchema,
+  ACCOUNT_BUDGET_MAXIMUM_USD,
+  DEFAULT_ACCOUNT_SETTINGS,
+  MAXIMUM_ACCOUNT_SETTINGS_SELECTORS,
   AccountSummaryReadSchema,
   AccountSummarySchema,
   AccountUsageActivityResponseReadSchema,
@@ -1217,6 +1224,134 @@ describe("quota protocol", () => {
         JSON.stringify(broken),
       ).toBe(false);
     }
+  });
+
+  it("takes an Account settings document only in the stored shape, and refuses every other", () => {
+    const settings = {
+      alerts: {
+        reset_reminders: true,
+        pace_alerts: true,
+        thresholds: { a1b2c3d4e5f6: [20, 10] },
+      },
+      budget: { amount_usd: "250.00", alerts: true },
+    };
+    expect(AccountSettingsSchema.parse(settings)).toEqual(settings);
+    expect(AccountSettingsSchema.parse(DEFAULT_ACCOUNT_SETTINGS)).toEqual(DEFAULT_ACCOUNT_SETTINGS);
+    expect(
+      AccountSettingsUpdateRequestSchema.parse({
+        protocol_version: PROTOCOL_VERSION,
+        ...settings,
+      }),
+    ).toEqual({ protocol_version: PROTOCOL_VERSION, ...settings });
+    const response = {
+      protocol_version: PROTOCOL_VERSION,
+      revision: 7,
+      updated_at: "2026-09-21T10:00:00Z",
+      ...settings,
+    };
+    expect(AccountSettingsResponseSchema.parse(response)).toEqual(response);
+    expect(AccountSettingsResponseReadSchema.parse({ ...response, extra: "future" }).extra).toBe(
+      "future",
+    );
+
+    const oneThreshold = {
+      ...settings,
+      alerts: { ...settings.alerts, thresholds: { a1b2c3d4e5f6: [15] } },
+    };
+    expect(AccountSettingsSchema.safeParse(oneThreshold).success).toBe(true);
+    const noBudget = { ...settings, budget: { amount_usd: null, alerts: true } };
+    expect(AccountSettingsSchema.safeParse(noBudget).success).toBe(true);
+    const maxBudget = {
+      ...settings,
+      budget: { amount_usd: String(ACCOUNT_BUDGET_MAXIMUM_USD), alerts: true },
+    };
+    expect(AccountSettingsSchema.safeParse(maxBudget).success).toBe(true);
+    const cap = Object.fromEntries(
+      Array.from({ length: MAXIMUM_ACCOUNT_SETTINGS_SELECTORS }, (_, index) => [
+        index.toString(16).padStart(12, "0"),
+        [20, 10],
+      ]),
+    );
+    expect(
+      AccountSettingsSchema.safeParse({
+        ...settings,
+        alerts: { ...settings.alerts, thresholds: cap },
+      }).success,
+    ).toBe(true);
+
+    for (const [name, broken] of [
+      ["unknown field", { ...settings, enabled: false }],
+      ["revision on the stored document", { ...settings, revision: 1 }],
+      ["alerts.enabled", { ...settings, alerts: { ...settings.alerts, enabled: true } }],
+      [
+        "uppercase selector",
+        { ...settings, alerts: { ...settings.alerts, thresholds: { A1B2C3D4E5F6: [20, 10] } } },
+      ],
+      [
+        "short selector",
+        { ...settings, alerts: { ...settings.alerts, thresholds: { a1b2c3d4e5f: [20, 10] } } },
+      ],
+      [
+        "empty thresholds",
+        { ...settings, alerts: { ...settings.alerts, thresholds: { a1b2c3d4e5f6: [] } } },
+      ],
+      [
+        "three thresholds",
+        { ...settings, alerts: { ...settings.alerts, thresholds: { a1b2c3d4e5f6: [30, 20, 10] } } },
+      ],
+      [
+        "not descending",
+        { ...settings, alerts: { ...settings.alerts, thresholds: { a1b2c3d4e5f6: [10, 20] } } },
+      ],
+      [
+        "equal pair",
+        { ...settings, alerts: { ...settings.alerts, thresholds: { a1b2c3d4e5f6: [20, 20] } } },
+      ],
+      [
+        "threshold 0",
+        { ...settings, alerts: { ...settings.alerts, thresholds: { a1b2c3d4e5f6: [0] } } },
+      ],
+      [
+        "threshold 100",
+        { ...settings, alerts: { ...settings.alerts, thresholds: { a1b2c3d4e5f6: [100] } } },
+      ],
+      ["amount zero", { ...settings, budget: { amount_usd: "0", alerts: true } }],
+      ["amount over cap", { ...settings, budget: { amount_usd: "1000000.01", alerts: true } }],
+      ["three fraction digits", { ...settings, budget: { amount_usd: "1.234", alerts: true } }],
+      ["amount as number", { ...settings, budget: { amount_usd: 250, alerts: true } }],
+      [
+        "257 selectors",
+        {
+          ...settings,
+          alerts: {
+            ...settings.alerts,
+            thresholds: Object.fromEntries(
+              Array.from({ length: MAXIMUM_ACCOUNT_SETTINGS_SELECTORS + 1 }, (_, index) => [
+                index.toString(16).padStart(12, "0"),
+                [20, 10],
+              ]),
+            ),
+          },
+        },
+      ],
+    ] as const) {
+      expect(AccountSettingsSchema.safeParse(broken).success, name).toBe(false);
+    }
+
+    expect(
+      AccountSettingsUpdateRequestSchema.safeParse({
+        protocol_version: PROTOCOL_VERSION,
+        revision: 1,
+        ...settings,
+      }).success,
+    ).toBe(false);
+    expect(
+      AccountSettingsUpdateRequestSchema.safeParse({
+        protocol_version: PROTOCOL_VERSION,
+        updated_at: "2026-09-21T10:00:00Z",
+        ...settings,
+      }).success,
+    ).toBe(false);
   });
 
   it("keeps agent, device, account, and quota out of the shape a public page answers with", () => {

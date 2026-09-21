@@ -1812,6 +1812,112 @@ export const PublicProfileResponseSchema = z
   .strict();
 export type PublicProfileResponse = z.infer<typeof PublicProfileResponseSchema>;
 
+/**
+ * The Account settings document: alert policy and the monthly budget, keyed so every device
+ * names the same subscription without saying which provider it is.
+ *
+ * A selector is `SHA-256(provider|fingerprint|scope|source_id)[0:12]` in hex. Absence of a
+ * selector means the default remaining-percent pair `[20, 10]`. `enabled` is not in this
+ * document: it is the per-device notification permission, and syncing it would turn alerts off
+ * everywhere from one denied device.
+ */
+export const ACCOUNT_SETTINGS_SELECTOR_PATTERN = /^[0-9a-f]{12}$/;
+export const MAXIMUM_ACCOUNT_SETTINGS_SELECTORS = 256;
+export const ACCOUNT_SETTINGS_DEFAULT_THRESHOLDS = [20, 10] as const;
+export const ACCOUNT_BUDGET_MAXIMUM_USD = 1_000_000;
+export const ACCOUNT_BUDGET_AMOUNT_PATTERN = /^\d{1,7}(\.\d{1,2})?$/;
+/** `updated_at` on a synthesized revision-0 document: nothing has been written yet. */
+export const ACCOUNT_SETTINGS_UNSET_UPDATED_AT = "1970-01-01T00:00:00Z";
+
+const AccountSettingsSelectorSchema = z.string().regex(ACCOUNT_SETTINGS_SELECTOR_PATTERN);
+
+const AccountSettingsThresholdListSchema = z
+  .array(z.number().int().min(1).max(99))
+  .min(1)
+  .max(2)
+  .superRefine((values, context) => {
+    for (let index = 1; index < values.length; index += 1) {
+      const previous = values[index - 1];
+      const current = values[index];
+      if (previous === undefined || current === undefined || current >= previous) {
+        context.addIssue({
+          code: "custom",
+          message: "Thresholds must be strictly descending.",
+        });
+        return;
+      }
+    }
+  });
+
+const AccountSettingsThresholdsSchema = z
+  .record(AccountSettingsSelectorSchema, AccountSettingsThresholdListSchema)
+  .superRefine((thresholds, context) => {
+    if (Object.keys(thresholds).length > MAXIMUM_ACCOUNT_SETTINGS_SELECTORS) {
+      context.addIssue({
+        code: "custom",
+        message: `At most ${MAXIMUM_ACCOUNT_SETTINGS_SELECTORS} selectors.`,
+      });
+    }
+  });
+
+const AccountBudgetAmountSchema = z
+  .string()
+  .regex(ACCOUNT_BUDGET_AMOUNT_PATTERN)
+  .refine((value) => {
+    const amount = Number(value);
+    return Number.isFinite(amount) && amount > 0 && amount <= ACCOUNT_BUDGET_MAXIMUM_USD;
+  }, "Budget amount must be greater than 0 and at most 1000000.");
+
+const AccountSettingsAlertsSchema = z
+  .object({
+    reset_reminders: z.boolean(),
+    pace_alerts: z.boolean(),
+    thresholds: AccountSettingsThresholdsSchema,
+  })
+  .strict();
+
+const AccountSettingsBudgetSchema = z
+  .object({
+    amount_usd: AccountBudgetAmountSchema.nullable(),
+    alerts: z.boolean(),
+  })
+  .strict();
+
+/** The stored document: alert policy and the budget, with no revision envelope. */
+export const AccountSettingsSchema = z
+  .object({
+    alerts: AccountSettingsAlertsSchema,
+    budget: AccountSettingsBudgetSchema,
+  })
+  .strict();
+export type AccountSettings = z.infer<typeof AccountSettingsSchema>;
+
+export const DEFAULT_ACCOUNT_SETTINGS: AccountSettings = {
+  alerts: { reset_reminders: true, pace_alerts: true, thresholds: {} },
+  budget: { amount_usd: null, alerts: true },
+};
+
+/** What a write states. `revision` and `updated_at` are assigned by Relay, not the client. */
+export const AccountSettingsUpdateRequestSchema = z
+  .object({
+    protocol_version: z.literal(PROTOCOL_VERSION),
+    alerts: AccountSettingsAlertsSchema,
+    budget: AccountSettingsBudgetSchema,
+  })
+  .strict();
+export type AccountSettingsUpdateRequest = z.infer<typeof AccountSettingsUpdateRequestSchema>;
+
+export const AccountSettingsResponseSchema = z
+  .object({
+    protocol_version: z.literal(PROTOCOL_VERSION),
+    revision: SafeNonnegativeIntegerSchema,
+    updated_at: Rfc3339InstantSchema,
+    alerts: AccountSettingsAlertsSchema,
+    budget: AccountSettingsBudgetSchema,
+  })
+  .strict();
+export type AccountSettingsResponse = z.infer<typeof AccountSettingsResponseSchema>;
+
 /** A public page names at most this many models in a period, largest first. */
 export const MAXIMUM_PUBLIC_USAGE_MODELS = 12;
 /** The public heatmap covers a year. */
@@ -2024,6 +2130,9 @@ export type UsageActivityDayRead = z.infer<typeof UsageActivityDayReadSchema>;
 export const PublicProfileResponseReadSchema = PublicProfileResponseSchema.loose();
 export type PublicProfileResponseRead = z.infer<typeof PublicProfileResponseReadSchema>;
 
+export const AccountSettingsResponseReadSchema = AccountSettingsResponseSchema.loose();
+export type AccountSettingsResponseRead = z.infer<typeof AccountSettingsResponseReadSchema>;
+
 export type UsageUnpricedItemRead = z.infer<typeof UsageUnpricedItemReadSchema>;
 export type UsageCostOutcomeRead = z.infer<typeof UsageCostOutcomeReadSchema>;
 export type UsageSummaryTotalsRead = z.infer<typeof UsageSummaryTotalsReadSchema>;
@@ -2169,6 +2278,8 @@ const RelayErrorCodeSchema = z.enum([
   "device_deleted",
   "client_upgrade_required",
   "conflict",
+  "precondition_required",
+  "precondition_failed",
   "internal_error",
 ]);
 export type RelayErrorCode = z.infer<typeof RelayErrorCodeSchema>;

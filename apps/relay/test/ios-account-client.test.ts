@@ -217,7 +217,11 @@ describe("quota-ios account and device client", () => {
       .bind(harness.accountId)
       .first<{ client_kind: string; device_id: string; scopes_json: string }>();
     expect(session).toMatchObject({ client_kind: "ios", device_id: tokens.device_id });
-    expect(JSON.parse(session?.scopes_json ?? "[]")).toEqual(["account:read", "device:write"]);
+    expect(JSON.parse(session?.scopes_json ?? "[]")).toEqual([
+      "account:read",
+      "device:write",
+      "account:settings",
+    ]);
 
     // The phone is a Device every client reads, and it says which platform it runs.
     const summary = await harness.app.request("https://quota.gotry.io/api/v6/account/summary", {

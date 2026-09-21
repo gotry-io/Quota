@@ -14,6 +14,8 @@ and is not in force until review removes the Draft label.
 - Device display name and platform
 - Normalized quota observations
 - Sparse hourly Usage rows and daily rollups
+- Account settings: remaining-quota thresholds keyed by an opaque subscription selector, reset and
+  pace switches, and an optional monthly budget amount. Retained until the Account is deleted.
 
 ## What Quota does not collect
 

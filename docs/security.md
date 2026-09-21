@@ -197,7 +197,9 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   file sees only the irreversible id. Logout deletes the salt so prior deep links and widget Intent
   configuration fall back to Overview.
 - A collection or viewer login issues one access/refresh family, and what it may do is the scopes
-  on its own session row ([ADR 0027](decisions/0027-one-token-per-client.md)). Access tokens are
+  on its own session row ([ADR 0027](decisions/0027-one-token-per-client.md)). Web, device, and
+  reader sessions all carry `account:settings`, which authorizes only
+  `PUT /api/v2/account/settings`. Access tokens are
   short-lived, a replayed refresh revokes its whole token family, and only HMACs of server session
   and grant secrets are stored. Each client's tokens are hashed under a domain its prefix names, so
   a token issued to one cannot be presented as another's.
@@ -246,6 +248,22 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   Caddy), and it computes its `ETag` before any Usage row is read. `PUT /api/v2/account/profile`
   writes the handle and the three owner switches, and requires `account:manage`, an exact
   same-origin `Origin` with same-origin Fetch Metadata when present, and a per-Account rate limit.
+
+## Account settings
+
+- Alert policy and the monthly budget follow the Account
+  ([ADR 0061](decisions/0061-alert-policy-and-the-budget-follow-the-account.md)). The document is
+  opaque 12-hex subscription selectors, remaining-percent thresholds (1–2 integers in 1…99),
+  reset/pace switches, and an optional budget amount as a decimal string, or `null`. It does not
+  carry provider names, fingerprints, credentials, or the per-device `enabled` switch. Relay
+  retains the row until Delete Account; the foreign key cascades, and `deleteAccountData` names
+  the table too.
+- `GET /api/v2/account/settings` requires `account:read`, answers `ETag: "<revision>"` and
+  `Cache-Control: private, no-cache`, and synthesizes the defaults at revision 0 when there is no
+  row. `PUT /api/v2/account/settings` requires `account:settings` and `If-Match`; a web session
+  also presents a same-origin Origin. Missing `If-Match` is `428`; stale is `412` with the current
+  document. Rate limit is `profileMutation` (30 / 10 min) per Account. The compare-and-set is one
+  `UPDATE … WHERE revision = ?` or `INSERT … WHERE NOT EXISTS`.
 
 ## Upload, Usage, and deletion safety
 

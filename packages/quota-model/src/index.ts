@@ -1438,3 +1438,15 @@ export function quotaPace(window: PaceWindow, now: Date): QuotaPace {
       .replace(/\.\d+Z$/, "Z"),
   };
 }
+
+export {
+  type AccountSettingsEdit,
+  type FirstSyncAccountDocument,
+  type FirstSyncAction,
+  type FirstSyncPlan,
+  isDefaultAccountSettings,
+  type NormalizeAccountSettingsResult,
+  normalizeAccountSettings,
+  planFirstSync,
+  reapplyEdit,
+} from "./account-settings.ts";

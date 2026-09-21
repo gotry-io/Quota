@@ -14,15 +14,25 @@ export interface RateLimitRow {
  * What each client is allowed to do, stated once.
  *
  * A browser is the only place an Account can be managed, because managing it requires a recent
- * sign-in and an exact same-origin request that only a browser makes. A client that registers a
- * Device reads the Account and writes that Device; one that registers none only reads. The phone
- * is on either side of that line depending on whether it presented an installation
+ * sign-in and an exact same-origin request that only a browser makes. Alert policy and the
+ * budget are the exception: `account:settings` is granted to web, device, and reader sessions so
+ * every client can write that one document. A client that registers a Device also writes that
+ * Device; one that registers none only reads, plus settings. The phone is on either side of that
+ * line depending on whether it presented an installation
  * ([ADR 0041](../../../../docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md)), which is
  * why the scopes are named for what a session is rather than for which product holds it.
  */
-export const WEB_SESSION_SCOPES: readonly SessionScope[] = ["account:read", "account:manage"];
-export const DEVICE_SESSION_SCOPES: readonly SessionScope[] = ["account:read", "device:write"];
-export const READER_SESSION_SCOPES: readonly SessionScope[] = ["account:read"];
+export const WEB_SESSION_SCOPES: readonly SessionScope[] = [
+  "account:read",
+  "account:manage",
+  "account:settings",
+];
+export const DEVICE_SESSION_SCOPES: readonly SessionScope[] = [
+  "account:read",
+  "device:write",
+  "account:settings",
+];
+export const READER_SESSION_SCOPES: readonly SessionScope[] = ["account:read", "account:settings"];
 
 export function encodeScopes(scopes: readonly SessionScope[]): string {
   if (
