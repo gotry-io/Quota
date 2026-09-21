@@ -28,7 +28,10 @@ links to it rather than restating it.
   menu-bar panel (Overview and one provider's detail), and one main window whose sidebar is Quota ·
   Usage · Settings. Quota is the subscription list and the selected subscription's windows and
   remaining history; Usage is this Mac or Account periods; Settings holds preferences. QuotaBar
-  adopts Liquid Glass on macOS 26, with the existing material fallback below it. QuotaBar lives in
+  uses Liquid Glass on macOS 26 for chrome (sidebar, toolbar, menu-bar panel, transients);
+  data cards are opaque
+  ([ADR 0057](decisions/0057-content-is-opaque-glass-is-chrome.md)). Below 26, chrome uses the
+  existing material fallback. QuotaBar lives in
   the menu bar; **Show in Dock** is off by default, so a Dock icon exists only while the main window
   is open. A
   Login Item launch does not show the main window. The desktop widgets read the same

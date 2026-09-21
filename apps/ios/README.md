@@ -190,6 +190,18 @@ budget, Settings appearance/budget, and breakdown count rows, wrapping subscript
 and readings titles, and the sheet Done control). `scripts/ios-ui-audit-summary.mjs` prints those
 outcomes from an `.xcresult`.
 
+Because `incomplete` never fails, a screen whose audit times out every night is never audited and
+nothing says so, so the nightly run also judges the trend. `scripts/ios-audit-trend.mjs` reads the
+`ios-screens` artifacts of the recent nightly runs and reddens the nightly job when a
+(profile, screen, test) has no completed non-contrast audit in its last five **eligible** runs. A run
+counts for a screen only when that screen appears in it: a skipped test, a profile that was not
+captured, a screen added later, and a run whose 14-day artifact has expired neither count towards the
+five nor reset them. Completed means none of the non-contrast types the record reports is
+`incomplete`; contrast is excluded, as the audit policy in `DESIGN.md` states. The gate stores
+nothing, opens or updates one issue — `iOS screens: audits not completing` — and closes it when the
+trend clears. It runs on the nightly and manual runs on main, never on a pull request, and never
+blocks a merge.
+
 **What that trades.** Copy of the error and empty variants, dark-mode rendering, the broad Dynamic
 Type and contrast audits and most large-type reachability no longer block a merge; they are reported
 by `ios-screens`, and a confirmed finding there is a defect to fix. Log Out and Delete Account sit

@@ -145,10 +145,10 @@
       // Sidebar `List` is an AppKit outline view and does not draw cells unless it
       // lives in a window. Park it off-screen; do not order it front.
       // Liquid Glass is composited by the window server, so an off-screen bitmap shows no
-      // glass at all (a white sidebar, cards without a surface). With
+      // glass chrome (a white sidebar). Opaque cards still draw their fill. With
       // QUOTABAR_SCREENSHOTS_ONSCREEN the window is ordered front and captured through the
       // window server instead; scripts/test-swift.sh sets it, so CI's macOS 26 runner
-      // produces real renders. Locally the off-screen bitmap stays the default.
+      // produces real chrome. Locally the off-screen bitmap stays the default.
       let onScreen = ProcessInfo.processInfo.environment["QUOTABAR_SCREENSHOTS_ONSCREEN"] == "1"
       let origin = onScreen ? NSPoint(x: 40, y: 40) : NSPoint(x: -10_000, y: -10_000)
       let window = NSWindow(
