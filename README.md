@@ -69,6 +69,7 @@ not generated from git tags.
 - [Security](docs/security.md)
 - [Design language](docs/design.md)
 - [Provider collection](docs/provider-collection.md)
+- [Provider capability matrix](docs/providers/README.md)
 - [Usage sources](docs/usage-sources.md)
 - [Generated reference](docs/reference.md)
 - [Self-host runbook](docs/relay-self-host.md)
@@ -100,7 +101,10 @@ packages/relay-core/      Runtime-neutral account and Usage state contracts
 docs/                     Architecture, security, provider collection, usage sources, design language, generated reference, runbook, research, and decision records
 ```
 
-Provider registration starts in `packages/provider/catalog.json`. Colour, remaining-quota bands,
+Provider registration starts in `packages/provider/catalog.json`, and what Quota can do with each
+provider — with what validates each capability — is the generated
+[provider capability matrix](docs/providers/README.md). No new provider is added this cycle
+([ADR 0060](docs/decisions/0060-provider-freeze-and-two-tiers.md)). Colour, remaining-quota bands,
 spacing, and radii start in `packages/design-tokens/tokens.json`. Wire JSON uses `snake_case`. OAuth
 and Device control remain on v2; quota, Usage, and Account summary use managed-data v6.
 

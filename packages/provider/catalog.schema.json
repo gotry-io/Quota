@@ -30,7 +30,8 @@
         "credential_config",
         "browser_session",
         "default_base_url",
-        "base_url_environment_key"
+        "base_url_environment_key",
+        "capabilities"
       ],
       "properties": {
         "id": {
@@ -82,7 +83,8 @@
         },
         "status_page": {
           "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/status_page" }]
-        }
+        },
+        "capabilities": { "$ref": "#/$defs/capabilities" }
       }
     },
     "api_key_config": {
@@ -170,6 +172,130 @@
           "description": "HTTPS Statuspage v2 status.json when kind is statuspage_v2. A human status page, or null, when kind is none."
         }
       }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tier", "known_gaps", "validated"],
+      "description": "What Quota can do with this provider, and how this repository knows. Rendered by scripts/generate-capability-matrix.mjs into docs/providers/README.md.",
+      "properties": {
+        "tier": {
+          "type": "string",
+          "enum": ["first_class", "best_effort"],
+          "description": "first_class providers are the ones a regression blocks a release on. See the provider freeze ADR."
+        },
+        "known_gaps": {
+          "type": "array",
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": { "type": "string", "maxLength": 64 },
+          "description": "A first_class provider's unverified capability keys, named so the gap can only shrink: the generator refuses an unverified cell that is not listed and a listed key that is no longer unverified. Empty for a best_effort provider, whose Unverified table already says everything."
+        },
+        "validated": {
+          "type": "object",
+          "minProperties": 1,
+          "description": "One entry per capability Quota has for this provider. A capability absent from this map is one Quota does not have. The key set is closed; the value is how the capability was validated.",
+          "propertyNames": {
+            "enum": [
+              "quota.per_minute",
+              "quota.five_hour",
+              "quota.daily",
+              "quota.weekly",
+              "quota.monthly",
+              "quota.plan_cycle",
+              "quota.balance",
+              "usage.local_logs",
+              "channel.cli_credentials",
+              "channel.api_key",
+              "channel.browser_session_macos",
+              "channel.web_session_ios",
+              "account.sync",
+              "status.statuspage_v2",
+              "pricing.api_equivalent",
+              "pricing.source_reported"
+            ]
+          },
+          "additionalProperties": { "$ref": "#/$defs/validation" }
+        }
+      }
+    },
+    "validation": {
+      "description": "How a capability was validated. fixture names a recorded fixture in this repository; test names the one test function that asserts it; live names the date a real provider account answered; unverified means this repository proves nothing.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "file", "name"],
+          "properties": {
+            "kind": { "const": "test" },
+            "file": {
+              "type": "string",
+              "maxLength": 256,
+              "pattern": "^(packages/service/(src|tests)/|packages/apple-client/|packages/apple-shared/|apps/ios/Tests/)[A-Za-z0-9._/-]+\\.(rs|swift)$",
+              "description": "Repository-relative path to the test source. The generator refuses a path that does not exist."
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+              "description": "The test function's name. The generator refuses a name that file does not define exactly once, or defines without a test attribute."
+            },
+            "note": { "$ref": "#/$defs/validation_note" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "fixture"],
+          "properties": {
+            "kind": { "const": "fixture" },
+            "fixture": {
+              "type": "string",
+              "maxLength": 256,
+              "pattern": "^packages/(provider|protocol|service)/fixtures/[A-Za-z0-9._/-]+$",
+              "description": "Repository-relative path to a recorded fixture. The generator refuses a path that does not exist."
+            },
+            "pointer": {
+              "type": "string",
+              "maxLength": 256,
+              "pattern": "^/[^\\u0000-\\u001F\\u007F]*$",
+              "description": "RFC 6901 JSON pointer into that fixture. Required for a .json fixture; the generator refuses one that does not resolve."
+            },
+            "note": { "$ref": "#/$defs/validation_note" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "date"],
+          "properties": {
+            "kind": { "const": "live" },
+            "date": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+              "description": "The date a real provider account answered, as this repository records it. The generator refuses a date it cannot parse or one in the future."
+            },
+            "note": { "$ref": "#/$defs/validation_note" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {
+            "kind": { "const": "unverified" },
+            "note": { "$ref": "#/$defs/validation_note" }
+          }
+        }
+      ]
+    },
+    "validation_note": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[^\\u0000-\\u001F\\u007F]*$",
+      "description": "One phrase naming what does cover this capability when no fixture does, or what the fixture leaves out. Rendered beside the provenance."
     }
   }
 }
