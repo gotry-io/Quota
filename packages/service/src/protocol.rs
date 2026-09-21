@@ -12,7 +12,7 @@ use chrono_tz::Tz;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
-pub const IPC_VERSION: u32 = 3;
+pub const IPC_VERSION: u32 = 4;
 pub const MAXIMUM_LINE_BYTES: usize = 1_048_576;
 pub const MAXIMUM_REQUEST_ID_BYTES: usize = 128;
 /// Allowed Quota collection intervals, in seconds. The default is five minutes.
@@ -40,6 +40,8 @@ pub enum Operation {
     CancelLogin,
     Logout,
     SetUsageUpload,
+    SetAccountSettings,
+    RefreshAccountSettings,
     SetGroupUsageByProject,
     SetQuotaRefreshInterval,
     SetOverviewSourcePin,
@@ -448,6 +450,136 @@ pub struct SetUsageUploadPayload {
     pub enabled: bool,
 }
 
+/// The stored Account settings document as QuotaBar writes it: policy only, no envelope.
+///
+/// Relay assigns `revision` and `updated_at`. The helper adds `protocol_version` on the PUT.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AccountSettingsWriteDocument {
+    pub alerts: AccountSettingsAlerts,
+    pub budget: AccountSettingsBudget,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AccountSettingsAlerts {
+    pub reset_reminders: bool,
+    pub pace_alerts: bool,
+    pub thresholds: BTreeMap<String, Vec<i64>>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AccountSettingsBudget {
+    pub amount_usd: Option<String>,
+    pub alerts: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetAccountSettingsPayload {
+    pub document: AccountSettingsWriteDocument,
+    pub if_match: String,
+}
+
+impl SetAccountSettingsPayload {
+    pub fn validate(&self) -> Result<(), IpcError> {
+        let invalid = || IpcError::new(ErrorCode::InvalidRequest, RecoveryAction::None);
+        if self.if_match.is_empty()
+            || self.if_match.len() > 64
+            || self.if_match.trim() != self.if_match
+            || self.if_match.chars().any(|ch| ch.is_control())
+        {
+            return Err(invalid());
+        }
+        self.document.validate()
+    }
+}
+
+impl AccountSettingsWriteDocument {
+    pub fn validate(&self) -> Result<(), IpcError> {
+        let invalid = || IpcError::new(ErrorCode::InvalidRequest, RecoveryAction::None);
+        if self.alerts.thresholds.len() > 256 {
+            return Err(invalid());
+        }
+        for (selector, thresholds) in &self.alerts.thresholds {
+            if !is_account_settings_selector(selector)
+                || thresholds.is_empty()
+                || thresholds.len() > 2
+            {
+                return Err(invalid());
+            }
+            let mut previous: Option<i64> = None;
+            for value in thresholds {
+                if !(1..=99).contains(value) || previous.is_some_and(|prior| *value >= prior) {
+                    return Err(invalid());
+                }
+                previous = Some(*value);
+            }
+        }
+        if let Some(amount) = &self.budget.amount_usd
+            && !valid_budget_amount_usd(amount)
+        {
+            return Err(invalid());
+        }
+        Ok(())
+    }
+}
+
+fn is_account_settings_selector(value: &str) -> bool {
+    value.len() == 12
+        && value
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+fn valid_budget_amount_usd(value: &str) -> bool {
+    let (whole, fraction) = match value.split_once('.') {
+        Some((whole, fraction)) => (whole, Some(fraction)),
+        None => (value, None),
+    };
+    if whole.is_empty() || whole.len() > 7 || !whole.bytes().all(|byte| byte.is_ascii_digit()) {
+        return false;
+    }
+    if let Some(fraction) = fraction
+        && (fraction.is_empty()
+            || fraction.len() > 2
+            || !fraction.bytes().all(|byte| byte.is_ascii_digit()))
+    {
+        return false;
+    }
+    value
+        .parse::<f64>()
+        .ok()
+        .is_some_and(|amount| amount > 0.0 && amount <= 1_000_000.0)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountSettingsWriteOutcome {
+    Written,
+    Conflict,
+}
+
+/// What `set_account_settings` answers: the document Relay now holds, and whether this write
+/// landed or must be re-applied onto it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccountSettingsMutationResult {
+    pub outcome: AccountSettingsWriteOutcome,
+    pub document: Value,
+    pub revision: u64,
+}
+
+/// The Account settings document as `get_state` pushes it. Absent when signed out, and until
+/// the first successful read for this Account.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AccountSettingsState {
+    pub document: Value,
+    pub revision: u64,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SetGroupUsageByProjectPayload {
@@ -710,6 +842,8 @@ pub struct StateSnapshot {
     pub quota: ComponentState,
     pub usage: ComponentState,
     pub account: ComponentState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_settings: Option<AccountSettingsState>,
     pub pricing: ComponentState,
     pub providers: Vec<ProviderConfigView>,
     pub provider_status: Vec<ProviderStatusView>,
@@ -1072,6 +1206,81 @@ mod tests {
         assert_eq!(event["type"], "event");
         assert_eq!(event["event"], "state_changed");
         assert_eq!(event["changed_components"][0], "quota");
+    }
+
+    fn set_account_settings_request(payload: &str) -> IpcRequest {
+        serde_json::from_str(&format!(
+            r#"{{"type":"request","request_id":"r5","operation":"set_account_settings","payload":{payload}}}"#
+        ))
+        .expect("set_account_settings envelope")
+    }
+
+    #[test]
+    fn set_account_settings_payload_is_strict_and_refuses_broken_documents() {
+        let valid = set_account_settings_request(
+            r#"{"document":{"alerts":{"reset_reminders":true,"pace_alerts":true,"thresholds":{"a1b2c3d4e5f6":[20,10]}},"budget":{"amount_usd":"250.00","alerts":true}},"if_match":"\"0\""}"#,
+        );
+        let payload: SetAccountSettingsPayload = valid.decode_payload().expect("payload");
+        assert!(payload.validate().is_ok());
+        assert_eq!(payload.if_match, "\"0\"");
+
+        let extra = set_account_settings_request(
+            r#"{"document":{"alerts":{"reset_reminders":true,"pace_alerts":true,"thresholds":{}},"budget":{"amount_usd":null,"alerts":true}},"if_match":"\"0\"","extra":true}"#,
+        );
+        assert!(extra.decode_payload::<SetAccountSettingsPayload>().is_err());
+
+        let revision_on_document = set_account_settings_request(
+            r#"{"document":{"revision":1,"alerts":{"reset_reminders":true,"pace_alerts":true,"thresholds":{}},"budget":{"amount_usd":null,"alerts":true}},"if_match":"\"0\""}"#,
+        );
+        assert!(
+            revision_on_document
+                .decode_payload::<SetAccountSettingsPayload>()
+                .is_err()
+        );
+
+        let empty_match: SetAccountSettingsPayload = set_account_settings_request(
+            r#"{"document":{"alerts":{"reset_reminders":true,"pace_alerts":true,"thresholds":{}},"budget":{"amount_usd":null,"alerts":true}},"if_match":""}"#,
+        )
+        .decode_payload()
+        .expect("empty if_match still decodes");
+        assert_eq!(
+            empty_match.validate().unwrap_err().code,
+            ErrorCode::InvalidRequest
+        );
+
+        let unsorted: SetAccountSettingsPayload = set_account_settings_request(
+            r#"{"document":{"alerts":{"reset_reminders":true,"pace_alerts":true,"thresholds":{"a1b2c3d4e5f6":[10,20]}},"budget":{"amount_usd":null,"alerts":true}},"if_match":"\"0\""}"#,
+        )
+        .decode_payload()
+        .expect("unsorted thresholds still decode");
+        assert_eq!(
+            unsorted.validate().unwrap_err().code,
+            ErrorCode::InvalidRequest
+        );
+
+        let amount_zero: SetAccountSettingsPayload = set_account_settings_request(
+            r#"{"document":{"alerts":{"reset_reminders":true,"pace_alerts":true,"thresholds":{}},"budget":{"amount_usd":"0","alerts":true}},"if_match":"\"0\""}"#,
+        )
+        .decode_payload()
+        .expect("zero amount still decodes");
+        assert_eq!(
+            amount_zero.validate().unwrap_err().code,
+            ErrorCode::InvalidRequest
+        );
+    }
+
+    #[test]
+    fn refresh_account_settings_payload_is_empty_and_strict() {
+        let request: IpcRequest = serde_json::from_str(
+            r#"{"type":"request","request_id":"r6","operation":"refresh_account_settings","payload":{}}"#,
+        )
+        .expect("refresh envelope");
+        let _: EmptyPayload = request.decode_payload().expect("empty");
+        let extra: IpcRequest = serde_json::from_str(
+            r#"{"type":"request","request_id":"r6","operation":"refresh_account_settings","payload":{"force":true}}"#,
+        )
+        .expect("envelope remains valid");
+        assert!(extra.decode_payload::<EmptyPayload>().is_err());
     }
 
     #[test]
