@@ -476,6 +476,93 @@ public actor AccountClient {
     }
   }
 
+  /// What one quota-history upload pass stored, and the error that stopped a later chunk.
+  public struct QuotaHistoryUploadBatch: Equatable, Sendable {
+    public var responses: [QuotaHistoryUploadResponse]
+    public var error: RelayClientError?
+
+    public init(responses: [QuotaHistoryUploadResponse], error: RelayClientError?) {
+      self.responses = responses
+      self.error = error
+    }
+  }
+
+  /// Upload downsampled buckets, one device-sync then each chunk. A failed chunk keeps the
+  /// responses of the chunks that were accepted before it.
+  public func uploadQuotaHistory(
+    chunks: [[QuotaHistoryUploadRequest.Series]]
+  ) async -> QuotaHistoryUploadBatch {
+    while snapshotUploadBusy {
+      await withCheckedContinuation { snapshotUploadWaiters.append($0) }
+    }
+    snapshotUploadBusy = true
+    defer { finishSnapshotUploadLock() }
+    let prepared = chunks.compactMap { series -> [QuotaHistoryUploadRequest.Series]? in
+      let nonempty = series.filter { !$0.points.isEmpty }
+      return nonempty.isEmpty ? nil : nonempty
+    }
+    guard !prepared.isEmpty else {
+      return QuotaHistoryUploadBatch(responses: [], error: nil)
+    }
+    let generation: Int
+    do {
+      generation = try await withAuthorizedSession { session in
+        guard session.deviceID != nil else { throw AccountClientError.notADevice }
+        let control = try await relay.fetchDeviceSync(accessToken: session.accessToken)
+        return control.deviceGeneration
+      }
+    } catch let error as RelayClientError {
+      return QuotaHistoryUploadBatch(responses: [], error: error)
+    } catch let error as AccountClientError {
+      return QuotaHistoryUploadBatch(responses: [], error: relayError(error))
+    } catch {
+      return QuotaHistoryUploadBatch(responses: [], error: .unavailable)
+    }
+    var responses: [QuotaHistoryUploadResponse] = []
+    for series in prepared {
+      do {
+        let response = try await withAuthorizedSession { session in
+          guard session.deviceID != nil else { throw AccountClientError.notADevice }
+          return try await relay.uploadQuotaHistory(
+            accessToken: session.accessToken,
+            request: QuotaHistoryUploadRequest(generation: generation, series: series)
+          )
+        }
+        responses.append(response)
+      } catch let error as RelayClientError {
+        return QuotaHistoryUploadBatch(responses: responses, error: error)
+      } catch let error as AccountClientError {
+        return QuotaHistoryUploadBatch(responses: responses, error: relayError(error))
+      } catch {
+        return QuotaHistoryUploadBatch(responses: responses, error: .unavailable)
+      }
+    }
+    return QuotaHistoryUploadBatch(responses: responses, error: nil)
+  }
+
+  /// One subscription's merged Account history. `etag` is the validator the caller already holds.
+  public func fetchQuotaHistory(
+    provider: ProviderID,
+    fingerprint: String,
+    since: Date,
+    etag: String?
+  ) async throws -> QuotaHistoryRead {
+    try await withAuthorizedSession { session in
+      try await relay.fetchQuotaHistory(
+        accessToken: session.accessToken,
+        provider: provider,
+        fingerprint: fingerprint,
+        since: since,
+        etag: etag
+      )
+    }
+  }
+
+  private func relayError(_ error: AccountClientError) -> RelayClientError {
+    if case .relay(let relayError) = error { return relayError }
+    return .unavailable
+  }
+
   private func loadBoundCachedSummary() throws -> CachedAccountSummary? {
     let cached = try summaryStore.load()
     guard let cached else { return nil }

@@ -68,6 +68,7 @@ final class AppModel {
   private let localStore: any LocalCollectionStoring
   private let sampleStore: any LocalQuotaSampleStoring
   private let localCollector: LocalCollector
+  let quotaHistory: QuotaHistoryCoordinator
   private let installation: any InstallationIdentifying
   private let providerStatusClient: any ProviderStatusServing
   private let now: @Sendable () -> Date
@@ -181,6 +182,8 @@ final class AppModel {
     providerSessions: any ProviderSessionStoring = KeychainProviderSessionStore(),
     localStore: any LocalCollectionStoring = MemoryLocalCollectionStore(),
     sampleStore: any LocalQuotaSampleStoring = MemoryLocalQuotaSampleStore(),
+    historyWatermarks: any QuotaHistoryWatermarkStoring = MemoryQuotaHistoryWatermarkStore(),
+    historyReads: any QuotaHistoryReadStoring = MemoryQuotaHistoryReadStore(),
     localCollector: LocalCollector? = nil,
     providerStatusClient: any ProviderStatusServing = IdleProviderStatusClient(),
     budgetStore: UsageBudgetStore = UsageBudgetStore(),
@@ -234,6 +237,20 @@ final class AppModel {
       connectsToAccount: syncAccountSettings
     )
     self.accountSettings = accountSettings
+    let quotaHistory = QuotaHistoryCoordinator(
+      account: account,
+      watermarks: historyWatermarks,
+      reads: historyReads,
+      now: now
+    )
+    self.quotaHistory = quotaHistory
+    quotaHistory.historySync = { [weak accountSettings] in accountSettings?.historySync ?? false }
+    quotaHistory.noteSyncOff = { [weak accountSettings] in accountSettings?.noteHistorySyncOff() }
+    quotaHistory.localSamples = { [weak self] in self?.localSamples ?? LocalQuotaSamples() }
+    quotaHistory.snapshots = { [weak self] in self?.localCollection?.snapshots ?? [] }
+    accountSettings.onHistoryEdited = { [weak quotaHistory] in
+      await quotaHistory?.sync()
+    }
     usage.isSignedIn = { [weak self] in self?.phase == .signedIn }
     usage.sessionEpoch = { [weak self] in self?.accountSessionEpoch ?? 0 }
     usage.onSessionExpired = { [weak self] in self?.applyExpired() }
@@ -282,6 +299,10 @@ final class AppModel {
       localStore: FileLocalCollectionStore.applicationSupport() ?? MemoryLocalCollectionStore(),
       sampleStore: FileLocalQuotaSampleStore.applicationSupport()
         ?? MemoryLocalQuotaSampleStore(),
+      historyWatermarks: FileQuotaHistoryWatermarkStore.applicationSupport()
+        ?? MemoryQuotaHistoryWatermarkStore(),
+      historyReads: FileQuotaHistoryReadStore.applicationSupport()
+        ?? MemoryQuotaHistoryReadStore(),
       providerStatusClient: ProviderStatusClient(
         catalog: RelayProviderStatusCatalog(relay: relay),
         store: try? ProtectedFileProviderStatusStore.applicationSupport()
@@ -776,21 +797,38 @@ final class AppModel {
     await refresh()
   }
 
-  /// Send what this phone just read to the Account, when it is a Device.
+  /// Send what this phone just read to the Account, when it is a Device, then the quota-history
+  /// buckets while the Account switch is on.
   ///
   /// Only the readings go: the provider sessions behind them stay in this device's Keychain, and
   /// Usage is a Mac's, because this phone has none
   /// ([ADR 0041](../../../docs/decisions/0041-ios-is-a-device-when-sync-is-paid.md)).
+  /// The history upload is awaited here, the same way the snapshot upload is, so a background
+  /// refresh does not finish while either write is still in flight.
   private func uploadLocalReadings(_ collection: LocalCollection?) async {
-    guard let collection, !collection.snapshots.isEmpty else { return }
+    // A background wake can run `refresh` before `restore` has copied the session into memory.
+    if sessionActivation == nil, let session = try? await account.loadSession() {
+      sessionActivation = session.activation
+      sessionDeviceID = session.deviceID
+    }
     guard sessionDeviceID != nil, sessionActivation == .active else { return }
     let uploadInterval = LaunchSignposts.begin("upload")
     defer { LaunchSignposts.end("upload", uploadInterval) }
-    if let error = await account.uploadSnapshots(collection.snapshots) {
-      if error == .sessionExpired {
+    if let collection, !collection.snapshots.isEmpty {
+      if let error = await account.uploadSnapshots(collection.snapshots),
+        error == .sessionExpired
+      {
         applyExpired()
+        return
       }
     }
+    // Same task the background refresh awaits for the snapshot upload (ADR 0041).
+    await quotaHistory.sync()
+  }
+
+  /// The detail chart's Account series, when the switch is on. A miss is today's local chart.
+  func loadAccountQuotaHistory(for subscription: QuotaSubscription) async {
+    await quotaHistory.load(subscription)
   }
 
   /// Keep what this pass read, and let Settings say which sessions the provider refused.
@@ -1204,6 +1242,7 @@ final class AppModel {
     overviewPath = []
     accountSessionEpoch += 1
     usage.accountWentAway()
+    quotaHistory.clear()
     // The providers this phone signed in to are not the account's, so what it collects for
     // itself survives losing the account — and so does the background window that refreshes it.
     updateBackgroundRefreshAsk()

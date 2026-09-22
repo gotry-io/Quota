@@ -26,6 +26,8 @@ struct RelayClientTests {
         "/api/v2/device/sync",
         "/api/v6/device/snapshots",
         "/api/v2/providers/status",
+        "/api/v6/device/quota-history",
+        "/api/v6/account/quota-history",
       ])
     #expect(RelayRoute.allCases.allSatisfy { !$0.path.contains("/device/usage") })
     #expect(RelayRoute.allCases.allSatisfy { !$0.path.contains("/account/devices") })
@@ -34,6 +36,7 @@ struct RelayClientTests {
       Set(RelayRoute.allCases.filter { $0.method == "PUT" }.map(\.path)) == [
         "/api/v2/account/settings",
         "/api/v6/device/snapshots",
+        "/api/v6/device/quota-history",
       ])
   }
 

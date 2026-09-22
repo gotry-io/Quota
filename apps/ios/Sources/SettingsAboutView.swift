@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct SettingsAboutView: View {
+  @Bindable var model: AppModel
+
   var body: some View {
     Form {
       Section {
@@ -21,6 +23,20 @@ struct SettingsAboutView: View {
         .multilineTextAlignment(.center)
       }
 
+      if model.hasAccountSession {
+        Section {
+          Toggle(isOn: historySync) {
+            Text(SettingsCopy.shareQuotaHistory)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+          .accessibilityIdentifier("settings.history.sync")
+        } footer: {
+          Text(SettingsCopy.shareQuotaHistoryFootnote)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("settings.history.sync.footnote")
+        }
+      }
+
       Section {
         LabeledContent(SettingsCopy.version, value: SettingsCopy.bundleVersionLabel())
           .accessibilityIdentifier("settings.about.version")
@@ -33,5 +49,14 @@ struct SettingsAboutView: View {
     .environment(\.defaultMinListRowHeight, QuotaTheme.minimumTouchTarget)
     .accessibilityIdentifier("settings.about.root")
     .navigationTitle(SettingsCopy.about)
+  }
+
+  private var historySync: Binding<Bool> {
+    Binding(
+      get: { model.accountSettings.historySync },
+      set: { enabled in
+        Task { await model.accountSettings.apply(.setHistorySync(enabled)) }
+      }
+    )
   }
 }

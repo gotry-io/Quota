@@ -98,6 +98,75 @@ struct AccountSettingsSyncTests {
     #expect(transport.requests.compactMap(\.httpMethod) == ["GET", "PUT"])
   }
 
+  @Test func historySyncNamesHistoryAndLeavesTheRestOfTheDocument() async throws {
+    let harness = SettingsSyncHarness()
+    let transport = ScriptedHTTPTransport(
+      [
+        .init(status: 200, body: defaultAccountSettingsGETBody(), headers: ["ETag": "\"0\""]),
+        .init(
+          status: 200,
+          body: accountSettingsGETBody(revision: 1, history: true),
+          headers: ["ETag": "\"1\""]
+        ),
+      ],
+      autoAnswerAccountSettings: false
+    )
+    let sync = harness.makeSync(transport: transport)
+    await sync.refresh()
+
+    await sync.apply(.setHistorySync(true))
+
+    #expect(sync.historySync)
+    #expect(sync.pending.isEmpty)
+    let puts = transport.requests.filter { $0.httpMethod == "PUT" }
+    #expect(puts.count == 1)
+    let body = String(decoding: try #require(puts.first?.httpBody), as: UTF8.self)
+    let expected =
+      "{\"alerts\":{\"pace_alerts\":true,\"reset_reminders\":true,\"thresholds\":{}},"
+      + "\"budget\":{\"alerts\":true,\"amount_usd\":null},"
+      + "\"history\":{\"sync\":true},\"protocol_version\":2}"
+    #expect(body == expected)
+    let object = try settingsObject(puts.first)
+    #expect(Set(object.keys) == ["alerts", "budget", "history", "protocol_version"])
+  }
+
+  @Test func aStaleHistorySyncReappliesOnce() async throws {
+    let harness = SettingsSyncHarness()
+    let fresh = accountSettingsGETBody(revision: 2, resetReminders: true, amountUSD: "75.50")
+    let written = accountSettingsGETBody(
+      revision: 3,
+      resetReminders: true,
+      amountUSD: "75.50",
+      history: true
+    )
+    let transport = ScriptedHTTPTransport(
+      [
+        .init(status: 200, body: defaultAccountSettingsGETBody(), headers: ["ETag": "\"0\""]),
+        .init(status: 412, body: fresh, headers: ["ETag": "\"2\""]),
+        .init(status: 200, body: written, headers: ["ETag": "\"3\""]),
+      ],
+      autoAnswerAccountSettings: false
+    )
+    let sync = harness.makeSync(transport: transport)
+    await sync.refresh()
+
+    await sync.apply(.setHistorySync(true))
+
+    let puts = transport.requests.filter { $0.httpMethod == "PUT" }
+    #expect(puts.count == 2)
+    #expect(puts.last?.value(forHTTPHeaderField: "If-Match") == "\"2\"")
+    let retry = try settingsObject(puts.last)
+    let history = try #require(retry["history"] as? [String: Any])
+    #expect(history["sync"] as? Bool == true)
+    let budget = try #require(retry["budget"] as? [String: Any])
+    #expect(budget["amount_usd"] as? String == "75.50")
+    #expect(budget["alerts"] as? Bool == true)
+    let alerts = try #require(retry["alerts"] as? [String: Any])
+    #expect(alerts["reset_reminders"] as? Bool == true)
+    #expect(sync.historySync)
+    #expect(sync.pending.isEmpty)
+  }
+
   @Test func aLocalEditWritesTheDocument() async throws {
     let harness = SettingsSyncHarness()
     let transport = ScriptedHTTPTransport(
@@ -579,7 +648,8 @@ private func accountSettingsGETBody(
   resetReminders: Bool = true,
   paceAlerts: Bool = true,
   thresholds: [String: [Int]] = [:],
-  amountUSD: String? = nil
+  amountUSD: String? = nil,
+  history: Bool? = nil
 ) -> Data {
   let alerts: [String: Any] = [
     "reset_reminders": resetReminders,
@@ -592,13 +662,16 @@ private func accountSettingsGETBody(
   } else {
     budget["amount_usd"] = NSNull()
   }
-  let object: [String: Any] = [
+  var object: [String: Any] = [
     "protocol_version": 2,
     "revision": revision,
     "updated_at": "2026-09-21T10:00:00Z",
     "alerts": alerts,
     "budget": budget,
   ]
+  if let history {
+    object["history"] = ["sync": history]
+  }
   return try! JSONSerialization.data(withJSONObject: object)
 }
 
