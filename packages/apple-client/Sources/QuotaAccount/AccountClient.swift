@@ -44,41 +44,49 @@ public struct AccountRefreshResult: Equatable, Sendable {
   }
 }
 
-/// An activity read's answer. Failure never falls back to a stored body: this client does not keep one.
+/// An activity read's answer. A matching 304 returns the stored body.
 public enum AccountActivityResult: Equatable, Sendable {
   case activity(AccountUsageActivityResponse)
   case failure(AccountClientError)
 }
 
 /// A period read's answer. Last-good on error is the caller's: this client keeps an ETag cache
-/// only so a matching 304 can return the body it already holds.
+/// so a matching 304 can return the body it already holds.
 public enum AccountPeriodResult: Equatable, Sendable {
   case period(AccountUsagePeriodResponse)
   case failure(AccountClientError)
 }
 
-private struct CachedAccountPeriod: Equatable, Sendable {
-  var etag: String
-  var period: AccountUsagePeriodResponse
-}
-
 public actor AccountClient {
+  public static let accessRefreshLead: TimeInterval = 60
+
   private let relay: RelayClient
   private let sessionStore: any AccountSessionStore
   private let summaryStore: any AccountSummaryStore
   private let settingsStore: any AccountSettingsStore
+  private let usageStore: any AccountUsageStore
   private let calendar: Calendar
   private let now: @Sendable () -> Date
   private var refreshWaiters: [CheckedContinuation<AccountSession, Error>] = []
   private var isRefreshing = false
+  /// Process-wide for this `AccountClient` (the app holds one). Filled on the first Keychain
+  /// read, updated on persist, invalidated on logout / invalid_grant / account change.
+  private var sessionMemo: AccountSession?
+  private var sessionMemoValid = false
+  /// A proactive refresh that still looks expired is clock skew, not a 15-minute token.
+  private var proactiveRefreshDisabled = false
   /// In-memory period bodies keyed by `from|to|timezone|breakdown`. A matching 304 answers from here.
-  private var periodCache: [String: CachedAccountPeriod] = [:]
+  private var periodCache: [String: CachedUsagePeriod] = [:]
+  private var activityCache: CachedUsageActivity?
+  private var snapshotUploadBusy = false
+  private var snapshotUploadWaiters: [CheckedContinuation<Void, Never>] = []
 
   public init(
     relay: RelayClient = RelayClient(),
     sessionStore: any AccountSessionStore,
     summaryStore: any AccountSummaryStore,
     settingsStore: any AccountSettingsStore = MemoryAccountSettingsStore(),
+    usageStore: any AccountUsageStore = MemoryAccountUsageStore(),
     calendar: Calendar = .current,
     now: @escaping @Sendable () -> Date = { Date() }
   ) {
@@ -86,21 +94,60 @@ public actor AccountClient {
     self.sessionStore = sessionStore
     self.summaryStore = summaryStore
     self.settingsStore = settingsStore
+    self.usageStore = usageStore
     self.calendar = calendar
     self.now = now
   }
 
   public func hasSession() throws -> Bool {
-    try sessionStore.load() != nil
+    try currentSession() != nil
   }
 
   public func loadSession() throws -> AccountSession? {
-    try sessionStore.load()
+    try currentSession()
+  }
+
+  public func sessionPresence() -> AccountSessionPresence {
+    do {
+      if let session = try currentSession() {
+        return .signedIn(session)
+      }
+      return .signedOut
+    } catch AccountStoreError.unreadable {
+      return .unknown
+    } catch {
+      return .unknown
+    }
+  }
+
+  /// One Keychain read plus the caches bound to that session. A corrupt cache file is dropped
+  /// and does not take the session with it.
+  public func restoreLocalState() throws -> RestoredAccountState {
+    let session = try currentSession()
+    var summary: CachedAccountSummary?
+    do {
+      summary = try loadBoundCachedSummary()
+    } catch {
+      try? summaryStore.clear()
+      summary = nil
+    }
+    var usage: CachedAccountUsage?
+    do {
+      usage = try loadBoundCachedUsage()
+    } catch {
+      try? usageStore.clear()
+      usage = nil
+    }
+    if var usage {
+      usage.capPeriods()
+      hydrateUsageCache(usage)
+    }
+    return RestoredAccountState(session: session, summary: summary, usage: usage)
   }
 
   /// Continue is the only promotion from `pending` to `active`. Already-active is a no-op.
   public func activateSession() throws {
-    guard let session = try sessionStore.load() else {
+    guard let session = try currentSession() else {
       throw AccountClientError.notSignedIn
     }
     guard session.activation == .pending else { return }
@@ -205,7 +252,7 @@ public actor AccountClient {
   public func fetchTodaySummary() async -> AccountRefreshResult {
     let cached = try? loadBoundCachedSummary()
     do {
-      guard try sessionStore.load() != nil else {
+      guard try currentSession() != nil else {
         return AccountRefreshResult(
           summary: nil,
           fetchedAt: nil,
@@ -256,15 +303,18 @@ public actor AccountClient {
       switch read {
       case .modified(let period, let etag):
         if let etag {
-          periodCache[key] = CachedAccountPeriod(etag: etag, period: period)
+          let cached = CachedUsagePeriod(etag: etag, fetchedAt: now(), response: period)
+          periodCache[key] = cached
+          persistPeriod(key: key, cached: cached, accountID: try currentSession()?.accountID)
         }
         return .period(period)
       case .unchanged(let etag):
         guard let held else { return .failure(.relay(.invalidResponse)) }
-        if let etag {
-          periodCache[key] = CachedAccountPeriod(etag: etag, period: held.period)
-        }
-        return .period(held.period)
+        let cached = CachedUsagePeriod(
+          etag: etag ?? held.etag, fetchedAt: now(), response: held.response)
+        periodCache[key] = cached
+        persistPeriod(key: key, cached: cached, accountID: try currentSession()?.accountID)
+        return .period(held.response)
       }
     } catch let error as AccountClientError {
       return .failure(error)
@@ -337,17 +387,45 @@ public actor AccountClient {
     detail: ActivityDetail? = nil,
     timeZone: String? = nil
   ) async -> AccountActivityResult {
+    let cachesPrimary = detail == nil && timeZone == nil
+    let held = cachesPrimary ? activityCache : nil
+    let matchingHeld =
+      held.flatMap { cached in
+        cached.from == from && cached.to == to ? cached : nil
+      }
     do {
-      let activity = try await withAuthorizedSession { session in
+      let read = try await withAuthorizedSession { session in
         try await relay.fetchAccountUsageActivity(
           accessToken: session.accessToken,
           from: from,
           to: to,
           detail: detail,
-          timeZone: timeZone
+          timeZone: timeZone,
+          etag: matchingHeld?.etag
         )
       }
-      return .activity(activity)
+      switch read {
+      case .modified(let activity, let etag):
+        if cachesPrimary, let etag {
+          let cached = CachedUsageActivity(
+            from: from, to: to, etag: etag, fetchedAt: now(), response: activity)
+          activityCache = cached
+          persistActivity(cached, accountID: try currentSession()?.accountID)
+        }
+        return .activity(activity)
+      case .unchanged(let etag):
+        guard let matchingHeld else { return .failure(.relay(.invalidResponse)) }
+        let cached = CachedUsageActivity(
+          from: matchingHeld.from,
+          to: matchingHeld.to,
+          etag: etag ?? matchingHeld.etag,
+          fetchedAt: now(),
+          response: matchingHeld.response
+        )
+        activityCache = cached
+        persistActivity(cached, accountID: try currentSession()?.accountID)
+        return .activity(matchingHeld.response)
+      }
     } catch let error as AccountClientError {
       return .failure(error)
     } catch let error as RelayClientError {
@@ -362,6 +440,11 @@ public actor AccountClient {
   /// The control document is read first: it answers the generation the envelope must name.
   /// A session that names no Device has nothing to upload with and says so rather than asking.
   public func uploadSnapshots(_ snapshots: [QuotaSnapshot]) async -> AccountClientError? {
+    while snapshotUploadBusy {
+      await withCheckedContinuation { snapshotUploadWaiters.append($0) }
+    }
+    snapshotUploadBusy = true
+    defer { finishSnapshotUploadLock() }
     do {
       _ = try await withAuthorizedSession { session in
         guard session.deviceID != nil else { throw AccountClientError.notADevice }
@@ -384,10 +467,19 @@ public actor AccountClient {
     }
   }
 
+  private func finishSnapshotUploadLock() {
+    snapshotUploadBusy = false
+    let waiters = snapshotUploadWaiters
+    snapshotUploadWaiters.removeAll()
+    for waiter in waiters {
+      waiter.resume()
+    }
+  }
+
   private func loadBoundCachedSummary() throws -> CachedAccountSummary? {
     let cached = try summaryStore.load()
     guard let cached else { return nil }
-    guard let session = try sessionStore.load() else {
+    guard let session = try currentSession() else {
       try? summaryStore.clear()
       clearVolatileCaches()
       return nil
@@ -403,12 +495,30 @@ public actor AccountClient {
   private func loadBoundCachedSettings() throws -> CachedAccountSettings? {
     let cached = try settingsStore.load()
     guard let cached else { return nil }
-    guard let session = try sessionStore.load() else {
+    guard let session = try currentSession() else {
       try? settingsStore.clear()
       return nil
     }
     guard cached.accountID == session.accountID else {
       try? settingsStore.clear()
+      return nil
+    }
+    return cached
+  }
+
+  private func loadBoundCachedUsage() throws -> CachedAccountUsage? {
+    let cached = try usageStore.load()
+    guard let cached else { return nil }
+    guard let session = try currentSession() else {
+      try? usageStore.clear()
+      periodCache.removeAll()
+      activityCache = nil
+      return nil
+    }
+    guard cached.accountID == session.accountID else {
+      try? usageStore.clear()
+      periodCache.removeAll()
+      activityCache = nil
       return nil
     }
     return cached
@@ -420,7 +530,9 @@ public actor AccountClient {
 
   private func clearVolatileCaches() {
     periodCache.removeAll()
+    activityCache = nil
     try? settingsStore.clear()
+    try? usageStore.clear()
   }
 
   private func failureResult(
@@ -437,7 +549,9 @@ public actor AccountClient {
   }
 
   public func logout() async {
-    let refreshToken = try? sessionStore.load()?.refreshToken
+    let refreshToken = try? currentSession()?.refreshToken
+    invalidateSessionMemo()
+    proactiveRefreshDisabled = false
     try? sessionStore.clear()
     try? summaryStore.clear()
     clearVolatileCaches()
@@ -475,13 +589,23 @@ public actor AccountClient {
     allowRefresh: Bool = true,
     _ operation: (AccountSession) async throws -> T
   ) async throws -> T {
-    guard let session = try sessionStore.load() else {
+    guard var session = try currentSession() else {
       throw AccountClientError.notSignedIn
+    }
+    var refreshedThisCall = false
+    if allowRefresh, !proactiveRefreshDisabled,
+      session.accessExpiresAt.timeIntervalSince(now()) <= Self.accessRefreshLead
+    {
+      session = try await refreshSessionShared()
+      refreshedThisCall = true
+      if session.accessExpiresAt.timeIntervalSince(now()) <= Self.accessRefreshLead {
+        proactiveRefreshDisabled = true
+      }
     }
     do {
       return try await operation(session)
-    } catch RelayClientError.unauthorized where allowRefresh {
-      let refreshed = try await refreshSessionAfterUnauthorized()
+    } catch RelayClientError.unauthorized where allowRefresh && !refreshedThisCall {
+      let refreshed = try await refreshSessionShared()
       do {
         return try await operation(refreshed)
       } catch let error as AccountClientError {
@@ -520,7 +644,7 @@ public actor AccountClient {
     return summary
   }
 
-  private func refreshSessionAfterUnauthorized() async throws -> AccountSession {
+  private func refreshSessionShared() async throws -> AccountSession {
     if isRefreshing {
       return try await withCheckedThrowingContinuation { continuation in
         refreshWaiters.append(continuation)
@@ -541,7 +665,7 @@ public actor AccountClient {
   }
 
   private func performRefresh() async throws -> AccountSession {
-    guard let current = try sessionStore.load() else {
+    guard let current = try currentSession() else {
       throw AccountClientError.notSignedIn
     }
     do {
@@ -554,11 +678,13 @@ public actor AccountClient {
       try persist(session)
       return session
     } catch RelayClientError.invalidGrant {
+      invalidateSessionMemo()
       try? sessionStore.clear()
       try? summaryStore.clear()
       clearVolatileCaches()
       throw AccountClientError.sessionExpired
     } catch RelayClientError.unauthorized {
+      invalidateSessionMemo()
       try? sessionStore.clear()
       try? summaryStore.clear()
       clearVolatileCaches()
@@ -571,6 +697,50 @@ public actor AccountClient {
   private func persist(_ session: AccountSession) throws {
     guard session.isValid else { throw AccountStoreError.invalidSession }
     try sessionStore.save(session)
+    sessionMemo = session
+    sessionMemoValid = true
+    if session.accessExpiresAt.timeIntervalSince(now()) > Self.accessRefreshLead {
+      proactiveRefreshDisabled = false
+    }
+  }
+
+  private func currentSession() throws -> AccountSession? {
+    if sessionMemoValid {
+      return sessionMemo
+    }
+    let session = try sessionStore.load()
+    sessionMemo = session
+    sessionMemoValid = true
+    return session
+  }
+
+  private func invalidateSessionMemo() {
+    sessionMemo = nil
+    sessionMemoValid = false
+  }
+
+  private func hydrateUsageCache(_ usage: CachedAccountUsage) {
+    var usage = usage
+    usage.capPeriods()
+    activityCache = usage.activity
+    periodCache = usage.periods
+  }
+
+  private func persistPeriod(key: String, cached: CachedUsagePeriod, accountID: String?) {
+    guard let accountID else { return }
+    var usage = (try? usageStore.load()) ?? CachedAccountUsage(accountID: accountID)
+    guard usage.accountID == accountID else { return }
+    usage.periods[key] = cached
+    usage.capPeriods()
+    try? usageStore.save(usage)
+  }
+
+  private func persistActivity(_ cached: CachedUsageActivity, accountID: String?) {
+    guard let accountID else { return }
+    var usage = (try? usageStore.load()) ?? CachedAccountUsage(accountID: accountID)
+    guard usage.accountID == accountID else { return }
+    usage.activity = cached
+    try? usageStore.save(usage)
   }
 
   private func finishRefresh(returning session: AccountSession) {

@@ -16,15 +16,16 @@ enum Fixtures {
     deviceID: String? = nil,
     access: String = accessToken,
     refresh: String = refreshToken,
+    accessExpiresAt: Date? = nil,
     activation: AccountSessionActivation = .active
   ) -> AccountSession {
     AccountSession(
       accountID: accountID,
       deviceID: deviceID,
       accessToken: access,
-      accessExpiresAt: date("2026-08-14T12:15:00Z"),
+      accessExpiresAt: accessExpiresAt ?? date("2999-01-01T00:00:00Z"),
       refreshToken: refresh,
-      refreshExpiresAt: date("2026-11-01T12:00:00Z"),
+      refreshExpiresAt: date("2999-01-01T00:00:00Z"),
       activation: activation
     )
   }
@@ -391,9 +392,9 @@ enum Fixtures {
       "account_id": "account_01",
       "session": [
         "access_token": access,
-        "access_expires_at": "2026-08-14T12:15:00Z",
+        "access_expires_at": "2999-01-01T00:00:00Z",
         "refresh_token": refresh,
-        "refresh_expires_at": "2026-11-01T12:00:00Z",
+        "refresh_expires_at": "2999-01-01T00:00:00Z",
       ],
     ]
     for (key, value) in extra {
@@ -405,6 +406,7 @@ enum Fixtures {
   static func refreshResponse(
     access: String = rotatedAccess,
     refresh: String = rotatedRefresh,
+    accessExpiresAt: String = "2999-01-01T00:00:00Z",
     extra: [String: Any] = [:]
   ) throws -> Data {
     var object: [String: Any] = [
@@ -413,9 +415,9 @@ enum Fixtures {
       "account_id": "account_01",
       "session": [
         "access_token": access,
-        "access_expires_at": "2026-08-14T13:15:00Z",
+        "access_expires_at": accessExpiresAt,
         "refresh_token": refresh,
-        "refresh_expires_at": "2026-11-02T12:00:00Z",
+        "refresh_expires_at": "2999-01-01T00:00:00Z",
       ],
     ]
     for (key, value) in extra {

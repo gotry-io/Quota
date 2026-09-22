@@ -6,11 +6,13 @@ import QuotaAlerts
 import QuotaProviderSessions
 import QuotaPresentation
 import QuotaProviderStatus
+import QuotaProviderWeb
 import QuotaRelay
 import QuotaWidgetData
 import QuotaWire
 import Testing
 import UserNotifications
+import os
 
 @testable import Quota
 
@@ -153,6 +155,7 @@ struct AppModelTests {
       providerStatusClient: client
     )
     #expect(await model.refresh() == false)
+    await model.waitForDetachedLaunchWork()
     #expect(model.providerStatus[.claude]?.indicator == .minor)
     #expect(model.providerStatus[.claude]?.description == "Partial System Outage")
   }
@@ -182,12 +185,15 @@ struct AppModelTests {
       providerStatusClient: client
     )
     await model.setForeground(true)
+    await model.waitForDetachedLaunchWork()
     #expect(client.refreshCount == 1)
     #expect(model.providerStatus[.claude]?.indicator == .minor)
     await model.setForeground(true)
+    await model.waitForDetachedLaunchWork()
     #expect(client.refreshCount == 1)
     await model.setForeground(false)
     await model.setForeground(true)
+    await model.waitForDetachedLaunchWork()
     #expect(client.refreshCount == 2)
     await model.setForeground(false)
   }
@@ -213,6 +219,260 @@ struct AppModelTests {
     #expect(publisher.publishCount == 2)
     #expect(publisher.clearCount == 0)
     #expect(publisher.lastPublished?.fetchedAt == Fixtures.date("2026-08-14T16:00:00Z"))
+  }
+
+  @Test
+  func coldLaunchWithAFreshTokenAsksRelayOnceAndDoesNotWaitForStatus() async throws {
+    let transport = ScriptedHTTPTransport([
+      .init(status: 200, body: try Fixtures.accountSummaryJSON())
+    ])
+    let hanging = HangingProviderStatusClient()
+    let now = Fixtures.date("2026-08-14T16:00:00Z")
+    let range = UsageActivityCalendar.range(
+      endingOn: UsageActivityCalendar.utcDay(from: now))
+    let account = AccountClient(
+      relay: RelayClient(transport: transport),
+      sessionStore: MemoryAccountSessionStore(session: Fixtures.session()),
+      summaryStore: MemoryAccountSummaryStore(),
+      usageStore: MemoryAccountUsageStore(
+        value: CachedAccountUsage(
+          accountID: "account_01",
+          activity: CachedUsageActivity(
+            from: range.from,
+            to: range.to,
+            etag: "\"a\"",
+            fetchedAt: now,
+            response: AccountUsageActivityResponse(days: [])
+          )
+        )
+      ),
+      now: { now }
+    )
+    let model = AppModel(
+      account: account,
+      authenticator: ScriptedAuthenticator(result: .failure(AuthorizationError.cancelled)),
+      providerStatusClient: hanging,
+      settingsDefaults: UserDefaults(suiteName: "QuotaTests.Launch.\(UUID().uuidString)")!,
+      syncAccountSettings: false,
+      now: { now }
+    )
+    await model.restore()
+    await model.setForeground(true)
+    #expect(model.phase == .signedIn)
+    #expect(model.summary != nil)
+    #expect(transport.requests.map { $0.url?.path } == ["/api/v6/account/summary"])
+  }
+
+  @Test
+  func coldLaunchWithAnExpiredTokenRefreshesThenReadsSummary() async throws {
+    let now = Fixtures.date("2026-08-14T16:00:00Z")
+    let transport = ScriptedHTTPTransport([
+      .init(status: 200, body: try tokenResponse()),
+      .init(status: 200, body: try Fixtures.accountSummaryJSON()),
+    ])
+    let hanging = HangingProviderStatusClient()
+    let account = AccountClient(
+      relay: RelayClient(transport: transport),
+      sessionStore: MemoryAccountSessionStore(
+        session: Fixtures.session(accessExpiresAt: now.addingTimeInterval(-120))
+      ),
+      summaryStore: MemoryAccountSummaryStore(),
+      now: { now }
+    )
+    let model = AppModel(
+      account: account,
+      authenticator: ScriptedAuthenticator(result: .failure(AuthorizationError.cancelled)),
+      providerStatusClient: hanging,
+      settingsDefaults: UserDefaults(suiteName: "QuotaTests.Launch.\(UUID().uuidString)")!,
+      syncAccountSettings: false,
+      now: { now }
+    )
+    await model.restore()
+    await model.setForeground(true)
+    #expect(model.phase == .signedIn)
+    #expect(transport.requests.map { $0.url?.path } == [
+      "/oauth/v2/token",
+      "/api/v6/account/summary",
+    ])
+  }
+
+  @Test
+  func cachedSummaryIsFirstContentBeforeTheSummaryRead() async throws {
+    let cachedSummary = try decodeSummary()
+    let freshData = try mutatedSummaryLabel("fresh-label")
+    let hanging = HangingProviderStatusClient()
+    let inner = ScriptedHTTPTransport([.init(status: 200, body: freshData)])
+    let transport = GatedHTTPTransport(inner: inner, gatePath: "/api/v6/account/summary")
+    let account = AccountClient(
+      relay: RelayClient(transport: transport),
+      sessionStore: MemoryAccountSessionStore(session: Fixtures.session()),
+      summaryStore: MemoryAccountSummaryStore(
+        value: CachedAccountSummary(
+          summary: cachedSummary,
+          fetchedAt: Fixtures.date("2026-08-14T15:00:00Z")
+        )
+      ),
+      now: { Fixtures.date("2026-08-14T16:00:00Z") }
+    )
+    let model = AppModel(
+      account: account,
+      authenticator: ScriptedAuthenticator(result: .failure(AuthorizationError.cancelled)),
+      providerStatusClient: hanging,
+      settingsDefaults: UserDefaults(suiteName: "QuotaTests.Launch.\(UUID().uuidString)")!,
+      syncAccountSettings: false,
+      now: { Fixtures.date("2026-08-14T16:00:00Z") }
+    )
+    async let done: Void = model.restore()
+    await model.waitForFirstContent()
+    #expect(model.summary?.account.displayLabel == "octocat")
+    #expect(model.hasContent)
+    await transport.release()
+    await done
+    #expect(model.accountLabel == "fresh-label")
+  }
+
+  @Test
+  func unreadableKeychainDuringRefreshDoesNotSignOut() async throws {
+    let cachedSummary = try decodeSummary()
+    let sessions = UnreadableSessionStore()
+    let account = AccountClient(
+      relay: RelayClient(transport: ScriptedHTTPTransport([])),
+      sessionStore: sessions,
+      summaryStore: MemoryAccountSummaryStore(
+        value: CachedAccountSummary(
+          summary: cachedSummary,
+          fetchedAt: Fixtures.date("2026-08-14T15:00:00Z")
+        )
+      ),
+      now: { Fixtures.date("2026-08-14T16:00:00Z") }
+    )
+    let model = AppModel(
+      account: account,
+      authenticator: ScriptedAuthenticator(result: .failure(AuthorizationError.cancelled)),
+      settingsDefaults: UserDefaults(suiteName: "QuotaTests.Launch.\(UUID().uuidString)")!,
+      syncAccountSettings: false,
+      now: { Fixtures.date("2026-08-14T16:00:00Z") }
+    )
+    model.pose(
+      phase: .signedIn,
+      sessionActivation: .active,
+      sessionDeviceID: nil,
+      summary: cachedSummary,
+      fetchedAt: Fixtures.date("2026-08-14T15:00:00Z"),
+      fromCache: true,
+      isRefreshing: false,
+      banner: nil,
+      expiredMessage: nil,
+      localCollection: nil,
+      localSamples: LocalQuotaSamples(),
+      selectedTab: .quota,
+      presentsSignIn: false,
+      identities: .idle,
+      providerStatus: [:],
+      skipsRestore: true,
+      isOfflineFixture: false,
+      displayClockIsFixed: true
+    )
+    #expect(await model.refresh() == false)
+    #expect(model.phase == .signedIn)
+    #expect(model.summary?.account.displayLabel == "octocat")
+    #expect(model.expiredMessage == nil)
+  }
+
+  @Test
+  func unreadableKeychainWithLocalReadingsDoesNotPublishAPoorerWidget() async throws {
+    let publisher = RecordingWidgetSnapshotPublisher()
+    let now = Fixtures.date("2026-08-14T16:00:00Z")
+    let snapshot = localSnapshot()
+    let providerSessions = MemoryProviderSessionStore(
+      sessions: [
+        StoredProviderSession(
+          provider: .codex,
+          accountFingerprint: "fp",
+          cookieHeader: "session=fp",
+          accountLabel: nil,
+          storedAt: now,
+          lastValidatedAt: now
+        )
+      ]
+    )
+    let account = AccountClient(
+      relay: RelayClient(transport: ScriptedHTTPTransport([])),
+      sessionStore: UnreadableSessionStore(),
+      summaryStore: MemoryAccountSummaryStore(),
+      now: { now }
+    )
+    let model = AppModel(
+      account: account,
+      authenticator: ScriptedAuthenticator(result: .failure(AuthorizationError.cancelled)),
+      widgetPublisher: publisher,
+      providerSessions: providerSessions,
+      localCollector: LocalCollector(
+        sessions: providerSessions,
+        collectors: { _, _ in FixedSnapshotCollector(snapshot: snapshot) },
+        now: { now }
+      ),
+      settingsDefaults: UserDefaults(suiteName: "QuotaTests.Launch.\(UUID().uuidString)")!,
+      syncAccountSettings: false,
+      now: { now }
+    )
+    model.pose(
+      phase: .signedIn,
+      sessionActivation: .active,
+      sessionDeviceID: nil,
+      summary: nil,
+      fetchedAt: nil,
+      fromCache: false,
+      isRefreshing: false,
+      banner: nil,
+      expiredMessage: nil,
+      localCollection: nil,
+      localSamples: LocalQuotaSamples(),
+      selectedTab: .quota,
+      presentsSignIn: false,
+      identities: .idle,
+      providerStatus: [:],
+      skipsRestore: true,
+      isOfflineFixture: false,
+      displayClockIsFixed: true
+    )
+    #expect(await model.refresh() == true)
+    #expect(model.phase == .signedIn)
+    #expect(publisher.publishCount == 0)
+    #expect(publisher.lastPublished == nil)
+  }
+
+  @Test
+  func signedInWithNoCacheShowsLoadingUntilTheFirstSummaryAnswers() async throws {
+    let inner = ScriptedHTTPTransport([
+      .init(status: 200, body: try Fixtures.accountSummaryJSON())
+    ])
+    let transport = GatedHTTPTransport(inner: inner, gatePath: "/api/v6/account/summary")
+    let account = AccountClient(
+      relay: RelayClient(transport: transport),
+      sessionStore: MemoryAccountSessionStore(session: Fixtures.session()),
+      summaryStore: MemoryAccountSummaryStore(),
+      now: { Fixtures.date("2026-08-14T16:00:00Z") }
+    )
+    let model = AppModel(
+      account: account,
+      authenticator: ScriptedAuthenticator(result: .failure(AuthorizationError.cancelled)),
+      providerStatusClient: HangingProviderStatusClient(),
+      settingsDefaults: UserDefaults(suiteName: "QuotaTests.Launch.\(UUID().uuidString)")!,
+      syncAccountSettings: false,
+      now: { Fixtures.date("2026-08-14T16:00:00Z") }
+    )
+    async let done: Void = model.restore()
+    await model.waitForFirstContent()
+    await transport.waitUntilGated()
+    #expect(model.phase == .signedIn)
+    #expect(model.isRefreshing)
+    #expect(model.showsRootLoading)
+    await transport.release()
+    await done
+    #expect(!model.showsRootLoading)
+    #expect(model.phase == .signedIn)
+    #expect(model.summary != nil)
   }
 
   @Test
@@ -1138,11 +1398,15 @@ final class ScriptedHTTPTransport: HTTPTransport, @unchecked Sendable {
     var status: Int
     var body: Data
     var headers: [String: String]
+    var delayNanoseconds: UInt64
 
-    init(status: Int, body: Data, headers: [String: String] = [:]) {
+    init(
+      status: Int, body: Data, headers: [String: String] = [:], delayNanoseconds: UInt64 = 0
+    ) {
       self.status = status
       self.body = body
       self.headers = headers
+      self.delayNanoseconds = delayNanoseconds
     }
   }
 
@@ -1171,6 +1435,9 @@ final class ScriptedHTTPTransport: HTTPTransport, @unchecked Sendable {
     }
     guard !exchanges.isEmpty else { throw HTTPTransportError.unavailable }
     let exchange = exchanges.removeFirst()
+    if exchange.delayNanoseconds > 0 {
+      try await Task.sleep(nanoseconds: exchange.delayNanoseconds)
+    }
     let url = request.url ?? URL(string: "https://quota.gotry.io")!
     let response = HTTPURLResponse(
       url: url,
@@ -1242,6 +1509,93 @@ func makeModel(
     syncAccountSettings: false,
     now: now
   )
+}
+
+private final class HangingProviderStatusClient: ProviderStatusServing, @unchecked Sendable {
+  private let count = OSAllocatedUnfairLock(initialState: 0)
+
+  var refreshCount: Int {
+    count.withLock { $0 }
+  }
+
+  func refresh() async -> [ProviderStatusReading] {
+    count.withLock { $0 += 1 }
+    try? await Task.sleep(for: .seconds(2))
+    return []
+  }
+}
+
+actor GatedHTTPTransport: HTTPTransport {
+  let inner: ScriptedHTTPTransport
+  let gatePath: String
+  private var hold: CheckedContinuation<Void, Never>?
+  private var gatedWaiters: [CheckedContinuation<Void, Never>] = []
+  private var released = false
+  private(set) var gated = false
+
+  init(inner: ScriptedHTTPTransport, gatePath: String) {
+    self.inner = inner
+    self.gatePath = gatePath
+  }
+
+  func perform(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+    if request.url?.path == gatePath {
+      gated = true
+      let waiters = gatedWaiters
+      gatedWaiters.removeAll()
+      for waiter in waiters {
+        waiter.resume()
+      }
+      if !released {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+          hold = continuation
+        }
+      }
+    }
+    return try await inner.perform(request)
+  }
+
+  func release() {
+    released = true
+    hold?.resume()
+    hold = nil
+  }
+
+  func waitUntilGated() async {
+    if gated { return }
+    await withCheckedContinuation { gatedWaiters.append($0) }
+  }
+}
+
+private struct FixedSnapshotCollector: ProviderWebCollector {
+  static var provider: ProviderID { .codex }
+  let snapshot: QuotaSnapshot
+
+  func validate(cookieHeader: String) async throws -> ValidatedBrowserSession {
+    ValidatedBrowserSession(accountFingerprint: "fp", accountLabel: nil)
+  }
+
+  func collect(cookieHeader: String) async throws -> QuotaSnapshot {
+    snapshot
+  }
+}
+
+private func localSnapshot() -> QuotaSnapshot {
+  QuotaSnapshot(
+    provider: .codex,
+    account: QuotaAccount(fingerprint: "fp", fingerprintScope: .global),
+    windows: [
+      QuotaWindow(id: "weekly", title: "Weekly", usedPercent: 20, durationSeconds: 604_800)
+    ],
+    status: .available,
+    observedAt: Fixtures.date("2026-08-14T16:00:00Z")
+  )
+}
+
+private final class UnreadableSessionStore: AccountSessionStore, @unchecked Sendable {
+  func load() throws -> AccountSession? { throw AccountStoreError.unreadable }
+  func save(_ session: AccountSession) throws {}
+  func clear() throws {}
 }
 
 private final class ScriptedProviderStatusClient: ProviderStatusServing, @unchecked Sendable {
@@ -1332,9 +1686,9 @@ private func tokenResponse() throws -> Data {
       "account_id": "account_01",
       "session": [
         "access_token": Fixtures.accessToken,
-        "access_expires_at": "2026-08-14T12:15:00Z",
+        "access_expires_at": "2999-01-01T00:00:00Z",
         "refresh_token": Fixtures.refreshToken,
-        "refresh_expires_at": "2026-11-01T12:00:00Z",
+        "refresh_expires_at": "2999-01-01T00:00:00Z",
       ],
     ]
   )
@@ -1347,15 +1701,16 @@ enum Fixtures {
   static func session(
     accountID: String = "account_01",
     activation: AccountSessionActivation = .active,
-    deviceID: String? = nil
+    deviceID: String? = nil,
+    accessExpiresAt: Date? = nil
   ) -> AccountSession {
     AccountSession(
       accountID: accountID,
       deviceID: deviceID,
       accessToken: accessToken,
-      accessExpiresAt: date("2026-08-14T12:15:00Z"),
+      accessExpiresAt: accessExpiresAt ?? date("2999-01-01T00:00:00Z"),
       refreshToken: refreshToken,
-      refreshExpiresAt: date("2026-11-01T12:00:00Z"),
+      refreshExpiresAt: date("2999-01-01T00:00:00Z"),
       activation: activation
     )
   }

@@ -61,7 +61,7 @@ func activitySession() -> AccountSession {
   AccountSession(
     accountID: "account_01",
     accessToken: "qia_synthetic_access_token",
-    accessExpiresAt: activityNow(),
+    accessExpiresAt: activityNow().addingTimeInterval(365 * 24 * 3_600),
     refreshToken: "qiar_synthetic_refresh_token",
     refreshExpiresAt: activityNow().addingTimeInterval(8_000_000),
     activation: .active

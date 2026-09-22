@@ -73,13 +73,17 @@ public struct KeychainAccountSessionStore: AccountSessionStore, Sendable {
     guard status == errSecSuccess, let data else {
       throw AccountStoreError.unreadable
     }
+    let session: AccountSession
     do {
-      let session = try WireCodec.decode(AccountSession.self, from: data)
+      session = try WireCodec.decode(AccountSession.self, from: data)
       guard session.isValid else { throw AccountStoreError.invalidSession }
-      return session
     } catch {
       throw AccountStoreError.unreadable
     }
+    // Shipped items used WhenUnlocked; a background refresh cannot read those. Rewrite on
+    // the next unlocked load so later background work sees AfterFirstUnlock.
+    try? save(session)
+    return session
   }
 
   public func save(_ session: AccountSession) throws {
@@ -93,7 +97,7 @@ public struct KeychainAccountSessionStore: AccountSessionStore, Sendable {
     let addAttributes: [String: Any] = identity.merging(
       [
         kSecValueData as String: data,
-        kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+        kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
       ]
     ) { _, new in new }
     let added = keychain.add(addAttributes)
@@ -107,7 +111,7 @@ public struct KeychainAccountSessionStore: AccountSessionStore, Sendable {
       query: identity,
       attributes: [
         kSecValueData as String: data,
-        kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+        kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
       ]
     )
     guard updated == errSecSuccess else {

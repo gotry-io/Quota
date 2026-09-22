@@ -38,7 +38,8 @@ deltas are in [`DESIGN.md`](DESIGN.md).
 The app owns SwiftUI, `ASWebAuthenticationSession`, UI preferences, App Group snapshot publish/clear,
 and WidgetKit timeline reloads. [`packages/apple-client`](../../packages/apple-client)
 owns wire decoding, PKCE values, the fixed-origin HTTPS client, session refresh/revoke, Keychain
-session storage, last-good Account summary cache, the Account settings document
+session storage, last-good Account summary cache, the Account usage cache (period and activity
+bodies with their ETags beside the summary, cleared on sign-out), the Account settings document
 (`GET` / `PUT /api/v2/account/settings`, cached beside the summary, cleared on sign-out),
 the provider web collectors
 (`QuotaProviderWeb`) and their Keychain store (`QuotaProviderSessions`), and the Foundation-only
@@ -99,6 +100,26 @@ refuses a cookie marks that session **Sign in again** in Settings; one that coul
 leaves no mark. A successful read moves that session's `lastValidatedAt`, which is the
 "Checked …" age the Providers list shows. See
 [ADR 0034](../../docs/decisions/0034-ios-collects-for-itself.md).
+
+## Launch
+
+A cold signed-in launch reads the two local collection files off the main actor, then one
+Account-client hop that returns the Keychain session (one read, memoised for the rest of the
+refresh), the last-good Account summary, and the usage cache. That is first content: Overview
+shows the cached summary or local readings without waiting for Relay. The spinner is only the
+launching phase when nothing is on disk yet.
+
+Refresh then runs local collection beside the Account summary. Provider status is not on that
+path: it is one unauthenticated `GET /api/v2/providers/status` (direct Statuspage polls only if
+that read fails), started without waiting, and skipped when a sweep has just run. Device sync and
+snapshot upload follow the summary but are not awaited; they feed Relay, not the screen. An access
+token within 60 seconds of expiry is refreshed before the summary is asked for, so a still-good
+token is one Relay round trip and an expired one is refresh-then-summary. The 401 path stays as
+the safety net. Concurrent callers share one in-flight refresh.
+
+The Account session Keychain item is `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`. A
+background refresh that cannot read the Keychain is "cannot tell" and leaves the signed-in state
+alone.
 
 The detailed system boundary is in [`docs/architecture.md`](../../docs/architecture.md), security
 requirements are in [`docs/security.md`](../../docs/security.md), shared visual language is in

@@ -1005,6 +1005,14 @@ public struct UsagePeriodCoverage: Codable, Equatable, Sendable {
       && (hourlyRetainedFrom.map(WireValidation.isUtcHour) ?? true)
   }
 
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(partial, forKey: .partial)
+    try container.encode(dailyRetainedFrom, forKey: .dailyRetainedFrom)
+    try container.encode(hourlyRetainedFrom, forKey: .hourlyRetainedFrom)
+    try container.encode(truncatedByRetention, forKey: .truncatedByRetention)
+  }
+
   private enum CodingKeys: String, CodingKey {
     case partial
     case dailyRetainedFrom
@@ -1061,6 +1069,16 @@ public struct UsagePeriodRevision: Codable, Equatable, Sendable {
       && WireValidation.isOpaqueID(pricingRevision)
       && WireValidation.isOpaqueID(modelCatalogRevision)
       && WireValidation.isSafeNonnegative(foldVersion)
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(usageRevision, forKey: .usageRevision)
+    try container.encode(deviceGeneration, forKey: .deviceGeneration)
+    try container.encode(accountUpdatedAt, forKey: .accountUpdatedAt)
+    try container.encode(pricingRevision, forKey: .pricingRevision)
+    try container.encode(modelCatalogRevision, forKey: .modelCatalogRevision)
+    try container.encode(foldVersion, forKey: .foldVersion)
   }
 
   private enum CodingKeys: String, CodingKey {

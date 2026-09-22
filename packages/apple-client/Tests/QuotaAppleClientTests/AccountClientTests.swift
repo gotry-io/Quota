@@ -855,4 +855,338 @@ struct AccountClientTests {
     #expect(result.document.revision == 1)
     #expect(try sessions.load()?.accessToken == Fixtures.rotatedAccess)
   }
+
+  @Test
+  func refreshesAnExpiredAccessTokenBeforeTheRequest() async throws {
+    let now = Fixtures.date("2026-08-14T16:00:00Z")
+    let transport = ScriptedTransport([
+      .init(status: 200, body: try Fixtures.refreshResponse()),
+      .init(status: 200, body: try Fixtures.accountSummaryJSON()),
+    ])
+    let sessions = MemoryAccountSessionStore(
+      session: Fixtures.session(accessExpiresAt: now.addingTimeInterval(-1))
+    )
+    let client = AccountClient(
+      relay: RelayClient(transport: transport),
+      sessionStore: sessions,
+      summaryStore: MemoryAccountSummaryStore(),
+      calendar: Calendar(identifier: .gregorian),
+      now: { now }
+    )
+    let result = await client.fetchTodaySummary()
+    #expect(result.error == nil)
+    #expect(result.summary != nil)
+    #expect(transport.tokenPosts == 1)
+    #expect(
+      transport.recordedURLs.map(\.path) == [
+        "/oauth/v2/token",
+        "/api/v6/account/summary",
+      ])
+    #expect(try sessions.load()?.accessToken == Fixtures.rotatedAccess)
+  }
+
+  @Test
+  func refreshesWhenAccessTokenIsWithinSixtySeconds() async throws {
+    let now = Fixtures.date("2026-08-14T16:00:00Z")
+    let transport = ScriptedTransport([
+      .init(status: 200, body: try Fixtures.refreshResponse()),
+      .init(status: 200, body: try Fixtures.accountSummaryJSON()),
+    ])
+    let client = AccountClient(
+      relay: RelayClient(transport: transport),
+      sessionStore: MemoryAccountSessionStore(
+        session: Fixtures.session(accessExpiresAt: now.addingTimeInterval(30))
+      ),
+      summaryStore: MemoryAccountSummaryStore(),
+      calendar: Calendar(identifier: .gregorian),
+      now: { now }
+    )
+    let result = await client.fetchTodaySummary()
+    #expect(result.error == nil)
+    #expect(transport.tokenPosts == 1)
+    #expect(transport.recordedURLs.first?.path == "/oauth/v2/token")
+  }
+
+  @Test
+  func concurrentNearExpiryCallersShareOneRefresh() async throws {
+    let now = Fixtures.date("2026-08-14T16:00:00Z")
+    let summary = try Fixtures.accountSummaryJSON()
+    let transport = ScriptedTransport([
+      .init(status: 200, body: try Fixtures.refreshResponse(), delayNanoseconds: 30_000_000),
+      .init(status: 200, body: summary),
+      .init(status: 200, body: summary),
+    ])
+    let client = AccountClient(
+      relay: RelayClient(transport: transport),
+      sessionStore: MemoryAccountSessionStore(
+        session: Fixtures.session(accessExpiresAt: now.addingTimeInterval(-60))
+      ),
+      summaryStore: MemoryAccountSummaryStore(),
+      calendar: Calendar(identifier: .gregorian),
+      now: { now }
+    )
+    async let first = client.fetchTodaySummary()
+    async let second = client.fetchTodaySummary()
+    let results = await [first, second]
+    #expect(results.allSatisfy { $0.error == nil && $0.summary != nil })
+    #expect(transport.tokenPosts == 1)
+  }
+
+  @Test
+  func restoreLocalStateReadsSessionAndCachesInOneHop() async throws {
+    let summary = try WireCodec.decode(
+      AccountSummary.self, from: try Fixtures.accountSummaryJSON())
+    let cached = CachedAccountSummary(
+      summary: summary, fetchedAt: Fixtures.date("2026-08-14T15:00:00Z"), etag: "\"s\"")
+    let activityBody = try Fixtures.usageActivityJSON(days: [
+      Fixtures.usageActivityDay(date: "2026-08-10")
+    ])
+    let activity = try WireCodec.decode(AccountUsageActivityResponse.self, from: activityBody)
+    let usage = CachedAccountUsage(
+      accountID: "account_01",
+      activity: CachedUsageActivity(
+        from: "2025-08-15",
+        to: "2026-08-14",
+        etag: "\"a\"",
+        fetchedAt: Fixtures.date("2026-08-14T15:00:00Z"),
+        response: activity
+      )
+    )
+    let client = AccountClient(
+      relay: RelayClient(transport: ScriptedTransport([])),
+      sessionStore: MemoryAccountSessionStore(session: Fixtures.session()),
+      summaryStore: MemoryAccountSummaryStore(value: cached),
+      usageStore: MemoryAccountUsageStore(value: usage)
+    )
+    let restored = try await client.restoreLocalState()
+    #expect(restored.session?.accountID == "account_01")
+    #expect(restored.summary?.etag == "\"s\"")
+    #expect(restored.usage?.activity?.etag == "\"a\"")
+  }
+
+  @Test
+  func unreadableSessionIsUnknownPresenceNotSignedOut() async {
+    let store = UnreadableSessionStore()
+    let client = AccountClient(
+      relay: RelayClient(transport: ScriptedTransport([])),
+      sessionStore: store,
+      summaryStore: MemoryAccountSummaryStore()
+    )
+    #expect(await client.sessionPresence() == .unknown)
+  }
+
+  @Test
+  func activityOffersIfNoneMatchAndReturnsTheCachedBodyOn304() async throws {
+    let body = try Fixtures.usageActivityJSON(days: [
+      Fixtures.usageActivityDay(date: "2026-08-10")
+    ])
+    let transport = ScriptedTransport([
+      .init(status: 200, body: body, headers: ["ETag": "\"act-one\""]),
+      .init(status: 304, body: Data(), headers: ["ETag": "\"act-one\""]),
+    ])
+    let usage = MemoryAccountUsageStore()
+    let client = AccountClient(
+      relay: RelayClient(transport: transport),
+      sessionStore: MemoryAccountSessionStore(session: Fixtures.session()),
+      summaryStore: MemoryAccountSummaryStore(),
+      usageStore: usage,
+      now: { Fixtures.date("2026-08-14T16:00:00Z") }
+    )
+    let first = await client.fetchUsageActivity(from: "2026-08-01", to: "2026-08-14")
+    guard case .activity(let days) = first else {
+      Issue.record("expected activity, got \(first)")
+      return
+    }
+    #expect(days.days.map(\.date) == ["2026-08-10"])
+    let second = await client.fetchUsageActivity(from: "2026-08-01", to: "2026-08-14")
+    guard case .activity(let again) = second else {
+      Issue.record("expected cached activity, got \(second)")
+      return
+    }
+    #expect(again.days.map(\.date) == ["2026-08-10"])
+    #expect(transport.recordedIfNoneMatch == [nil, "\"act-one\""])
+    #expect(try usage.load()?.activity?.etag == "\"act-one\"")
+  }
+
+  @Test
+  func usageDiskCachePersistsPeriodBodiesBesideTheSummary() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = ProtectedFileAccountUsageStore(directory: directory)
+    let body = try Fixtures.accountUsagePeriodJSON(
+      from: "2026-08-26",
+      to: "2026-08-26",
+      timezone: "UTC",
+      totals: Fixtures.summaryTotals(input: 2_000, output: 400)
+    )
+    let period = try WireCodec.decode(AccountUsagePeriodResponse.self, from: body)
+    try store.save(
+      CachedAccountUsage(
+        accountID: "account_01",
+        periods: [
+          "2026-08-26|2026-08-26|UTC|0": CachedUsagePeriod(
+            etag: "\"p\"",
+            fetchedAt: Fixtures.date("2026-08-26T02:00:00Z"),
+            response: period
+          )
+        ]
+      )
+    )
+    #expect(try store.load()?.accountID == "account_01")
+    #expect(try store.load()?.periods["2026-08-26|2026-08-26|UTC|0"]?.etag == "\"p\"")
+    try store.clear()
+    #expect(try store.load() == nil)
+  }
+
+  @Test
+  func aCorruptUsageFileDoesNotDropTheSessionOrSummary() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let usageStore = ProtectedFileAccountUsageStore(directory: directory)
+    try Data("{".utf8).write(to: usageStore.fileURL)
+    let summary = try WireCodec.decode(
+      AccountSummary.self, from: try Fixtures.accountSummaryJSON())
+    let client = AccountClient(
+      relay: RelayClient(transport: ScriptedTransport([])),
+      sessionStore: MemoryAccountSessionStore(session: Fixtures.session()),
+      summaryStore: MemoryAccountSummaryStore(
+        value: CachedAccountSummary(
+          summary: summary, fetchedAt: Fixtures.date("2026-08-14T15:00:00Z"), etag: "\"s\"")
+      ),
+      usageStore: usageStore
+    )
+    let restored = try await client.restoreLocalState()
+    #expect(restored.session?.accountID == "account_01")
+    #expect(restored.summary?.etag == "\"s\"")
+    #expect(restored.usage == nil)
+    #expect(try usageStore.load() == nil)
+    #expect(!FileManager.default.fileExists(atPath: usageStore.fileURL.path))
+  }
+
+  @Test
+  func theNinthPeriodEvictsTheOldest() async throws {
+    let clock = TickClock(start: Fixtures.date("2026-08-14T16:00:00Z"))
+    let body = try Fixtures.accountUsagePeriodJSON(
+      from: "2026-08-01",
+      to: "2026-08-01",
+      timezone: "UTC"
+    )
+    var exchanges: [ScriptedTransport.Exchange] = []
+    for _ in 0..<9 {
+      exchanges.append(.init(status: 200, body: body, headers: ["ETag": "\"p\""]))
+    }
+    let usage = MemoryAccountUsageStore()
+    let client = AccountClient(
+      relay: RelayClient(transport: ScriptedTransport(exchanges)),
+      sessionStore: MemoryAccountSessionStore(session: Fixtures.session()),
+      summaryStore: MemoryAccountSummaryStore(),
+      usageStore: usage,
+      now: { clock.now() }
+    )
+    for day in 1...9 {
+      let date = String(format: "2026-08-%02d", day)
+      let result = await client.fetchUsagePeriod(
+        from: date, to: date, timezone: "UTC")
+      guard case .period = result else {
+        Issue.record("expected period for \(date)")
+        return
+      }
+      clock.tick()
+    }
+    let stored = try #require(try usage.load())
+    #expect(stored.periods.count == 8)
+    #expect(stored.periods["2026-08-01|2026-08-01|UTC|0"] == nil)
+    #expect(stored.periods["2026-08-09|2026-08-09|UTC|0"] != nil)
+  }
+
+  @Test
+  func aStillExpiringProactiveRefreshDisablesFurtherProactiveRefresh() async throws {
+    let now = Fixtures.date("2026-08-14T16:00:00Z")
+    let transport = ScriptedTransport([
+      .init(
+        status: 200,
+        body: try Fixtures.refreshResponse(accessExpiresAt: "2026-08-14T16:00:01Z")
+      ),
+      .init(status: 200, body: try Fixtures.accountSummaryJSON()),
+      .init(status: 200, body: try Fixtures.accountSummaryJSON()),
+    ])
+    let client = AccountClient(
+      relay: RelayClient(transport: transport),
+      sessionStore: MemoryAccountSessionStore(
+        session: Fixtures.session(accessExpiresAt: now.addingTimeInterval(-1))
+      ),
+      summaryStore: MemoryAccountSummaryStore(),
+      calendar: Calendar(identifier: .gregorian),
+      now: { now }
+    )
+    let first = await client.fetchTodaySummary()
+    #expect(first.error == nil)
+    #expect(transport.tokenPosts == 1)
+    let second = await client.fetchTodaySummary()
+    #expect(second.error == nil)
+    #expect(transport.tokenPosts == 1)
+    #expect(
+      transport.recordedURLs.map(\.path) == [
+        "/oauth/v2/token",
+        "/api/v6/account/summary",
+        "/api/v6/account/summary",
+      ])
+  }
+
+  @Test
+  func a304RewritesFetchedAtOnTheUsageCache() async throws {
+    let clock = TickClock(start: Fixtures.date("2026-08-14T16:00:00Z"))
+    let body = try Fixtures.usageActivityJSON(days: [
+      Fixtures.usageActivityDay(date: "2026-08-10")
+    ])
+    let transport = ScriptedTransport([
+      .init(status: 200, body: body, headers: ["ETag": "\"act-one\""]),
+      .init(status: 304, body: Data(), headers: ["ETag": "\"act-one\""]),
+    ])
+    let usage = MemoryAccountUsageStore()
+    let client = AccountClient(
+      relay: RelayClient(transport: transport),
+      sessionStore: MemoryAccountSessionStore(session: Fixtures.session()),
+      summaryStore: MemoryAccountSummaryStore(),
+      usageStore: usage,
+      now: { clock.now() }
+    )
+    _ = await client.fetchUsageActivity(from: "2026-08-01", to: "2026-08-14")
+    let firstFetched = try #require(try usage.load()?.activity?.fetchedAt)
+    clock.tick()
+    _ = await client.fetchUsageActivity(from: "2026-08-01", to: "2026-08-14")
+    let secondFetched = try #require(try usage.load()?.activity?.fetchedAt)
+    #expect(secondFetched > firstFetched)
+  }
+}
+
+private final class TickClock: @unchecked Sendable {
+  private let lock = NSLock()
+  private var t: Date
+
+  init(start: Date) {
+    t = start
+  }
+
+  func now() -> Date {
+    lock.lock()
+    defer { lock.unlock() }
+    return t
+  }
+
+  func tick() {
+    lock.lock()
+    t.addTimeInterval(1)
+    lock.unlock()
+  }
+}
+
+private struct UnreadableSessionStore: AccountSessionStore {
+  func load() throws -> AccountSession? { throw AccountStoreError.unreadable }
+  func save(_ session: AccountSession) throws {}
+  func clear() throws {}
 }
