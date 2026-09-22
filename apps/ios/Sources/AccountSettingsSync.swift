@@ -32,9 +32,14 @@ final class AccountSettingsSync {
   /// After any applied change — local or remote — so evaluation and reset reminders run now,
   /// not at the next refresh.
   @ObservationIgnored var onApplied: () -> Void = {}
+  /// After a history-switch edit has been written (or the write has failed and the local value
+  /// is what the producer should trust). The producer backfills or clears from here.
+  @ObservationIgnored var onHistoryEdited: @MainActor () async -> Void = {}
 
   /// Bumped after every apply so a view-scoped `SettingsModel` can reload from the stores.
   private(set) var generation = 0
+  /// Whether remaining-quota history follows the Account, as the last document or edit said.
+  private(set) var historySync = false
   /// Un-acknowledged local edits, oldest first, any Account this phone has queued for.
   private(set) var pending: [PendingAccountSettingsEdit] = []
   private var nextPendingID: UInt64 = 1
@@ -74,6 +79,14 @@ final class AccountSettingsSync {
       rememberPending(accountID: session.accountID, edit: edit)
     }
     await enqueue { await self.performPush() }
+    if case .setHistorySync = edit {
+      await onHistoryEdited()
+    }
+  }
+
+  /// Relay answered `409 history_sync_off`. The switch is off; do not write that again from here.
+  func noteHistorySyncOff() {
+    historySync = false
   }
 
   /// Current policy as the stores hold it. `enabled` is not included.
@@ -123,6 +136,9 @@ final class AccountSettingsSync {
     }
     if previous?.document.revision != fetched.revision {
       applyPolicy(fetched.policy)
+      notifyApplied()
+    } else if historySync != fetched.history.sync {
+      historySync = fetched.history.sync
       notifyApplied()
     }
   }
@@ -274,14 +290,15 @@ final class AccountSettingsSync {
       rulesStore.save(rules)
     case .setBudget(let amount, let alerts):
       budgetStore.save(UsageBudget(amountUSD: amount, alerts: alerts))
-    case .setHistorySync:
-      return
+    case .setHistorySync(let value):
+      historySync = value
     }
   }
 
   func applyPolicy(_ policy: AccountSettingsPolicy) {
     rulesStore.save(rulesStore.load().applying(policy))
     budgetStore.save(UsageBudget(policy: policy))
+    historySync = policy.historySync
   }
 
   private func notifyApplied() {

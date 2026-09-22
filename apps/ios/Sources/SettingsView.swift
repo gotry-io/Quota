@@ -109,7 +109,7 @@ struct SettingsView: View {
       case .appearance:
         SettingsAppearanceView(settings: settings)
       case .about:
-        SettingsAboutView()
+        SettingsAboutView(model: model)
       }
     }
     .confirmationDialog(

@@ -13,6 +13,10 @@ public enum RelayClientError: Error, Equatable, Sendable {
   case redirectRefused
   case unavailable
   case invalidOrigin
+  /// `409 history_sync_off`. The Account switch is off; the upload was not stored.
+  case historySyncOff
+  /// `413 quota_history_full`. This Account is at the row ceiling. Stop for this launch.
+  case quotaHistoryFull
 }
 
 /// Extra query the activity read may name: `detail=agents` on a single day, or `detail=hours`
@@ -35,6 +39,8 @@ public enum RelayRoute: CaseIterable, Sendable {
   case deviceSync
   case deviceSnapshots
   case providersStatus
+  case uploadQuotaHistory
+  case accountQuotaHistory(provider: String, fingerprint: String, since: String)
 
   public static var allCases: [RelayRoute] {
     [
@@ -50,6 +56,12 @@ public enum RelayRoute: CaseIterable, Sendable {
       .deviceSync,
       .deviceSnapshots,
       .providersStatus,
+      .uploadQuotaHistory,
+      .accountQuotaHistory(
+        provider: "codex",
+        fingerprint: "account",
+        since: "1970-01-01T00:00:00Z"
+      ),
     ]
   }
 
@@ -57,9 +69,9 @@ public enum RelayRoute: CaseIterable, Sendable {
     switch self {
     case .token, .appleSignIn, .revoke: "POST"
     case .accountIdentities, .accountSummary, .accountSettings, .accountUsageActivity,
-      .accountUsagePeriod, .deviceSync, .providersStatus:
+      .accountUsagePeriod, .deviceSync, .providersStatus, .accountQuotaHistory:
       "GET"
-    case .updateAccountSettings, .deviceSnapshots: "PUT"
+    case .updateAccountSettings, .deviceSnapshots, .uploadQuotaHistory: "PUT"
     }
   }
 
@@ -76,6 +88,8 @@ public enum RelayRoute: CaseIterable, Sendable {
     case .deviceSync: "/api/v2/device/sync"
     case .deviceSnapshots: "/api/v6/device/snapshots"
     case .providersStatus: "/api/v2/providers/status"
+    case .uploadQuotaHistory: "/api/v6/device/quota-history"
+    case .accountQuotaHistory: "/api/v6/account/quota-history"
     }
   }
 
@@ -99,11 +113,19 @@ public enum RelayRoute: CaseIterable, Sendable {
         items.append(("breakdown", "1"))
       }
       return items
+    case .accountQuotaHistory(let provider, let fingerprint, let since):
+      return [("provider", provider), ("fingerprint", fingerprint), ("since", since)]
     case .token, .appleSignIn, .revoke, .accountIdentities, .accountSummary, .accountSettings,
-      .updateAccountSettings, .deviceSync, .deviceSnapshots, .providersStatus:
+      .updateAccountSettings, .deviceSync, .deviceSnapshots, .providersStatus, .uploadQuotaHistory:
       return []
     }
   }
+}
+
+/// The outcome of a conditional Account quota-history read.
+public enum QuotaHistoryRead: Sendable {
+  case fresh(QuotaHistoryReadResponse, etag: String?)
+  case notModified
 }
 
 /// The outcome of a conditional Account summary read.
@@ -528,6 +550,73 @@ public struct RelayClient: Sendable {
     )
   }
 
+  /// Upload this device's downsampled remaining-quota buckets. `409 history_sync_off` and
+  /// `413 quota_history_full` are their own errors; anything else is the usual client error.
+  public func uploadQuotaHistory(
+    accessToken: String,
+    request: QuotaHistoryUploadRequest
+  ) async throws -> QuotaHistoryUploadResponse {
+    guard WireValidation.isIOSAccessToken(accessToken) else {
+      throw RelayClientError.unauthorized
+    }
+    let body = try WireCodec.encodeRequest(request)
+    guard request.generation > 0,
+      request.pointCount <= QuotaHistoryUploadRequest.maximumPoints,
+      body.count <= QuotaHistoryUploadRequest.maximumBytes
+    else {
+      throw RelayClientError.invalidResponse
+    }
+    return try await send(
+      route: .uploadQuotaHistory,
+      query: [],
+      body: body,
+      bearer: accessToken,
+      expectedStatus: 200,
+      decode: QuotaHistoryUploadResponse.self
+    )
+  }
+
+  /// One global-scope subscription's merged buckets. `etag` makes the read conditional.
+  public func fetchQuotaHistory(
+    accessToken: String,
+    provider: ProviderID,
+    fingerprint: String,
+    since: Date,
+    etag: String? = nil
+  ) async throws -> QuotaHistoryRead {
+    guard WireValidation.isIOSAccessToken(accessToken) else {
+      throw RelayClientError.unauthorized
+    }
+    guard WireValidation.isOpaqueID(fingerprint) else {
+      throw RelayClientError.invalidQuery
+    }
+    let sinceText = QuotaHistoryWireFormat.rfc3339UTC(since)
+    let (data, response) = try await perform(
+      route: .accountQuotaHistory(
+        provider: provider.rawValue,
+        fingerprint: fingerprint,
+        since: sinceText
+      ),
+      query: [],
+      body: nil,
+      bearer: accessToken,
+      expectedStatus: 200,
+      ifNoneMatch: etag
+    )
+    let nextETag = Self.entityTag(response)
+    if response.statusCode == 304 {
+      return .notModified
+    }
+    do {
+      let decoded = try WireCodec.decode(QuotaHistoryReadResponse.self, from: data)
+      return .fresh(decoded, etag: nextETag)
+    } catch is WireLimitError {
+      throw RelayClientError.responseTooLarge
+    } catch {
+      throw RelayClientError.invalidResponse
+    }
+  }
+
   private func send<T: Decodable>(
     route: RelayRoute,
     query: [(String, String)],
@@ -689,6 +778,10 @@ public struct RelayClient: Sendable {
     if status == 401 {
       return .unauthorized
     }
+    if let code = Self.errorCode(body) {
+      if status == 409, code == "history_sync_off" { return .historySyncOff }
+      if status == 413, code == "quota_history_full" { return .quotaHistoryFull }
+    }
     if (500...599).contains(status) {
       return .unavailable
     }
@@ -702,5 +795,13 @@ public struct RelayClient: Sendable {
       return .invalidGrant
     }
     return .rejected(code: "http_\(status)", status: status)
+  }
+
+  private static func errorCode(_ body: Data) -> String? {
+    guard
+      let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+      let error = object["error"] as? [String: Any]
+    else { return nil }
+    return error["code"] as? String
   }
 }

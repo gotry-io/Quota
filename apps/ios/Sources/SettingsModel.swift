@@ -52,6 +52,10 @@ enum SettingsCopy {
     "Quota shows remaining quota this iPhone reads from the providers you connect, and the quota "
     + "and usage QuotaBar reports from your Macs."
   static let privacySentence = "This iPhone never uploads its sign-ins. Only the readings it takes reach your Account."
+  static let shareQuotaHistory = "Share quota history across your devices"
+  static let shareQuotaHistoryFootnote =
+    "Uploads this device's readings from the last 30 days, and new ones, to your Account. "
+    + "Turning it off deletes them from the Account."
   static let privacyAndSupport = "Privacy & Support"
   static let account = "Account"
   static let devices = "Devices"
