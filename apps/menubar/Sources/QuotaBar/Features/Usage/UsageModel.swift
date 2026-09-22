@@ -317,7 +317,10 @@ final class UsageModel {
     accountHistoryTask?.cancel()
     accountHistoryGeneration += 1
     let generation = accountHistoryGeneration
-    let since = now().addingTimeInterval(-Double(QuotaHistory.retentionDays) * 86_400)
+    // `since` is aligned to the hour so the helper's ETag cache matches between reads: Relay
+    // clamps it per window anyway, so an hour of extra span changes nothing in the answer.
+    let raw = now().addingTimeInterval(-Double(QuotaHistory.retentionDays) * 86_400)
+    let since = Date(timeIntervalSince1970: (raw.timeIntervalSince1970 / 3_600).rounded(.down) * 3_600)
     accountHistoryTask = Task { @MainActor [weak self] in
       guard let self else { return }
       do {

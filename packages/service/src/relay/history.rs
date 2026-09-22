@@ -34,13 +34,13 @@ impl AccountManager {
         let Ok(_guard) = self.history_lock.lock() else {
             return;
         };
-        if self.history_full.load(Ordering::Acquire) {
-            return;
-        }
         let Ok(mut record) = self.state.quota_history_sync(account_id) else {
             return;
         };
         let enabled = history_sync_enabled(document);
+        // Off is honoured even while Relay says the Account is full: the switch turning off is
+        // how the rows go, and the record must forget its watermarks so the next switch-on
+        // backfills instead of resuming past data Relay no longer holds.
         if !enabled {
             if record.sync
                 || record.backfill_done
@@ -55,6 +55,9 @@ impl AccountManager {
                 record.last_error = None;
                 let _ = self.state.set_quota_history_sync(account_id, &record);
             }
+            return;
+        }
+        if self.history_full.load(Ordering::Acquire) {
             return;
         }
         let revision = document.get("revision").and_then(Value::as_u64);
@@ -237,10 +240,14 @@ impl AccountManager {
         let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
         let planned = plan_quota_history_upload(&series_inputs(&self.state, &record), &now);
         if planned.is_empty() {
+            // Nothing to send is not an error, so an earlier one stops being shown.
+            let changed = (backfill && !record.backfill_done) || record.last_error.is_some();
             if backfill && !record.backfill_done {
                 record.backfill_done = true;
                 record.sync = true;
-                record.last_error = None;
+            }
+            record.last_error = None;
+            if changed {
                 let _ = self.state.set_quota_history_sync(account_id, &record);
             }
             return;

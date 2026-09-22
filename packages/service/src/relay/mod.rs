@@ -5289,6 +5289,14 @@ mod tests {
                 .expect("record")
                 .backfill_done
         );
+        // Off is honoured while full: the record forgets its watermarks so the next on backfills.
+        let mut off = document.clone();
+        off["history"] = serde_json::json!({"sync": false});
+        off["revision"] = serde_json::json!(4);
+        manager.note_history_settings("account_1", &off, &cancel);
+        let cleared = state.quota_history_sync("account_1").expect("record");
+        assert!(!cleared.sync && !cleared.backfill_done && cleared.series.is_empty());
+        assert_eq!(cleared.last_error, None);
         manager.note_history_settings("account_1", &document, &cancel);
         manager.sync_quota_history_after_collection(&cancel);
         let sent = server.join().expect("server");

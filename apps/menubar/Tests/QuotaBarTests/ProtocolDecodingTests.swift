@@ -532,11 +532,11 @@ func decodesAccountSettingsWhenPresentAndIgnoresUnknownDocumentKeys() throws {
   let errored = Data(
     String(decoding: data, as: UTF8.self).replacingOccurrences(
       of: "\"last_error\": null}",
-      with: "\"last_error\": \"Relay refused the upload.\"}"
+      with: "\"last_error\": \"network\"}"
     ).utf8
   )
   let erroredState = try QuotaWireCodec.makeDecoder().decode(LocalServiceState.self, from: errored)
-  #expect(erroredState.historySync?.statusLine(now: uploaded) == "Relay refused the upload.")
+  #expect(erroredState.historySync?.statusLine(now: uploaded) == "Could not reach your Account.")
 
   let extraHistory = Data(
     String(decoding: data, as: UTF8.self).replacingOccurrences(

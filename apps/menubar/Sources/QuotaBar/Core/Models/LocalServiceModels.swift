@@ -719,9 +719,21 @@ struct LocalServiceHistorySync: Decodable, Equatable, Sendable {
   /// The last error, or "Last uploaded …" in the shared freshness phrasing. Nil when neither
   /// has happened.
   func statusLine(now: Date = Date()) -> String? {
-    if let lastError, !lastError.isEmpty { return lastError }
+    if let lastError, !lastError.isEmpty { return Self.phrase(forError: lastError) }
     guard let lastUploadAt else { return nil }
     return "Last uploaded \(FreshnessCopy.age(since: lastUploadAt, now: now))"
+  }
+
+  /// The helper reports a code, not a sentence.
+  static func phrase(forError code: String) -> String {
+    switch code {
+    case "network": return "Could not reach your Account."
+    case "invalid_response": return "Your Account gave an unexpected answer."
+    case "history_sync_off": return "Sharing is off for this Account."
+    case "quota_history_full": return "Your Account holds as much history as it can."
+    case "unauthorized", "session_expired": return "Sign in again to keep sharing."
+    default: return "Sharing paused: \(code)."
+    }
   }
 }
 
