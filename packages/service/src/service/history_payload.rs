@@ -327,8 +327,8 @@ fn samples_from_readonly_cache(path: &Path) -> Result<QuotaSamplesBySubscription
     let mut samples = QuotaSamplesBySubscription::new();
     for row in rows {
         let (subscription_key, window_id, resets_at, observed_at, used_percent) = row?;
-        let (Ok(resets_at), Ok(observed_at)) = (
-            DateTime::parse_from_rfc3339(&resets_at),
+        let (Some(resets_at), Ok(observed_at)) = (
+            crate::history::whole_second_utc(&resets_at),
             DateTime::parse_from_rfc3339(&observed_at),
         ) else {
             continue;
@@ -339,7 +339,7 @@ fn samples_from_readonly_cache(path: &Path) -> Result<QuotaSamplesBySubscription
             .entry(window_id)
             .or_default()
             .push(QuotaSample {
-                resets_at: resets_at.with_timezone(&Utc),
+                resets_at,
                 observed_at: observed_at.with_timezone(&Utc),
                 used_percent,
             });

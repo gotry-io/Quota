@@ -27,6 +27,8 @@ use sha2::Digest;
 use thiserror::Error;
 use url::Url;
 
+mod history;
+
 pub const MANAGED_ORIGIN: &str = "https://quota.gotry.io";
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 pub const MAXIMUM_RESPONSE_BYTES: usize = 1_048_576;
@@ -200,6 +202,35 @@ impl RelayClient {
             self.conditional_get_json("/api/v2/account/settings", token, etag)?;
         if let Some(document) = &body {
             validate_account_settings(document)?;
+        }
+        Ok((next_etag, body))
+    }
+
+    /// `PUT /api/v6/device/quota-history`. 409 `history_sync_off` and 413 `quota_history_full`
+    /// are [`RelayError::Rejected`] with those codes.
+    pub(crate) fn put_quota_history(&self, token: &str, body: &Value) -> Result<Value, RelayError> {
+        let response = self.put_json("/api/v6/device/quota-history", body, token, 200)?;
+        history::validate_quota_history_upload_response(&response)?;
+        Ok(response)
+    }
+
+    /// Conditional `GET /api/v6/account/quota-history` for one global-scope subscription.
+    /// 304 returns no body.
+    pub(crate) fn account_quota_history(
+        &self,
+        token: &str,
+        provider: &str,
+        fingerprint: &str,
+        since: &str,
+        etag: Option<&str>,
+    ) -> Result<(Option<String>, Option<Value>), RelayError> {
+        let (next_etag, body) = self.conditional_get_json(
+            &history::quota_history_read_path(provider, fingerprint, since),
+            token,
+            etag,
+        )?;
+        if let Some(document) = &body {
+            history::validate_quota_history_read(document)?;
         }
         Ok((next_etag, body))
     }
@@ -460,6 +491,19 @@ impl RelayClient {
     fn url(&self, path: &str) -> String {
         format!("{}{}", self.origin, path)
     }
+}
+
+/// `alerts` and `budget` are always sent. `history` is sent only when this write names the switch.
+pub(crate) fn account_settings_put_body(document: &AccountSettingsWriteDocument) -> Value {
+    let mut body = serde_json::json!({
+        "protocol_version": CONTROL_PROTOCOL,
+        "alerts": document.alerts,
+        "budget": document.budget,
+    });
+    if let Some(history) = &document.history {
+        body["history"] = serde_json::json!({ "sync": history.sync });
+    }
+    body
 }
 
 fn account_usage_period_path(from: &str, to: &str, timezone: &str, breakdown: bool) -> String {
@@ -1634,6 +1678,10 @@ pub struct AccountManager {
     pending_login: Mutex<Option<PendingBrowserLogin>>,
     /// Last Account period bodies, keyed by range and session. Memory only; 304 keeps the body.
     period_cache: Mutex<HashMap<AccountPeriodCacheKey, AccountPeriodCacheEntry>>,
+    /// One history upload at a time, so a settings transition and a collection cannot backfill twice.
+    history_lock: Mutex<()>,
+    /// Set when Relay answers `413 quota_history_full`. The next collection clears it and may try again.
+    history_full: AtomicBool,
 }
 
 impl AccountManager {
@@ -1646,6 +1694,8 @@ impl AccountManager {
             refresh_lock: Mutex::new(()),
             pending_login: Mutex::new(None),
             period_cache: Mutex::new(HashMap::new()),
+            history_lock: Mutex::new(()),
+            history_full: AtomicBool::new(false),
         }
     }
 
@@ -1942,11 +1992,7 @@ impl AccountManager {
             .filter(|value| !value.is_empty())
             .ok_or_else(BackendError::unavailable)?
             .to_owned();
-        let body = serde_json::json!({
-            "protocol_version": CONTROL_PROTOCOL,
-            "alerts": document.alerts,
-            "budget": document.budget,
-        });
+        let body = account_settings_put_body(document);
         let write = self
             .client
             .put_account_settings(&access_token, &body, if_match)
@@ -1968,11 +2014,17 @@ impl AccountManager {
                     crate::protocol::RecoveryAction::Retry,
                 ))
             })?;
-        let _ = self.state.set_account_settings_cache(
-            &account_id,
-            etag.filter(|value| !value.is_empty()).as_deref(),
-            &document,
-        );
+        if self
+            .state
+            .set_account_settings_cache(
+                &account_id,
+                etag.filter(|value| !value.is_empty()).as_deref(),
+                &document,
+            )
+            .is_ok()
+        {
+            self.note_history_settings(&account_id, &document, cancel);
+        }
         Ok(AccountSettingsMutationResult {
             outcome,
             document,
@@ -2009,11 +2061,17 @@ impl AccountManager {
             .map_err(|error| relay_backend_error(error, session_epoch))?;
         match body {
             Some(document) => {
-                let _ = self.state.set_account_settings_cache(
-                    &account_id,
-                    next_etag.filter(|value| !value.is_empty()).as_deref(),
-                    &document,
-                );
+                if self
+                    .state
+                    .set_account_settings_cache(
+                        &account_id,
+                        next_etag.filter(|value| !value.is_empty()).as_deref(),
+                        &document,
+                    )
+                    .is_ok()
+                {
+                    self.note_history_settings(&account_id, &document, cancel);
+                }
                 Ok(())
             }
             None => {
@@ -4840,6 +4898,407 @@ mod tests {
             crate::protocol::ErrorCode::AuthenticationRequired
         );
         drop(server);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn account_settings_put_names_history_only_when_the_write_does() {
+        let alerts = serde_json::json!({
+            "reset_reminders": true,
+            "pace_alerts": false,
+            "thresholds": {}
+        });
+        let budget = serde_json::json!({ "amount_usd": null, "alerts": true });
+        let bare = AccountSettingsWriteDocument {
+            alerts: serde_json::from_value(alerts.clone()).expect("alerts"),
+            budget: serde_json::from_value(budget.clone()).expect("budget"),
+            history: None,
+        };
+        let body = account_settings_put_body(&bare);
+        assert!(body.get("history").is_none());
+        assert_eq!(body["protocol_version"], CONTROL_PROTOCOL);
+        let named = AccountSettingsWriteDocument {
+            history: Some(crate::protocol::AccountSettingsHistory { sync: true }),
+            ..bare
+        };
+        let body = account_settings_put_body(&named);
+        assert_eq!(body["history"]["sync"], true);
+        assert!(body.get("revision").is_none());
+
+        let written = serde_json::json!({
+            "protocol_version": CONTROL_PROTOCOL,
+            "revision": 2,
+            "updated_at": "2026-09-22T00:00:00Z",
+            "alerts": alerts,
+            "budget": budget,
+            "history": { "sync": true }
+        });
+        let (origin, server) = spawn_mock_server(vec![http_json_with_etag(200, "\"2\"", &written)]);
+        let root = std::env::temp_dir().join(format!(
+            "quota-history-settings-write-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let manager = signed_in_manager(&origin, &root);
+        let cancel = AtomicBool::new(false);
+        manager
+            .put_account_settings(&named, "\"1\"", &cancel)
+            .expect("put");
+        let sent = server.join().expect("server");
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert!(
+            sent[0].contains("PUT /api/v2/account/settings"),
+            "{}",
+            sent[0]
+        );
+        assert!(
+            sent[0].contains("\"history\":{\"sync\":true}"),
+            "{}",
+            sent[0]
+        );
+        let record = manager
+            .state
+            .quota_history_sync("account_1")
+            .expect("record");
+        assert!(record.backfill_done);
+        assert!(record.series.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn quota_history_backfill_uploads_once_and_409_clears_the_watermark() {
+        let now = chrono::Utc::now();
+        let observed = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let resets =
+            (now + chrono::Duration::hours(2)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let answer = serde_json::json!({
+            "protocol_version": MANAGED_DATA_PROTOCOL,
+            "series": [{
+                "provider": "codex",
+                "fingerprint": "account_test",
+                "window_id": "five_hour",
+                "bucket_start": "2026-09-22T00:00:00Z"
+            }]
+        });
+        let root =
+            std::env::temp_dir().join(format!("quota-history-backfill-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(crate::state::StateStore::open(&root).expect("state"));
+        state
+            .write_session_json(&fresh_session_json())
+            .expect("session");
+        let key = crate::protocol::QuotaOverviewIdentity::selector_for(
+            "codex",
+            "account_test",
+            "global",
+            None,
+        );
+        state
+            .record_quota_samples(
+                &key,
+                "codex",
+                &observed,
+                &[serde_json::json!({
+                    "id": "five_hour",
+                    "used_percent": 42.5,
+                    "resets_at": resets,
+                    "duration_seconds": 18000
+                })],
+                now,
+            )
+            .expect("sample");
+        state
+            .set_component(
+                crate::protocol::ComponentName::Quota,
+                crate::protocol::ComponentStatus::Ready,
+                Some(serde_json::json!({
+                    "captured_at": observed,
+                    "results": [{
+                        "provider": "codex",
+                        "snapshots": [{
+                            "provider": "codex",
+                            "account": {"fingerprint": "account_test", "fingerprint_scope": "global"},
+                            "observed_at": observed,
+                            "windows": [{
+                                "id": "five_hour",
+                                "used_percent": 42.5,
+                                "resets_at": resets,
+                                "duration_seconds": 18000
+                            }]
+                        }, {
+                            "provider": "codex",
+                            "account": {"fingerprint": "fp-source", "fingerprint_scope": "source"},
+                            "observed_at": observed,
+                            "windows": [{
+                                "id": "five_hour",
+                                "used_percent": 9,
+                                "resets_at": resets,
+                                "duration_seconds": 18000
+                            }]
+                        }]
+                    }]
+                })),
+                Some(observed.clone()),
+                None,
+                false,
+            )
+            .expect("quota");
+        let document = serde_json::json!({
+            "protocol_version": CONTROL_PROTOCOL,
+            "revision": 3,
+            "updated_at": observed,
+            "alerts": {"reset_reminders": true, "pace_alerts": true, "thresholds": {}},
+            "budget": {"amount_usd": null, "alerts": true},
+            "history": {"sync": true}
+        });
+        state
+            .set_account_settings_cache("account_1", Some("\"3\""), &document)
+            .expect("settings");
+        let inputs =
+            history::series_inputs(&state, &crate::state::QuotaHistorySyncRecord::default());
+        let planned = crate::history::plan_quota_history_upload(&inputs, &observed);
+        assert!(
+            !planned.is_empty(),
+            "inputs {inputs:?} samples {:?}",
+            state.quota_samples()
+        );
+        let (origin, server) = spawn_mock_server(vec![http_json(200, None, &answer)]);
+        let manager = AccountManager::new(
+            Arc::new(RelayClient::for_test(&origin).expect("client")),
+            state.clone(),
+            "Test Mac".to_owned(),
+        );
+        let cancel = AtomicBool::new(false);
+        manager.note_history_settings("account_1", &document, &cancel);
+        let sent = server.join().expect("server");
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert!(
+            sent[0].contains("PUT /api/v6/device/quota-history"),
+            "{}",
+            sent[0]
+        );
+        assert!(sent[0].contains("\"used_percent\":42.5"), "{}", sent[0]);
+        assert!(!sent[0].contains("fp-source"), "{}", sent[0]);
+        assert!(sent[0].contains("\"generation\":1"), "{}", sent[0]);
+        let record = state.quota_history_sync("account_1").expect("record");
+        assert!(record.backfill_done);
+        assert_eq!(record.last_error, None);
+        assert_eq!(
+            record
+                .series
+                .get("codex\u{0}account_test\u{0}five_hour")
+                .and_then(|series| series.watermark.as_deref()),
+            Some("2026-09-22T00:00:00Z")
+        );
+        manager.note_history_settings("account_1", &document, &cancel);
+        assert_eq!(
+            state
+                .quota_history_sync("account_1")
+                .expect("second")
+                .last_error,
+            None
+        );
+
+        let (origin, server) = spawn_mock_server(vec![http_json(
+            409,
+            None,
+            &serde_json::json!({"error": {"code": "history_sync_off", "message": "off"}}),
+        )]);
+        let manager = AccountManager::new(
+            Arc::new(RelayClient::for_test(&origin).expect("client")),
+            state.clone(),
+            "Test Mac".to_owned(),
+        );
+        // A new on-period: the stored fact says this one already backfilled, so force the
+        // transition the 409 is answering.
+        let mut again = state.quota_history_sync("account_1").expect("record");
+        again.backfill_done = false;
+        again.sync = false;
+        again.series.clear();
+        state
+            .set_quota_history_sync("account_1", &again)
+            .expect("reset");
+        manager.note_history_settings("account_1", &document, &cancel);
+        let sent = server.join().expect("server");
+        assert!(
+            sent[0].contains("PUT /api/v6/device/quota-history"),
+            "{}",
+            sent[0]
+        );
+        let refused = state.quota_history_sync("account_1").expect("refused");
+        assert_eq!(refused.last_error.as_deref(), Some("history_sync_off"));
+        assert!(refused.series.is_empty());
+        assert_eq!(refused.refused_revision, Some(3));
+        assert!(!refused.backfill_done);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn quota_history_read_uses_the_cached_body_on_304() {
+        let body = serde_json::json!({
+            "protocol_version": MANAGED_DATA_PROTOCOL,
+            "sync": true,
+            "windows": {
+                "five_hour": {
+                    "duration_seconds": 18000,
+                    "points": [{
+                        "resets_at": "2026-09-21T15:00:00Z",
+                        "bucket_start": "2026-09-21T10:00:00Z",
+                        "used_percent": 42.5
+                    }]
+                }
+            }
+        });
+        let (origin, server) = spawn_mock_server(vec![
+            http_json_with_etag(200, "\"hist-1\"", &body),
+            http_not_modified("\"hist-1\""),
+        ]);
+        let root =
+            std::env::temp_dir().join(format!("quota-history-read-{}", uuid::Uuid::new_v4()));
+        let manager = signed_in_manager(&origin, &root);
+        let cancel = AtomicBool::new(false);
+        let first = manager
+            .read_account_quota_history("codex", "account_test", "2026-08-22T00:00:00Z", &cancel)
+            .expect("read");
+        assert_eq!(
+            first["windows"]["five_hour"]["points"][0]["used_percent"],
+            42.5
+        );
+        let second = manager
+            .read_account_quota_history("codex", "account_test", "2026-08-22T00:00:00Z", &cancel)
+            .expect("304");
+        assert_eq!(second, first);
+        let sent = server.join().expect("server");
+        assert!(
+            sent[1]
+                .to_ascii_lowercase()
+                .contains("if-none-match: \"hist-1\""),
+            "{}",
+            sent[1]
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn quota_history_full_stops_until_the_next_collection() {
+        let now = chrono::Utc::now();
+        let observed = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let resets =
+            (now + chrono::Duration::hours(2)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let answer = serde_json::json!({
+            "protocol_version": MANAGED_DATA_PROTOCOL,
+            "series": [{
+                "provider": "codex",
+                "fingerprint": "account_test",
+                "window_id": "five_hour",
+                "bucket_start": "2026-09-22T00:00:00Z"
+            }]
+        });
+        let (origin, server) = spawn_mock_server(vec![
+            http_json(
+                413,
+                None,
+                &serde_json::json!({"error": {"code": "quota_history_full", "message": "full"}}),
+            ),
+            http_json(200, None, &answer),
+        ]);
+        let root =
+            std::env::temp_dir().join(format!("quota-history-full-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(crate::state::StateStore::open(&root).expect("state"));
+        state
+            .write_session_json(&fresh_session_json())
+            .expect("session");
+        let key = crate::protocol::QuotaOverviewIdentity::selector_for(
+            "codex",
+            "account_test",
+            "global",
+            None,
+        );
+        state
+            .record_quota_samples(
+                &key,
+                "codex",
+                &observed,
+                &[serde_json::json!({
+                    "id": "five_hour",
+                    "used_percent": 42.5,
+                    "resets_at": resets,
+                    "duration_seconds": 18000
+                })],
+                now,
+            )
+            .expect("sample");
+        state
+            .set_component(
+                crate::protocol::ComponentName::Quota,
+                crate::protocol::ComponentStatus::Ready,
+                Some(serde_json::json!({
+                    "captured_at": observed,
+                    "results": [{
+                        "provider": "codex",
+                        "snapshots": [{
+                            "provider": "codex",
+                            "account": {
+                                "fingerprint": "account_test",
+                                "fingerprint_scope": "global"
+                            },
+                            "observed_at": observed,
+                            "windows": [{
+                                "id": "five_hour",
+                                "used_percent": 42.5,
+                                "resets_at": resets,
+                                "duration_seconds": 18000
+                            }]
+                        }]
+                    }]
+                })),
+                Some(observed.clone()),
+                None,
+                false,
+            )
+            .expect("quota");
+        let document = serde_json::json!({
+            "protocol_version": CONTROL_PROTOCOL,
+            "revision": 3,
+            "updated_at": observed,
+            "alerts": {"reset_reminders": true, "pace_alerts": true, "thresholds": {}},
+            "budget": {"amount_usd": null, "alerts": true},
+            "history": {"sync": true}
+        });
+        state
+            .set_account_settings_cache("account_1", Some("\"3\""), &document)
+            .expect("settings");
+        let manager = AccountManager::new(
+            Arc::new(RelayClient::for_test(&origin).expect("client")),
+            state.clone(),
+            "Test Mac".to_owned(),
+        );
+        let cancel = AtomicBool::new(false);
+        manager.note_history_settings("account_1", &document, &cancel);
+        assert_eq!(
+            state
+                .quota_history_sync("account_1")
+                .expect("record")
+                .last_error
+                .as_deref(),
+            Some("quota_history_full")
+        );
+        assert!(
+            !state
+                .quota_history_sync("account_1")
+                .expect("record")
+                .backfill_done
+        );
+        manager.note_history_settings("account_1", &document, &cancel);
+        manager.sync_quota_history_after_collection(&cancel);
+        let sent = server.join().expect("server");
+        assert_eq!(sent.len(), 2, "{sent:?}");
+        assert!(
+            state
+                .quota_history_sync("account_1")
+                .expect("done")
+                .backfill_done
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 }

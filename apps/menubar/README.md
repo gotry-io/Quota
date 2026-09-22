@@ -6,13 +6,17 @@ a private Rust child at `Contents/Helpers/quota-service`, and the public `quota`
 
 ## Runtime boundary
 
-QuotaBar launches the fixed signed service path and keeps a persistent stdin/stdout NDJSON IPC v4
-connection. The helper emits `{"type":"event","event":"ready","ipc_version":4}` once it has opened
+QuotaBar launches the fixed signed service path and keeps a persistent stdin/stdout NDJSON IPC v5
+connection. The helper emits `{"type":"event","event":"ready","ipc_version":5}` once it has opened
 its local state; QuotaBar sends nothing before that and shows its loading state, restarts one start
 that stays silent for a minute, and reports the service unavailable after a second. `get_state`
-carries `account_settings { document, revision }` while signed in. A write is
+carries `account_settings { document, revision }` while signed in, and `history_sync`
+`{ enabled, last_upload_at, last_error }` for the history-switch caption (that key is absent
+when signed out). A write is
 `set_account_settings { document, if_match }` and answers `written` or `conflict` with the current
-document; `refresh_account_settings` forces a GET. Seed, adopt, merge, and 412 re-apply stay in
+document; `history` is on that document only when the write names the switch.
+`refresh_account_settings` forces a GET. `quota_history` takes `source` (`local` by default, or
+`account` for one subscription). Seed, adopt, merge, and 412 re-apply stay in
 Swift. Requests have no
 deadline. While one is outstanding QuotaBar pings every five seconds, and a helper that misses two
 consecutive pings is terminated, killed if it will not exit, and replaced on the next request. If

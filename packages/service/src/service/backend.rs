@@ -2612,8 +2612,8 @@ impl NativeBackend {
 
     /// Every window of every reading this Mac just took becomes a sample of its own curve.
     ///
-    /// The rows stay in `cache.sqlite` and are never uploaded: what a device saw of itself over
-    /// time is local state, not a managed contract (ADR 0042).
+    /// The rows stay in `cache.sqlite`. Global-scope buckets upload only while the Account's
+    /// history switch is on (ADR 0062).
     fn record_quota_samples(&self, quota: &Value, now: DateTime<Utc>) {
         for snapshot in quota
             .get("results")
@@ -2645,7 +2645,7 @@ impl NativeBackend {
     }
 
     /// Samples this Mac has stored since `since`, for Dashboard to fold. Reads `cache.sqlite`
-    /// only: no collection, no network, no identity (ADR 0042, ADR 0051).
+    /// only: no collection, no network (ADR 0042, ADR 0051). `source: account` is the other read.
     fn read_quota_history(&self, since: &str) -> Result<Value, BackendError> {
         let since = DateTime::parse_from_rfc3339(since)
             .map(|value| value.with_timezone(&Utc))
@@ -2660,6 +2660,25 @@ impl NativeBackend {
             history.utc_offset_seconds,
         ))
         .map_err(|_| BackendError::unavailable())
+    }
+
+    /// Relay's merged buckets for one subscription, restated as the local sample shape so the
+    /// chart does not care which read it was. `observed_at` is the bucket start.
+    fn read_account_quota_history(
+        &self,
+        payload: &crate::protocol::QuotaHistoryPayload,
+    ) -> Result<Value, BackendError> {
+        let provider = payload.provider.as_deref().ok_or_else(invalid_request)?;
+        let fingerprint = payload.fingerprint.as_deref().ok_or_else(invalid_request)?;
+        let body = self.account.read_account_quota_history(
+            provider,
+            fingerprint,
+            &payload.since,
+            &AtomicBool::new(false),
+        )?;
+        let offset = LocalQuotaHistory::new(Default::default(), Utc::now()).utc_offset_seconds;
+        serde_json::to_value(account_history_result(&body, provider, fingerprint, offset))
+            .map_err(|_| BackendError::unavailable())
     }
 
     /// Two readings of one subscription: this device's, and the one Relay resolved.
@@ -3367,8 +3386,16 @@ impl LocalBackend for NativeBackend {
         }
     }
 
-    fn quota_history(&self, since: &str) -> Result<Value, BackendError> {
-        self.read_quota_history(since)
+    fn quota_history(
+        &self,
+        payload: &crate::protocol::QuotaHistoryPayload,
+    ) -> Result<Value, BackendError> {
+        match payload.source {
+            crate::protocol::QuotaHistorySource::Local => self.read_quota_history(&payload.since),
+            crate::protocol::QuotaHistorySource::Account => {
+                self.read_account_quota_history(payload)
+            }
+        }
     }
 
     fn set_account_settings(
@@ -3693,6 +3720,11 @@ impl LocalBackend for NativeBackend {
             )))
         });
         if let Ok(ref quota_payload) = quota_value {
+            self.record_quota_samples(quota_payload, Utc::now());
+            if !cancel.load(Ordering::Acquire) {
+                self.account
+                    .sync_quota_history_after_collection(cancel.as_ref());
+            }
             let account_for_overview = account_value.as_ref().ok().cloned().or(stored_account);
             overview = Some(self.build_overview(quota_payload, account_for_overview.as_ref()));
         }
@@ -3758,6 +3790,10 @@ impl LocalBackend for NativeBackend {
             cancel.as_ref(),
             updates,
         );
+        if !cancel.load(Ordering::Acquire) {
+            self.account
+                .sync_quota_history_after_collection(cancel.as_ref());
+        }
         if let Some(error) = signed_out {
             account = Err(error);
         } else if accepted && let Some(reread) = self.reread_account(cancel.as_ref(), updates) {
@@ -4146,6 +4182,57 @@ fn invalid_request() -> BackendError {
         ErrorCode::InvalidRequest,
         RecoveryAction::None,
     ))
+}
+
+fn account_history_result(
+    body: &Value,
+    provider: &str,
+    fingerprint: &str,
+    utc_offset_seconds: i32,
+) -> QuotaHistoryResult {
+    let mut samples_by_subscription = BTreeMap::new();
+    let mut windows = BTreeMap::new();
+    if let Some(listed) = body.get("windows").and_then(Value::as_object) {
+        for (window_id, window) in listed {
+            let Some(points) = window.get("points").and_then(Value::as_array) else {
+                continue;
+            };
+            let mut samples = Vec::new();
+            for point in points {
+                let (Some(resets_at), Some(observed_at), Some(used_percent)) = (
+                    point
+                        .get("resets_at")
+                        .and_then(Value::as_str)
+                        .and_then(crate::history::canonical_rfc3339_utc),
+                    point
+                        .get("bucket_start")
+                        .and_then(Value::as_str)
+                        .and_then(crate::history::canonical_rfc3339_utc),
+                    point.get("used_percent").and_then(Value::as_f64),
+                ) else {
+                    continue;
+                };
+                samples.push(QuotaHistorySample {
+                    resets_at,
+                    observed_at,
+                    used_percent,
+                });
+            }
+            if !samples.is_empty() {
+                windows.insert(window_id.clone(), samples);
+            }
+        }
+    }
+    if !windows.is_empty() {
+        samples_by_subscription.insert(
+            QuotaOverviewIdentity::selector_for(provider, fingerprint, "global", None),
+            windows,
+        );
+    }
+    QuotaHistoryResult {
+        samples_by_subscription,
+        utc_offset_seconds,
+    }
 }
 
 fn quota_history_result(
@@ -9332,6 +9419,15 @@ mod tests {
         assert!(effective_usage_lower_bound(&json!({})).is_err());
     }
 
+    fn history_since(since: &str) -> crate::protocol::QuotaHistoryPayload {
+        crate::protocol::QuotaHistoryPayload {
+            since: since.to_owned(),
+            source: crate::protocol::QuotaHistorySource::Local,
+            provider: None,
+            fingerprint: None,
+        }
+    }
+
     /// `quota_history` reads cache.sqlite only: it returns samples since the requested instant,
     /// cuts anything older than thirty days, and keeps each window's rows on that window.
     #[test]
@@ -9408,7 +9504,9 @@ mod tests {
             "test",
         );
         let since = (now - Duration::days(5)).to_rfc3339_opts(SecondsFormat::Secs, true);
-        let value = backend.quota_history(&since).expect("history");
+        let value = backend
+            .quota_history(&history_since(&since))
+            .expect("history");
         let samples = value["samples_by_subscription"][&key]
             .as_object()
             .expect("subscription");
@@ -9420,7 +9518,9 @@ mod tests {
         assert!(value["utc_offset_seconds"].as_i64().is_some());
 
         let far_past = (now - Duration::days(40)).to_rfc3339_opts(SecondsFormat::Secs, true);
-        let retained = backend.quota_history(&far_past).expect("retained");
+        let retained = backend
+            .quota_history(&history_since(&far_past))
+            .expect("retained");
         let five_hour = retained["samples_by_subscription"][&key]["five_hour"]
             .as_array()
             .expect("retained five_hour");
@@ -9428,7 +9528,7 @@ mod tests {
         assert_eq!(five_hour[0]["used_percent"], 10.0);
         assert_eq!(five_hour[1]["used_percent"], 40.0);
         assert!(
-            backend.quota_history("yesterday").is_err(),
+            backend.quota_history(&history_since("yesterday")).is_err(),
             "a since that is not RFC 3339 is refused"
         );
 

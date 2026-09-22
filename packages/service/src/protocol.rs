@@ -12,7 +12,7 @@ use chrono_tz::Tz;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
-pub const IPC_VERSION: u32 = 4;
+pub const IPC_VERSION: u32 = 5;
 pub const MAXIMUM_LINE_BYTES: usize = 1_048_576;
 pub const MAXIMUM_REQUEST_ID_BYTES: usize = 128;
 /// Allowed Quota collection intervals, in seconds. The default is five minutes.
@@ -415,14 +415,49 @@ fn valid_iana_timezone(value: &str) -> bool {
     Tz::from_str(value).is_ok()
 }
 
+/// Where `quota_history` reads. Omitted means this Mac, so a caller that predates the field is
+/// unchanged. `ipc_version` still moves, because `get_state` gains `history_sync`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuotaHistorySource {
+    #[default]
+    Local,
+    Account,
+}
+
 /// The start of the sample range Dashboard asks this device to read, as one RFC 3339 instant.
 ///
 /// `get_state` restates only the current window Overview already draws. Thirty days of every
-/// window is asked for here rather than folded onto every state push (ADR 0051).
+/// window is asked for here rather than folded onto every state push (ADR 0051). `source:
+/// account` names one global-scope subscription; Relay already merged it.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QuotaHistoryPayload {
     pub since: String,
+    #[serde(default)]
+    pub source: QuotaHistorySource,
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub fingerprint: Option<String>,
+}
+
+impl QuotaHistoryPayload {
+    pub fn validate(&self) -> Result<(), IpcError> {
+        let invalid = || IpcError::new(ErrorCode::InvalidRequest, RecoveryAction::None);
+        if self.since.len() > 64 || chrono::DateTime::parse_from_rfc3339(&self.since).is_err() {
+            return Err(invalid());
+        }
+        if self.source != QuotaHistorySource::Account {
+            return Ok(());
+        }
+        let provider = self.provider.as_deref().ok_or_else(invalid)?;
+        let fingerprint = self.fingerprint.as_deref().ok_or_else(invalid)?;
+        if crate::catalog::ProviderId::parse(provider).is_none() || !is_opaque_id(fingerprint) {
+            return Err(invalid());
+        }
+        Ok(())
+    }
 }
 
 /// One stored reading of one window, as `quota_history` returns it.
@@ -458,6 +493,16 @@ pub struct SetUsageUploadPayload {
 pub struct AccountSettingsWriteDocument {
     pub alerts: AccountSettingsAlerts,
     pub budget: AccountSettingsBudget,
+    /// Present only when this write names the switch. Absent means unchanged, not off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history: Option<AccountSettingsHistory>,
+}
+
+/// The Account history switch. Serialised only when a write names it.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AccountSettingsHistory {
+    pub sync: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -526,6 +571,15 @@ impl AccountSettingsWriteDocument {
     }
 }
 
+fn is_opaque_id(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    bytes
+        .next()
+        .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && value.len() <= 128
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || b"._:-".contains(&byte))
+}
+
 fn is_account_settings_selector(value: &str) -> bool {
     value.len() == 12
         && value
@@ -578,6 +632,19 @@ pub struct AccountSettingsMutationResult {
 pub struct AccountSettingsState {
     pub document: Value,
     pub revision: u64,
+}
+
+/// What Settings says under the history switch: whether it is on, and the last upload.
+///
+/// Present on `get_state` only while signed in. `last_error` is null, or one of
+/// `history_sync_off`, `quota_history_full`, `network`, `invalid_response`,
+/// `authentication_required`.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct HistorySyncState {
+    pub enabled: bool,
+    pub last_upload_at: Option<String>,
+    pub last_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -844,6 +911,9 @@ pub struct StateSnapshot {
     pub account: ComponentState,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub account_settings: Option<AccountSettingsState>,
+    /// Absent when signed out. Not null.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub history_sync: Option<HistorySyncState>,
     pub pricing: ComponentState,
     pub providers: Vec<ProviderConfigView>,
     pub provider_status: Vec<ProviderStatusView>,
@@ -1104,6 +1174,8 @@ mod tests {
         .expect("quota_history request");
         let payload: QuotaHistoryPayload = history.decode_payload().expect("since");
         assert_eq!(payload.since, "2026-08-17T09:30:00Z");
+        assert_eq!(payload.source, QuotaHistorySource::Local);
+        assert!(payload.validate().is_ok());
         let history_extra = serde_json::from_str::<IpcRequest>(
             r#"{"type":"request","request_id":"r3","operation":"quota_history","payload":{"since":"2026-08-17T09:30:00Z","extra":true}}"#,
         )
@@ -1266,6 +1338,39 @@ mod tests {
         assert_eq!(
             amount_zero.validate().unwrap_err().code,
             ErrorCode::InvalidRequest
+        );
+    }
+
+    #[test]
+    fn quota_history_account_source_names_one_subscription_and_history_serialises_only_when_set() {
+        let account: IpcRequest = serde_json::from_str(
+            r#"{"type":"request","request_id":"r3","operation":"quota_history","payload":{"since":"2026-08-22T00:00:00Z","source":"account","provider":"codex","fingerprint":"account_test"}}"#,
+        )
+        .expect("account history");
+        let payload: QuotaHistoryPayload = account.decode_payload().expect("payload");
+        assert!(payload.validate().is_ok());
+        let missing: QuotaHistoryPayload = serde_json::from_str::<IpcRequest>(
+            r#"{"type":"request","request_id":"r3","operation":"quota_history","payload":{"since":"2026-08-22T00:00:00Z","source":"account"}}"#,
+        )
+        .expect("envelope")
+        .decode_payload()
+        .expect("decodes");
+        assert_eq!(
+            missing.validate().unwrap_err().code,
+            ErrorCode::InvalidRequest
+        );
+
+        let bare: AccountSettingsWriteDocument = serde_json::from_str(
+            r#"{"alerts":{"reset_reminders":true,"pace_alerts":true,"thresholds":{}},"budget":{"amount_usd":null,"alerts":true}}"#,
+        )
+        .expect("write");
+        let bare_json = serde_json::to_value(&bare).expect("json");
+        assert!(bare_json.get("history").is_none());
+        let mut named = bare;
+        named.history = Some(AccountSettingsHistory { sync: true });
+        assert_eq!(
+            serde_json::to_value(&named).expect("json")["history"]["sync"],
+            true
         );
     }
 
