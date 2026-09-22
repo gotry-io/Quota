@@ -31,6 +31,8 @@ final class AccountSettingsModel {
   /// sent for a later Account.
   private var lastAccountID: String?
   private var known: LocalServiceAccountSettingsState?
+  /// The history switch the signed-in Account currently holds, including an edit not yet written.
+  private(set) var historySync = false
 
   @ObservationIgnored
   private var writeTask: Task<Void, Never>?
@@ -89,6 +91,7 @@ final class AccountSettingsModel {
     queuedState = nil
     signedInAccountID = nil
     known = nil
+    historySync = false
   }
 
   /// Takes the Account settings slice of an accepted `get_state`.
@@ -111,10 +114,18 @@ final class AccountSettingsModel {
   func noteLocalEdit(_ edit: AccountSettingsEdit) {
     let accountID = signedInAccountID ?? lastAccountID
     guard let accountID else { return }
+    if case .setHistorySync(let enabled) = edit {
+      historySync = enabled
+    }
     enqueue(edit, for: accountID)
     if signedInAccountID == accountID {
       schedulePendingWrite()
     }
+  }
+
+  /// Visual QA and tests that need the switch on without a settings write.
+  func applyVisualHistorySync(_ enabled: Bool) {
+    historySync = enabled
   }
 
   private func process(_ state: LocalServiceState, accountID: String) {
@@ -130,7 +141,7 @@ final class AccountSettingsModel {
     if !firstSyncedAccountIDs.contains(accountID) {
       let plan = AccountSettings.planFirstSync(local: currentPolicy(), account: settings.document)
       if pending.isEmpty {
-        applyPolicy(plan.policy)
+        adoptPolicy(plan.policy)
         if let write = plan.write {
           known = LocalServiceAccountSettingsState(
             document: write, revision: write.revision)
@@ -142,7 +153,7 @@ final class AccountSettingsModel {
       } else {
         let base = plan.write ?? settings.document
         let folded = Self.fold(pending, over: base)
-        applyPolicy(folded.policy)
+        adoptPolicy(folded.policy)
         known = LocalServiceAccountSettingsState(document: base, revision: base.revision)
         schedulePendingWrite(markFirstSyncOnSuccess: true)
       }
@@ -155,15 +166,20 @@ final class AccountSettingsModel {
       if incomingNewer {
         known = settings
       }
-      applyPolicy(Self.fold(pending, over: base).policy)
+      adoptPolicy(Self.fold(pending, over: base).policy)
       schedulePendingWrite()
       return
     }
 
     if settings.revision > (known?.revision ?? -1) {
-      applyPolicy(settings.document.policy)
+      adoptPolicy(settings.document.policy)
       known = settings
     }
+  }
+
+  private func adoptPolicy(_ policy: AccountSettingsPolicy) {
+    historySync = policy.historySync
+    applyPolicy(policy)
   }
 
   private func schedulePendingWrite(markFirstSyncOnSuccess: Bool = false) {
@@ -238,7 +254,7 @@ final class AccountSettingsModel {
           return
         }
         document = Self.fold(sent, over: current)
-        applyPolicy(document.policy)
+        adoptPolicy(document.policy)
         ifMatch = LocalServiceAccountSettingsState.ifMatch(current.revision)
         retrying = true
       }
@@ -273,7 +289,7 @@ final class AccountSettingsModel {
       queuedState = nil
       await onNeedsReload?()
     case .conflict(let current):
-      applyPolicy(current.policy)
+      adoptPolicy(current.policy)
       known = LocalServiceAccountSettingsState(document: current, revision: current.revision)
       markFirstSynced(accountID)
     }
@@ -398,9 +414,9 @@ private struct PersistedEdit: Codable {
       type = "budget"
       amountUSD = amount.map(Self.wireAmount)
       self.alerts = alerts
-    case .setHistorySync(let value):
+    case .setHistorySync(let enabled):
       type = "history_sync"
-      self.value = value
+      value = enabled
     }
   }
 
