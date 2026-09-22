@@ -321,7 +321,7 @@ public struct QuotaHistoryReadResponse: Codable, Equatable, Sendable {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     protocolVersion = try container.decode(Int.self, forKey: .protocolVersion)
     sync = try container.decode(Bool.self, forKey: .sync)
-    windows = try container.decode([String: Window].self, forKey: .windows)
+    windows = try quotaHistoryWindows(container, forKey: .windows)
     guard protocolVersion == WireCodec.managedDataProtocolVersion else {
       throw DecodingError.dataCorruptedError(
         forKey: .protocolVersion,
@@ -464,6 +464,45 @@ private func quotaHistoryReadWindowId<Key: CodingKey>(
     )
   }
   return windowId
+}
+
+/// `windows` is keyed by the wire's `window_id`. `convertFromSnakeCase` rewrites dictionary
+/// keys on the macOS 14 / iOS 17 Foundation (SR-7180), so `"five_hour"` would arrive as
+/// `"fiveHour"`. Newer Foundation leaves `[String: Decodable]` keys alone but still reports
+/// the converted name from a keyed container. When those two views disagree, the dictionary
+/// still has the raw id. When they agree and a key was camelCased, put the underscore back.
+private func quotaHistoryWindows<Key: CodingKey>(
+  _ container: KeyedDecodingContainer<Key>,
+  forKey key: Key
+) throws -> [String: QuotaHistoryReadResponse.Window] {
+  let decoded = try container.decode(
+    [String: QuotaHistoryReadResponse.Window].self,
+    forKey: key
+  )
+  let nested = try container.nestedContainer(keyedBy: QuotaHistoryAnyKey.self, forKey: key)
+  let containerKeys = Set(nested.allKeys.map(\.stringValue))
+  guard containerKeys == Set(decoded.keys) else { return decoded }
+  var restored: [String: QuotaHistoryReadResponse.Window] = [:]
+  for (name, window) in decoded {
+    restored[quotaHistorySnakeCaseKey(name)] = window
+  }
+  return restored
+}
+
+/// Inverse of `convertFromSnakeCase` for a key that strategy camelCased. A key with no
+/// uppercase was not rewritten (`weekly`, or an id already read raw).
+func quotaHistorySnakeCaseKey(_ key: String) -> String {
+  guard key.contains(where: \.isUppercase) else { return key }
+  var restored = ""
+  for character in key {
+    if character.isUppercase {
+      restored.append("_")
+      restored.append(contentsOf: character.lowercased())
+    } else {
+      restored.append(character)
+    }
+  }
+  return restored
 }
 
 private func isAlignedQuotaHistoryBucket(_ bucketStart: Date, _ durationSeconds: Int) -> Bool {

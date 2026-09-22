@@ -1,5 +1,5 @@
 import Foundation
-import QuotaWire
+@testable import QuotaWire
 import Testing
 
 /// Round-trip of the bodies `apps/relay/test/quota-history.test.ts` sends and answers, through
@@ -73,6 +73,36 @@ struct QuotaHistoryWireTests {
     #expect(throws: DecodingError.self) {
       try WireCodec.decode(QuotaHistoryUploadRequest.self, from: data)
     }
+  }
+
+  @Test func aConvertingDecoderKeepsTheWindowId() throws {
+    struct WindowsBox: Decodable {
+      let windows: [String: QuotaHistoryReadResponse.Window]
+
+      init(from decoder: any Decoder) throws {
+        windows = try QuotaHistoryReadResponse(from: decoder).windows
+      }
+    }
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    decoder.dateDecodingStrategy = .custom { decoder in
+      let container = try decoder.singleValueContainer()
+      let value = try container.decode(String.self)
+      let formatter = ISO8601DateFormatter()
+      formatter.formatOptions = [.withInternetDateTime]
+      guard let date = formatter.date(from: value) else {
+        throw DecodingError.dataCorruptedError(
+          in: container,
+          debugDescription: "Expected an RFC 3339 instant."
+        )
+      }
+      return date
+    }
+    let box = try decoder.decode(WindowsBox.self, from: Data(readAnswer.utf8))
+    #expect(box.windows["five_hour"] != nil)
+    #expect(box.windows["fiveHour"] == nil)
+    #expect(quotaHistorySnakeCaseKey("fiveHour") == "five_hour")
+    #expect(quotaHistorySnakeCaseKey("weekly") == "weekly")
   }
 
   @Test func aReadIgnoresAKeyThisBuildDoesNotName() throws {

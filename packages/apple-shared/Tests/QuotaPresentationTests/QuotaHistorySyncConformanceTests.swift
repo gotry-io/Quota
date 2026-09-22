@@ -21,21 +21,28 @@ struct QuotaHistorySyncConformanceTests {
     #expect(QuotaHistorySync.spanSeconds(durationSeconds: 18_000) == 48 * 3_600)
     #expect(QuotaHistorySync.spanSeconds(durationSeconds: 604_800) == 28 * 86_400)
     #expect(QuotaHistorySync.spanSeconds(durationSeconds: 2_592_000) == 30 * 86_400)
+    let now = try QuotaHistorySyncFixture.instant(fixtureNow)
+    #expect(
+      QuotaHistorySync.bucket(samples: [], durationSeconds: nil, now: now, lastUploaded: []) == nil
+    )
+    #expect(
+      QuotaHistorySync.bucket(samples: [], durationSeconds: 0, now: now, lastUploaded: []) == nil
+    )
+    #expect(
+      QuotaHistorySync.bucket(samples: [], durationSeconds: -1, now: now, lastUploaded: []) == nil
+    )
     for testCase in fixture.bucket {
-      guard let duration = testCase.durationSeconds else {
-        // `bucket` takes a non-optional duration and returns the points, so a missing duration
-        // is not a call. The fixture still records that case as a refusal.
-        #expect(testCase.refused, "\(testCase.name)")
-        continue
-      }
       let points = QuotaHistorySync.bucket(
         samples: testCase.samples,
-        durationSeconds: duration,
+        durationSeconds: testCase.durationSeconds,
         now: testCase.now,
         lastUploaded: testCase.previous
       )
-      #expect(testCase.refused == false, "\(testCase.name)")
-      #expect(points == testCase.expected, "\(testCase.name)")
+      if testCase.refused {
+        #expect(points == nil, "\(testCase.name)")
+      } else {
+        #expect(points == testCase.expected, "\(testCase.name)")
+      }
     }
   }
 
@@ -43,8 +50,19 @@ struct QuotaHistorySyncConformanceTests {
     let fixture = try QuotaHistorySyncFixture.load()
     #expect(fixture.merge.count >= 2)
     for testCase in fixture.merge {
-      let merged = QuotaHistorySync.merge(testCase.devices)
-      #expect(merged == testCase.buckets, "\(testCase.name)")
+      let windowIDs = Set(testCase.devices.flatMap { $0.map(\.windowID) }).sorted()
+      var merged: [QuotaHistorySyncFixture.MergePoint] = []
+      for windowID in windowIDs {
+        let groups = testCase.devices.map { device in
+          device.filter { $0.windowID == windowID }.map(\.bucket)
+        }
+        merged.append(
+          contentsOf: QuotaHistorySync.merge(groups).map {
+            QuotaHistorySyncFixture.MergePoint(windowID: windowID, bucket: $0)
+          }
+        )
+      }
+      #expect(merged == testCase.expected, "\(testCase.name)")
     }
   }
 
@@ -84,7 +102,33 @@ struct QuotaHistorySyncConformanceTests {
     )
     #expect(folded != nil)
   }
+
+  @Test func uploadableDropsPointsRelayWouldRefuse() throws {
+    let now = try QuotaHistorySyncFixture.instant("2026-09-21T10:00:00Z")
+    let reset = try QuotaHistorySyncFixture.instant("2026-09-21T15:00:00Z")
+    func point(_ wire: String, _ usedPercent: Double) throws -> QuotaHistorySync.Bucket {
+      QuotaHistorySync.Bucket(
+        resetsAt: reset,
+        bucketStart: try QuotaHistorySyncFixture.instant(wire),
+        usedPercent: usedPercent
+      )
+    }
+    let kept = try QuotaHistorySync.uploadable(
+      [
+        point("2026-09-19T09:30:00Z", 1),
+        point("2026-09-19T09:45:00Z", 2),
+        point("2026-09-21T10:00:00Z", 3),
+        point("2026-09-21T10:15:00Z", 4),
+        point("2026-09-21T10:30:00Z", 5),
+      ],
+      durationSeconds: 18_000,
+      now: now
+    )
+    #expect(kept.map(\.usedPercent) == [2, 3, 4])
+  }
 }
+
+private let fixtureNow = "2026-09-21T12:00:00Z"
 
 private struct QuotaHistorySyncFixture {
   let bucket: [BucketCase]
@@ -107,12 +151,17 @@ private struct QuotaHistorySyncFixture {
     let refused: Bool
   }
 
-  /// `window_id` is not on ``QuotaHistorySync/Bucket``. These cases do not collide across windows,
-  /// so maximum-per-`(resetsAt, bucketStart)` still matches the fixture.
+  struct MergePoint: Equatable {
+    let windowID: String
+    let bucket: QuotaHistorySync.Bucket
+  }
+
+  /// Each device's points stay grouped by `window_id`. Merge runs per window, then the windows
+  /// are concatenated in `window_id` order, so two windows that share a bucket do not collapse.
   struct MergeCase {
     let name: String
-    let devices: [[QuotaHistorySync.Bucket]]
-    let buckets: [QuotaHistorySync.Bucket]
+    let devices: [[MergePoint]]
+    let expected: [MergePoint]
   }
 
   static func load() throws -> QuotaHistorySyncFixture {
@@ -190,9 +239,26 @@ private struct QuotaHistorySyncFixture {
     let name = try #require(testCase["name"] as? String)
     let groups = try #require(testCase["devices"] as? [Any])
     let devices = try groups.map { group in
-      try buckets(group)
+      try mergePoints(group)
     }
-    return MergeCase(name: name, devices: devices, buckets: try buckets(testCase["expected"]))
+    return MergeCase(
+      name: name,
+      devices: devices,
+      expected: try mergePoints(testCase["expected"])
+    )
+  }
+
+  private static func mergePoints(_ value: Any?) throws -> [MergePoint] {
+    try rows(value).map { point in
+      MergePoint(
+        windowID: try #require(point["window_id"] as? String),
+        bucket: QuotaHistorySync.Bucket(
+          resetsAt: try instant(point["resets_at"]),
+          bucketStart: try instant(point["bucket_start"]),
+          usedPercent: try number(point["used_percent"])
+        )
+      )
+    }
   }
 
   private static func buckets(_ value: Any?) throws -> [QuotaHistorySync.Bucket] {

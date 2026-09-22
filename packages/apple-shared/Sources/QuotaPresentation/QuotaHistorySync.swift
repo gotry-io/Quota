@@ -35,22 +35,23 @@ public enum QuotaHistorySync {
     }
   }
 
-  /// The fixture's `bucket` rule.
+  /// The fixture's `bucket` rule, or `nil` when `durationSeconds` is missing or not positive.
   ///
-  /// `bucketStart` is `floor(observedAt / size) × size` in UTC. The value is the maximum
-  /// `usedPercent` in that bucket for that `resetsAt`. `lastUploaded` is the newest bucket per
-  /// `resetsAt` already at Relay: a bucket with that same value is not returned. A bucket older
-  /// than ``spanSeconds(durationSeconds:)`` is not returned. A `bucketStart` later than `now` is
-  /// kept — the fixture includes those points. Relay still refuses one more than a bucket ahead
-  /// of its own clock.
+  /// `bucketStart` is `floor(observedAt / size) × size` in UTC, on `Date`'s `Double` seconds.
+  /// The value is the maximum `usedPercent` in that bucket for that `resetsAt`. `lastUploaded`
+  /// is the newest bucket per `resetsAt` already at Relay: a bucket with that same value is not
+  /// returned, so the series ends at the last change. A bucket older than
+  /// ``spanSeconds(durationSeconds:)`` is not returned. A `bucketStart` later than `now` is
+  /// kept — the fixture includes those points. ``uploadable(_:durationSeconds:now:)`` is what
+  /// drops the points Relay would refuse.
   public static func bucket(
     samples: [QuotaSample],
-    durationSeconds: Int,
+    durationSeconds: Int?,
     now: Date,
     lastUploaded: [Bucket]
-  ) -> [Bucket] {
-    let span = Int64(spanSeconds(durationSeconds: durationSeconds))
-    let cutoff = epochMilliseconds(now) - span * 1_000
+  ) -> [Bucket]? {
+    guard let durationSeconds, durationSeconds > 0 else { return nil }
+    let cutoff = now.timeIntervalSince1970 - Double(spanSeconds(durationSeconds: durationSeconds))
     var lastByReset: [Date: (bucketStart: Date, usedPercent: Double)] = [:]
     for point in lastUploaded {
       if let current = lastByReset[point.resetsAt], point.bucketStart < current.bucketStart {
@@ -61,7 +62,7 @@ public enum QuotaHistorySync {
     var buckets: [BucketKey: Bucket] = [:]
     for sample in samples {
       let bucketStart = bucketStart(sample.observedAt, durationSeconds: durationSeconds)
-      if epochMilliseconds(bucketStart) < cutoff { continue }
+      if bucketStart.timeIntervalSince1970 < cutoff { continue }
       let key = BucketKey(resetsAt: sample.resetsAt, bucketStart: bucketStart)
       if let existing = buckets[key], sample.usedPercent <= existing.usedPercent { continue }
       buckets[key] = Bucket(
@@ -78,6 +79,25 @@ public enum QuotaHistorySync {
       lastByReset[point.resetsAt] = (point.bucketStart, point.usedPercent)
     }
     return uploaded
+  }
+
+  /// The buckets Relay would accept: not older than the span plus one bucket, and not more
+  /// than one bucket ahead of `now`. Exactly one bucket ahead, and exactly the slack edge,
+  /// stay. Call this before every upload.
+  public static func uploadable(
+    _ buckets: [Bucket],
+    durationSeconds: Int,
+    now: Date
+  ) -> [Bucket] {
+    guard durationSeconds > 0 else { return [] }
+    let size = Double(bucketSeconds(durationSeconds: durationSeconds))
+    let span = Double(spanSeconds(durationSeconds: durationSeconds))
+    let earliest = now.timeIntervalSince1970 - span - size
+    let latest = now.timeIntervalSince1970 + size
+    return buckets.filter { bucket in
+      let start = bucket.bucketStart.timeIntervalSince1970
+      return start >= earliest && start <= latest
+    }
   }
 
   /// The fixture's `merge` rule: union, maximum `usedPercent` per `(resetsAt, bucketStart)`,
@@ -134,9 +154,9 @@ private struct BucketKey: Hashable {
 }
 
 private func bucketStart(_ observedAt: Date, durationSeconds: Int) -> Date {
-  let sizeMs = Int64(QuotaHistorySync.bucketSeconds(durationSeconds: durationSeconds)) * 1_000
-  let startMs = floorDivide(epochMilliseconds(observedAt), by: sizeMs) * sizeMs
-  return Date(timeIntervalSince1970: Double(startMs) / 1_000)
+  let size = Double(QuotaHistorySync.bucketSeconds(durationSeconds: durationSeconds))
+  let start = floor(observedAt.timeIntervalSince1970 / size) * size
+  return Date(timeIntervalSince1970: start)
 }
 
 private func bucketIsBefore(
@@ -145,17 +165,6 @@ private func bucketIsBefore(
 ) -> Bool {
   if lhs.resetsAt != rhs.resetsAt { return lhs.resetsAt < rhs.resetsAt }
   return lhs.bucketStart < rhs.bucketStart
-}
-
-private func epochMilliseconds(_ date: Date) -> Int64 {
-  Int64((date.timeIntervalSince1970 * 1_000).rounded(.toNearestOrEven))
-}
-
-private func floorDivide(_ value: Int64, by divisor: Int64) -> Int64 {
-  let quotient = value / divisor
-  let remainder = value % divisor
-  if remainder != 0 && value < 0 { return quotient - 1 }
-  return quotient
 }
 
 private func saturatingMultiply(_ value: Int, by factor: Int) -> Int {
