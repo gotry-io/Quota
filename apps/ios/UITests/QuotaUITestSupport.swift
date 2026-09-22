@@ -830,6 +830,16 @@ private let keptAuditorExemptions: [KeptAuditorExemption] = [
   .init(
     type: "dynamic-type", screen: "settings.about.root", identifier: "", label: "Website",
     rule: "dynamic-type-label-Website"),
+  // Form toggle label and footer. iOS 26.3 reports partial Dynamic Type on the inner
+  // StaticText after fixedSize; both lines wrap and stay on screen.
+  .init(
+    type: "dynamic-type", screen: "settings.about.root", identifier: "",
+    label: "Share quota history across your devices",
+    rule: "dynamic-type-settings-history-sync-label"),
+  .init(
+    type: "dynamic-type", screen: "settings.about.root",
+    identifier: "settings.history.sync.footnote", label: "",
+    rule: "dynamic-type-settings.history.sync.footnote"),
   .init(
     type: "dynamic-type", screen: "settings.root", identifier: "",
     label: "Manage Devices on Web", rule: "dynamic-type-label-Manage-Devices"),

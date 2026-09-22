@@ -200,6 +200,52 @@ struct AccountSettingsTests {
     #expect(switched.alerts.resetReminders)
   }
 
+  @Test func reapplyOfHistorySyncNamesHistoryOnlyOnThatWrite() throws {
+    let fresh = try AccountSettingsDocument.decode(
+      Data(
+        """
+        {
+          "revision": 3,
+          "alerts": {
+            "reset_reminders": true,
+            "pace_alerts": true,
+            "thresholds": { "112233445566": [15] }
+          },
+          "budget": { "amount_usd": "50.00", "alerts": true },
+          "history": { "sync": false }
+        }
+        """.utf8
+      )
+    )
+    let enabled = AccountSettings.reapply(edit: .setHistorySync(true), onto: fresh)
+    #expect(enabled.history.sync)
+    #expect(enabled.writesHistory)
+    #expect(enabled.alerts.thresholds == fresh.alerts.thresholds)
+    #expect(enabled.revision == 3)
+    let enabledBody = try #require(
+      JSONSerialization.jsonObject(with: try enabled.updateRequestJSON()) as? [String: Any]
+    )
+    let history = try #require(enabledBody["history"] as? [String: Any])
+    #expect(history["sync"] as? Bool == true)
+
+    let other = AccountSettings.reapply(edit: .setPaceAlerts(false), onto: fresh)
+    #expect(other.history.sync == false)
+    #expect(other.writesHistory == false)
+    let otherBody = try #require(
+      JSONSerialization.jsonObject(with: try other.updateRequestJSON()) as? [String: Any]
+    )
+    #expect(otherBody["history"] == nil)
+
+    let disabled = AccountSettings.reapply(edit: .setHistorySync(false), onto: enabled)
+    #expect(disabled.history.sync == false)
+    #expect(disabled.writesHistory)
+    let disabledBody = try #require(
+      JSONSerialization.jsonObject(with: try disabled.updateRequestJSON()) as? [String: Any]
+    )
+    let disabledHistory = try #require(disabledBody["history"] as? [String: Any])
+    #expect(disabledHistory["sync"] as? Bool == false)
+  }
+
   @Test func aDeviceThatEditedNothingAdoptsWithoutAWrite() throws {
     let defaults = AccountSettingsPolicy(rules: AlertRules(), budget: UsageBudget.none)
     #expect(defaults.isDefault)

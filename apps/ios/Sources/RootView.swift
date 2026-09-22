@@ -54,8 +54,13 @@ struct RootView: View {
                 SubscriptionDetailView(
                   subscription: subscription,
                   deviceNames: model.readingDeviceNames,
-                  samples: model.localSamples
+                  samples: model.localSamples,
+                  historySync: model.accountSettings.historySync == true,
+                  accountSamples: model.quotaHistory.samplesBySubscription[subscription.key]
                 )
+                .task(id: "\(subscription.key)|\(model.accountSettings.historySync == true)") {
+                  await model.loadAccountQuotaHistory(for: subscription)
+                }
               }
             }
         }

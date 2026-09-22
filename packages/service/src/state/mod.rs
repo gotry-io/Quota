@@ -32,7 +32,7 @@ use crate::protocol::{
     AccountSettingsState, BrowserAccessDenialReason, CacheState, ComponentName, ComponentState,
     ComponentStatus, DEFAULT_QUOTA_REFRESH_INTERVAL_SECONDS, DiagnosticAttempt,
     DiagnosticAttemptCode, DiagnosticAttemptKind, DiagnosticAttemptOutcome,
-    DiagnosticAttemptTrigger, DiagnosticReport, ErrorCode, IPC_VERSION, IpcError,
+    DiagnosticAttemptTrigger, DiagnosticReport, ErrorCode, HistorySyncState, IPC_VERSION, IpcError,
     MAXIMUM_DIAGNOSTIC_RECENT, ProviderBrowserSessionView, ProviderConfigView,
     QUOTA_REFRESH_INTERVALS_SECONDS, QuotaOverviewItem, RecoveryAction, StateSnapshot, UsagePeriod,
     UsagePeriodCache, UsageSource,
@@ -160,6 +160,42 @@ struct StoredAccountSettings {
 pub struct CachedAccountSettings {
     pub etag: String,
     pub state: AccountSettingsState,
+}
+
+/// Per-Account quota-history upload progress. `series` is keyed by provider, fingerprint, and
+/// window — not by the local selector, which Relay does not know.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct QuotaHistorySyncRecord {
+    #[serde(default)]
+    pub sync: bool,
+    #[serde(default)]
+    pub backfill_done: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused_revision: Option<u64>,
+    #[serde(default)]
+    pub series: BTreeMap<String, QuotaHistorySeriesRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_upload_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct QuotaHistorySeriesRecord {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watermark: Option<String>,
+    #[serde(default)]
+    pub previous: Vec<crate::history::QuotaHistorySyncedPoint>,
+}
+
+/// The last `GET /api/v6/account/quota-history` body for one Account, one subscription, one `since`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct QuotaHistoryReadCache {
+    pub provider: String,
+    pub fingerprint: String,
+    pub since: String,
+    pub etag: String,
+    pub body: Value,
 }
 
 #[derive(Debug, Clone)]
@@ -609,6 +645,19 @@ impl StateStore {
             },
             _ => None,
         };
+        let history_record = match session
+            .as_ref()
+            .and_then(|value| value.get("status"))
+            .and_then(Value::as_str)
+        {
+            Some("active") => session
+                .as_ref()
+                .and_then(|value| value.get("account_id"))
+                .and_then(Value::as_str)
+                .filter(|account_id| is_account_settings_account_id(account_id))
+                .and_then(|account_id| self.quota_history_sync(account_id).ok()),
+            _ => None,
+        };
         self.with_cache(|conn| {
             let revision = metadata_u64(conn, "revision")?;
             self.remembered_revision.store(revision, Ordering::Release);
@@ -642,6 +691,13 @@ impl StateStore {
                 Err(error) => return Err(error),
             };
             let overview = read_overview(conn)?;
+            let signed_in = session
+                .as_ref()
+                .and_then(|value| value.get("status"))
+                .and_then(Value::as_str)
+                == Some("active");
+            let history_sync =
+                signed_in.then(|| history_sync_state(account_settings.as_ref(), &history_record));
             Ok(StateSnapshot {
                 ipc_version: IPC_VERSION,
                 revision,
@@ -657,6 +713,7 @@ impl StateStore {
                     .to_wire(),
                 account: account.to_wire(),
                 account_settings,
+                history_sync,
                 pricing: pricing
                     .unwrap_or_else(|| ComponentRecord::empty(ComponentStatus::Unavailable))
                     .to_wire(),
@@ -1277,10 +1334,12 @@ impl StateStore {
     /// Record what this device just read, one row per window, and drop what has aged out.
     ///
     /// A refresh that comes back with a window's previous numbers unchanged adds nothing to the
-    /// curve, so the row is only written when the reading moved. The samples stay here: nothing
-    /// uploads them and no wire contract names them (ADR 0042). `subscription_key` is the local
-    /// opaque selector for the account that produced the reading, so two accounts of one
-    /// provider keep separate histories.
+    /// curve, so the row is only written when the reading moved. The rows stay in `cache.sqlite`.
+    /// `resets_at` is stored as whole-second UTC. A row already on disk keeps its original text;
+    /// a read truncates that text to the same whole second, so a mixed table is one series.
+    /// Global-scope buckets upload only while the Account's history switch is on (ADR 0062); the
+    /// selector never leaves the device (ADR 0042). `subscription_key` is that local opaque
+    /// selector, so two accounts of one provider keep separate histories.
     pub fn record_quota_samples(
         &self,
         subscription_key: &str,
@@ -1296,7 +1355,10 @@ impl StateStore {
             for window in windows {
                 let (Some(id), Some(resets_at), Some(used)) = (
                     window.get("id").and_then(Value::as_str),
-                    window.get("resets_at").and_then(Value::as_str),
+                    window
+                        .get("resets_at")
+                        .and_then(Value::as_str)
+                        .and_then(crate::history::canonical_rfc3339_utc),
                     window.get("used_percent").and_then(Value::as_f64),
                 ) else {
                     continue;
@@ -1388,8 +1450,8 @@ impl StateStore {
             let mut samples = QuotaSamplesBySubscription::new();
             for row in rows {
                 let (subscription_key, window_id, resets_at, observed_at, used_percent) = row?;
-                let (Ok(resets_at), Ok(observed_at)) = (
-                    DateTime::parse_from_rfc3339(&resets_at),
+                let (Some(resets_at), Ok(observed_at)) = (
+                    crate::history::whole_second_utc(&resets_at),
                     DateTime::parse_from_rfc3339(&observed_at),
                 ) else {
                     continue;
@@ -1400,7 +1462,7 @@ impl StateStore {
                     .entry(window_id)
                     .or_default()
                     .push(crate::history::QuotaSample {
-                        resets_at: resets_at.with_timezone(&Utc),
+                        resets_at,
                         observed_at: observed_at.with_timezone(&Utc),
                         used_percent,
                     });
@@ -1558,10 +1620,83 @@ impl StateStore {
 
     fn clear_account_settings_cache(conn: &Connection) -> Result<(), StateError> {
         conn.execute(
-            "DELETE FROM preferences WHERE key GLOB 'account_settings:*'",
+            "DELETE FROM preferences WHERE key GLOB 'account_settings:*'
+             OR key GLOB 'quota_history_sync:*'
+             OR key GLOB 'quota_history_read:*'",
             [],
         )?;
         Ok(())
+    }
+
+    /// Upload watermarks and the backfill fact for one Account. Cleared on sign-out.
+    pub fn quota_history_sync(
+        &self,
+        account_id: &str,
+    ) -> Result<QuotaHistorySyncRecord, StateError> {
+        if !is_account_settings_account_id(account_id) {
+            return Err(StateError::InvalidState);
+        }
+        let key = quota_history_sync_key(account_id);
+        let raw = self.with_identity(|conn| preference(conn, &key))?;
+        Ok(raw
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default())
+    }
+
+    /// Writes the record when it changed. A cache rebuild cannot drop it: it lives in identity.
+    pub fn set_quota_history_sync(
+        &self,
+        account_id: &str,
+        record: &QuotaHistorySyncRecord,
+    ) -> Result<(), StateError> {
+        if !is_account_settings_account_id(account_id) {
+            return Err(StateError::InvalidState);
+        }
+        let raw = serde_json::to_string(record)?;
+        if raw.len() > crate::protocol::MAXIMUM_LINE_BYTES {
+            return Err(StateError::InvalidState);
+        }
+        let key = quota_history_sync_key(account_id);
+        let changed = self.with_identity_mut(|conn| {
+            if preference(conn, &key)?.as_deref() == Some(raw.as_str()) {
+                return Ok(false);
+            }
+            write_preference(conn, &key, &raw)?;
+            Ok(true)
+        })?;
+        if changed {
+            let _ = self.bump_revision();
+        }
+        Ok(())
+    }
+
+    /// The last Account history body this device read, so a 304 can answer without the rows.
+    pub fn quota_history_read_cache(
+        &self,
+        account_id: &str,
+    ) -> Result<Option<QuotaHistoryReadCache>, StateError> {
+        if !is_account_settings_account_id(account_id) {
+            return Err(StateError::InvalidState);
+        }
+        let key = quota_history_read_key(account_id);
+        let raw = self.with_identity(|conn| preference(conn, &key))?;
+        Ok(raw.and_then(|raw| serde_json::from_str(&raw).ok()))
+    }
+
+    pub fn set_quota_history_read_cache(
+        &self,
+        account_id: &str,
+        cache: &QuotaHistoryReadCache,
+    ) -> Result<(), StateError> {
+        if !is_account_settings_account_id(account_id) {
+            return Err(StateError::InvalidState);
+        }
+        let raw = serde_json::to_string(cache)?;
+        if raw.len() > crate::protocol::MAXIMUM_LINE_BYTES {
+            return Err(StateError::InvalidState);
+        }
+        let key = quota_history_read_key(account_id);
+        self.with_identity_mut(|conn| write_preference(conn, &key, &raw))
     }
 
     pub fn group_usage_by_project(&self) -> Result<bool, StateError> {
@@ -4559,6 +4694,28 @@ fn account_settings_preference_key(account_id: &str) -> String {
     format!("account_settings:{account_id}")
 }
 
+fn quota_history_sync_key(account_id: &str) -> String {
+    format!("quota_history_sync:{account_id}")
+}
+
+fn quota_history_read_key(account_id: &str) -> String {
+    format!("quota_history_read:{account_id}")
+}
+
+fn history_sync_state(
+    settings: Option<&AccountSettingsState>,
+    record: &Option<QuotaHistorySyncRecord>,
+) -> HistorySyncState {
+    HistorySyncState {
+        enabled: settings
+            .is_some_and(|settings| crate::history::history_sync_enabled(&settings.document)),
+        last_upload_at: record
+            .as_ref()
+            .and_then(|record| record.last_upload_at.clone()),
+        last_error: record.as_ref().and_then(|record| record.last_error.clone()),
+    }
+}
+
 fn is_account_settings_account_id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
@@ -6583,6 +6740,133 @@ mod tests {
                 .is_none()
         );
 
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn quota_history_sync_is_per_account_and_clears_on_sign_out() {
+        let root = temp_root("quota-history-sync");
+        let store = StateStore::open(&root).expect("state");
+        let mut session = active_session();
+        session["account_id"] = serde_json::json!("account_1");
+        store.write_session_json(&session).expect("session");
+        let document = serde_json::json!({
+            "protocol_version": 2,
+            "revision": 4,
+            "updated_at": "2026-09-21T10:00:00Z",
+            "alerts": {"reset_reminders": true, "pace_alerts": true, "thresholds": {}},
+            "budget": {"amount_usd": null, "alerts": true},
+            "history": {"sync": true}
+        });
+        store
+            .set_account_settings_cache("account_1", Some("\"4\""), &document)
+            .expect("settings");
+        let mut record = QuotaHistorySyncRecord::default();
+        record.sync = true;
+        record.backfill_done = true;
+        record.last_upload_at = Some("2026-09-21T10:05:00Z".to_owned());
+        record.series.insert(
+            "codex\u{0}account_test\u{0}five_hour".to_owned(),
+            QuotaHistorySeriesRecord {
+                watermark: Some("2026-09-21T10:00:00Z".to_owned()),
+                previous: Vec::new(),
+            },
+        );
+        store
+            .set_quota_history_sync("account_1", &record)
+            .expect("record");
+        let snapshot = store.snapshot().expect("snapshot");
+        assert_eq!(
+            snapshot.history_sync,
+            Some(crate::protocol::HistorySyncState {
+                enabled: true,
+                last_upload_at: Some("2026-09-21T10:05:00Z".to_owned()),
+                last_error: None,
+            })
+        );
+        let (_, epoch) = store
+            .session_snapshot()
+            .expect("snapshot")
+            .expect("session");
+        assert!(store.clear_session_if_epoch(epoch).expect("sign-out"));
+        assert!(
+            store
+                .quota_history_sync("account_1")
+                .expect("read")
+                .series
+                .is_empty()
+        );
+        let signed_out = store.snapshot().expect("signed out");
+        assert!(signed_out.history_sync.is_none());
+        let json = serde_json::to_value(&signed_out).expect("json");
+        assert!(json.get("history_sync").is_none());
+        drop(store);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// Old rows keep the `resets_at` text they were inserted with. A read truncates every
+    /// spelling to one whole UTC second, so `.900` joins `.000` and does not become the next
+    /// second. An offset is converted to UTC before that truncation.
+    #[test]
+    fn a_mixed_resets_at_table_folds_to_one_whole_second() {
+        let root = temp_root("quota-samples-mixed-resets");
+        let store = StateStore::open(&root).expect("state");
+        let key = crate::protocol::QuotaOverviewIdentity::selector_for(
+            "codex",
+            "account_test",
+            "global",
+            None,
+        );
+        store
+            .record_quota_samples(
+                &key,
+                "codex",
+                "2026-09-21T10:00:00Z",
+                &[serde_json::json!({
+                    "id": "five_hour",
+                    "used_percent": 11.0,
+                    "resets_at": "2026-09-21T15:00:00.400Z"
+                })],
+                DateTime::parse_from_rfc3339("2026-09-21T10:00:00Z")
+                    .expect("now")
+                    .with_timezone(&Utc),
+            )
+            .expect("write");
+        let stored: String = store
+            .cache
+            .lock()
+            .expect("cache")
+            .query_row("SELECT resets_at FROM quota_samples", [], |row| row.get(0))
+            .expect("stored text");
+        assert_eq!(stored, "2026-09-21T15:00:00Z");
+        store
+            .cache
+            .lock()
+            .expect("cache")
+            .execute(
+                "INSERT INTO quota_samples(
+                    subscription_key, provider, window_id, resets_at, observed_at, used_percent
+                 ) VALUES
+                 (?1, 'codex', 'five_hour', '2026-09-21T15:00:00.900Z', '2026-09-21T10:05:00Z', 20),
+                 (?1, 'codex', 'five_hour', '2026-09-21T10:00:00-05:00', '2026-09-21T10:10:00Z', 30)",
+                params![key],
+            )
+            .expect("old spellings");
+        let samples = store.quota_samples().expect("read");
+        let window = &samples[&key]["five_hour"];
+        assert_eq!(window.len(), 3);
+        let whole = DateTime::parse_from_rfc3339("2026-09-21T15:00:00Z")
+            .expect("whole")
+            .with_timezone(&Utc);
+        assert!(window.iter().all(|sample| sample.resets_at == whole));
+        assert_eq!(
+            window
+                .iter()
+                .map(|sample| sample.used_percent)
+                .collect::<Vec<_>>(),
+            vec![11.0, 20.0, 30.0]
+        );
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }

@@ -441,6 +441,7 @@ func rejectsUnknownNestedLocalServiceStateFields() throws {
   }
 
   #expect(state.accountSettings == nil)
+  #expect(state.historySync == nil)
 }
 
 @Test
@@ -497,6 +498,7 @@ func decodesAccountSettingsWhenPresentAndIgnoresUnknownDocumentKeys() throws {
         },
         "revision": 1
       },
+      "history_sync": {"enabled": true, "last_upload_at": "2026-09-22T10:00:00Z", "last_error": null},
       "pricing": {
         "status": "unavailable",
         "value": null,
@@ -521,6 +523,30 @@ func decodesAccountSettingsWhenPresentAndIgnoresUnknownDocumentKeys() throws {
   #expect(settings.document.alerts.thresholds == ["a1b2c3d4e5f6": [20, 10]])
   #expect(settings.document.budget.amountUSD == Decimal(250))
   #expect(settings.ifMatch == "\"1\"")
+  let sync = try #require(state.historySync)
+  #expect(sync.enabled)
+  #expect(sync.lastError == nil)
+  let uploaded = try #require(sync.lastUploadAt)
+  #expect(sync.statusLine(now: uploaded.addingTimeInterval(180)) == "Last uploaded 3m ago")
+
+  let errored = Data(
+    String(decoding: data, as: UTF8.self).replacingOccurrences(
+      of: "\"last_error\": null}",
+      with: "\"last_error\": \"network\"}"
+    ).utf8
+  )
+  let erroredState = try QuotaWireCodec.makeDecoder().decode(LocalServiceState.self, from: errored)
+  #expect(erroredState.historySync?.statusLine(now: uploaded) == "Could not reach your Account.")
+
+  let extraHistory = Data(
+    String(decoding: data, as: UTF8.self).replacingOccurrences(
+      of: "\"enabled\": true",
+      with: "\"enabled\": true, \"extra\": true"
+    ).utf8
+  )
+  #expect(throws: DecodingError.self) {
+    _ = try QuotaWireCodec.makeDecoder().decode(LocalServiceState.self, from: extraHistory)
+  }
 
   let extraEnvelope = Data(
     String(decoding: data, as: UTF8.self).replacingOccurrences(

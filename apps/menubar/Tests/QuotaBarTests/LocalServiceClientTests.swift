@@ -197,6 +197,143 @@ struct LocalServiceClientTests {
   }
 
   @Test
+  func quotaHistoryEncodesLocalAndAccountSources() async throws {
+    let service = try TemporaryService(
+      python: #"""
+        import json
+        import sys
+
+        request = json.loads(sys.stdin.readline())
+        assert request["operation"] == "quota_history"
+        payload = request["payload"]
+        assert payload["source"] == "local"
+        assert "provider" not in payload
+        assert "fingerprint" not in payload
+        assert str(payload["since"]).endswith("Z")
+        print(json.dumps({
+            "type": "response",
+            "request_id": request["request_id"],
+            "result": {"samples_by_subscription": {}, "utc_offset_seconds": 0},
+        }), flush=True)
+
+        request = json.loads(sys.stdin.readline())
+        payload = request["payload"]
+        assert payload["source"] == "account"
+        assert payload["provider"] == "codex"
+        assert payload["fingerprint"] == "fp-1"
+        assert str(payload["since"]).endswith("Z")
+        print(json.dumps({
+            "type": "response",
+            "request_id": request["request_id"],
+            "result": {"samples_by_subscription": {}, "utc_offset_seconds": 0},
+        }), flush=True)
+        """#
+    )
+    defer { service.remove() }
+    let client = try client(for: service)
+    let since = Date(timeIntervalSince1970: 1_786_300_000)
+    _ = try await client.quotaHistory(since: since)
+    _ = try await client.quotaHistory(
+      source: .account, provider: "codex", fingerprint: "fp-1", since: since)
+    await client.shutdown()
+  }
+
+  @Test
+  func setAccountSettingsNamesHistoryOnlyWhenTheWriteDoes() async throws {
+    let service = try TemporaryService(
+      python: #"""
+        import json
+        import sys
+
+        request = json.loads(sys.stdin.readline())
+        document = request["payload"]["document"]
+        assert "history" not in document
+        assert document["alerts"]["reset_reminders"] is True
+        assert document["budget"]["amount_usd"] == "40.00"
+        print(json.dumps({
+            "type": "response",
+            "request_id": request["request_id"],
+            "result": {
+                "outcome": "written",
+                "document": {
+                    "protocol_version": 2,
+                    "revision": 1,
+                    "updated_at": "2026-09-21T10:00:00Z",
+                    "alerts": {
+                        "reset_reminders": True,
+                        "pace_alerts": True,
+                        "thresholds": {},
+                    },
+                    "budget": {"amount_usd": "40.00", "alerts": True},
+                },
+                "revision": 1,
+            },
+        }), flush=True)
+
+        request = json.loads(sys.stdin.readline())
+        document = request["payload"]["document"]
+        assert set(document.keys()) == {"alerts", "budget", "history"}
+        assert document["history"] == {"sync": True}
+        assert document["alerts"]["reset_reminders"] is False
+        assert document["alerts"]["pace_alerts"] is True
+        assert document["budget"]["amount_usd"] == "40.00"
+        assert document["budget"]["alerts"] is True
+        assert "protocol_version" not in document
+        assert "revision" not in document
+        print(json.dumps({
+            "type": "response",
+            "request_id": request["request_id"],
+            "result": {
+                "outcome": "written",
+                "document": {
+                    "protocol_version": 2,
+                    "revision": 2,
+                    "updated_at": "2026-09-21T10:00:00Z",
+                    "alerts": {
+                        "reset_reminders": False,
+                        "pace_alerts": True,
+                        "thresholds": {},
+                    },
+                    "budget": {"amount_usd": "40.00", "alerts": True},
+                    "history": {"sync": True},
+                },
+                "revision": 2,
+            },
+        }), flush=True)
+        """#
+    )
+    defer { service.remove() }
+    let client = try client(for: service)
+    var plain = accountSettingsDocument(revision: 1, resetReminders: true, amountUSD: 40)
+    _ = try await client.setAccountSettings(document: plain, ifMatch: "\"1\"")
+    plain.alerts.resetReminders = false
+    plain.history.sync = true
+    plain.writesHistory = true
+    _ = try await client.setAccountSettings(document: plain, ifMatch: "\"1\"")
+    await client.shutdown()
+  }
+
+  @Test
+  func anIPCVersion4HelperIsRefusedWithTheExistingMessage() async throws {
+    let service = try TemporaryService(
+      announcesReady: false,
+      python: #"""
+        _time.sleep(0.5)
+        print(_json.dumps({"type": "event", "event": "ready", "ipc_version": 4}), flush=True)
+        """#
+    )
+    defer { service.remove() }
+    let client = try client(for: service)
+    let error = await stateError(from: client)
+    #expect(error == .invalidMessage)
+    #expect(
+      error?.errorDescription
+        == "QuotaBar's local service returned invalid data. Reinstall or update QuotaBar."
+    )
+    await client.shutdown()
+  }
+
+  @Test
   func setAccountSettingsWritesTheStoredShapeAndDecodesWrittenAndConflict() async throws {
     let service = try TemporaryService(
       python: #"""
@@ -809,7 +946,7 @@ private struct TemporaryService {
       count = int(launch_count_path.read_text()) if launch_count_path.exists() else 0
       launch_count_path.write_text(str(count + 1))
       def ready():
-          print(_json.dumps({"type": "event", "event": "ready", "ipc_version": 4}), flush=True)
+          print(_json.dumps({"type": "event", "event": "ready", "ipc_version": 5}), flush=True)
       def component(status, value=None):
           return {
               "status": status,
@@ -822,7 +959,7 @@ private struct TemporaryService {
           return {"rebuilding": False, "reset_at": None}
       def state(revision):
           return {
-              "ipc_version": 4,
+              "ipc_version": 5,
               "revision": revision,
               "usage_upload_enabled": True,
               "group_usage_by_project": True,

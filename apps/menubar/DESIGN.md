@@ -128,9 +128,11 @@ to a subscription picker above the detail so one reading stays readable at the 9
 
 ## Main window
 
-The main window is where this Mac's quota history is read at width, and where every preference
-lives. It does not collect, and every number the Quota and Usage pages show is already on
-this Mac: local samples through `quota_history`, and the current reading Overview already has.
+The main window is where quota history is read at width, and where every preference
+lives. It does not collect. Usage and the current reading are already on this Mac. Remaining
+history is this Mac's samples through `quota_history` unless **Share quota history across your
+devices** is on and the Account series for that subscription has arrived; that read is the same
+`quota_history` operation with `source: account`.
 
 The Usage toolbar holds a Usage source picker (**Account** / **This Mac**) that the Usage page
 honors, **Export** for the selected period, and a refresh action that uses the same tooltip as
@@ -139,7 +141,8 @@ Updated 3m ago**, or **Not checked** before any sync. The Usage source picker is
 Account data is unavailable or Usage sync is disabled; in those states Usage is unambiguously
 This Mac. Changing source preserves the selected period. Refresh is on every page. Quota has no
 provider menu and no history-range control: the in-page list selects a subscription, and remaining
-history is the thirty days of samples this Mac kept (ADR 0042).
+history is the thirty days of samples this Mac kept (ADR 0042), or the Account series when the
+history switch is on (ADR 0062).
 
 ### Quota
 
@@ -157,8 +160,13 @@ inner padding): window title, remaining as a 28pt semibold rounded
 numeral, meter, reset copy under the Menu Bar **Reset time** preference, pace headline and
 even-pace detail. Remaining is the strongest text. Empty: **No quota windows yet.**
 
-Then **Remaining history** labelled **This Mac**. A menu picks the window when there is more than
-one and this Mac has readings for at least one of them. The chart plots remaining 0–100 over the
+Then **Remaining history** labelled **This Mac**. With the history switch on and an Account series
+cached for the subscription, the label is **From your devices** and the chart draws that series.
+The merged points stop at the last change, so the current reading is appended at now before the
+fold; the solid line then meets the estimate the way a local series does.
+The switch off, or an Account read that failed with nothing cached, keeps today's label and the
+empty copy below. A menu picks the window when there is more than one
+and the series on screen has readings for at least one of them. The chart plots remaining 0–100 over the
 last visible span — `min` of sample retention and `max(24 hours, 4 × the window)`: 5 Hours is
 last 24 hours, Weekly last 4 weeks, monthly the 30-day retention — with y-axis labels
 **0 / 50 / 100 %** and time ticks: solid segments for observed readings, a dashed
@@ -660,7 +668,11 @@ default off; hint **Show the QuotaBar window when you open the app**), **Show in
 default off; hint **Keep QuotaBar in the Dock when its window is closed**; off is menu-bar-only
 except while the main window is open), **Refresh Interval** (Picker, 1, 2, 5, 10,
 or 15 minutes, default 5, applies immediately), **Upload Usage to Account** (the existing
-`usageUploadEnabled` switch), **Group Usage by project**, and **Reset Local Data**. Refresh Interval
+`usageUploadEnabled` switch), **Group Usage by project**, **Share quota history across your
+devices** (off until the Account document says otherwise; disabled until signed in; footnote
+*Uploads this device's readings from the last 30 days, and new ones, to your Account. Turning it
+off deletes them from the Account.* Under it, the helper's `history_sync` line: **Last uploaded
+3m ago**, or the last error), and **Reset Local Data**. Refresh Interval
 is how often this Mac collects provider quota; Account summary still polls every minute, and a
 window reset can collect quota once before the next interval. Reset Local Data always confirms first
 and says plainly that collected quota and Usage history are deleted and rebuilt and that the person

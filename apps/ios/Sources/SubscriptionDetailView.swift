@@ -19,11 +19,15 @@ struct SubscriptionDetailContent: Equatable {
   var freshness: String
   var windows: [QuotaWindow]
   var sources: [SourceRow]
-  /// Remaining history for each window id. Empty unless the reading on screen is the one this
-  /// phone took: nothing else has samples behind it (ADR 0042).
+  /// Remaining history for each window id. Local samples unless the Account switch is on and
+  /// the merged series has points, in which case those points are what the chart folds.
   var remainingHistories: [String: QuotaRemainingHistory]
   /// Whether the reading on screen is the one this phone took for itself.
   var isLocalReading: Bool
+  /// The chart is drawing the Account series, so the caption is "From your devices".
+  var drawsAccountHistory: Bool
+  /// **This iPhone**, or **From your devices** when the Account series is on screen.
+  var historyCaption: String
   /// A window menu is only useful when this phone has readings to plot for at least one window.
   var showsHistoryWindowPicker: Bool {
     windows.count > 1
@@ -34,7 +38,9 @@ struct SubscriptionDetailContent: Equatable {
     subscription: QuotaSubscription,
     deviceNames: [String: String],
     samples: LocalQuotaSamples = LocalQuotaSamples(),
-    now: Date = Date()
+    now: Date = Date(),
+    historySync: Bool = false,
+    accountSamples: [String: [QuotaSample]]? = nil
   ) -> SubscriptionDetailContent {
     let snapshot = subscription.snapshot
     let sources = subscription.sources
@@ -55,21 +61,38 @@ struct SubscriptionDetailContent: Equatable {
         )
       }
     let local = isLocalReading(subscription)
+    let accountPoints = accountSamples?.values.contains { !$0.isEmpty } ?? false
+    let drawsAccountHistory = historySync && accountPoints
+    let drawnAccountSamples =
+      drawsAccountHistory
+      ? seriesThroughNow(accountSamples ?? [:], snapshot: snapshot, now: now)
+      : [:]
+    let historySamples: (QuotaWindow) -> [QuotaSample] = { window in
+      if drawsAccountHistory {
+        return drawnAccountSamples[window.id] ?? []
+      }
+      guard local else { return [] }
+      return samples.samples(for: subscription, windowID: window.id)
+    }
     let remainingHistories =
-      local
+      (drawsAccountHistory || local)
       ? snapshot.windows.reduce(into: [String: QuotaRemainingHistory]()) { result, window in
         result[window.id] = QuotaRemainingHistory.fold(
           window: QuotaHistoryReading(
             resetsAt: window.resetsAt,
             cadenceSeconds: window.durationSeconds
           ),
-          samples: samples.samples(for: subscription, windowID: window.id),
+          samples: historySamples(window),
           usedPercent: window.usedPercent,
           now: now,
           isBalanceOnly: window.isBalanceOnly
         )
       }
       : [:]
+    let caption = QuotaHistoryCopy.sourceCaption(
+      drawsAccountHistory ? .yourDevices : .thisDevice,
+      deviceNoun: ThisDevice.displayName
+    )
     return SubscriptionDetailContent(
       provider: snapshot.provider,
       providerName: snapshot.provider.displayName,
@@ -79,8 +102,34 @@ struct SubscriptionDetailContent: Equatable {
       windows: snapshot.windows,
       sources: sources,
       remainingHistories: remainingHistories,
-      isLocalReading: local
+      isLocalReading: local,
+      drawsAccountHistory: drawsAccountHistory,
+      historyCaption: caption
     )
+  }
+
+  /// A merged Account series stops at the last change. The window on screen, at `now`, is
+  /// what a local series already ends on, so the solid line reaches the right edge.
+  ///
+  /// Only a window that already has Account points is extended, and only when that window
+  /// does not already reach `now`. Local samples are left alone.
+  static func seriesThroughNow(
+    _ samplesByWindow: [String: [QuotaSample]],
+    snapshot: QuotaSnapshot,
+    now: Date
+  ) -> [String: [QuotaSample]] {
+    var extended = samplesByWindow
+    for window in snapshot.windows {
+      guard let resetsAt = window.resetsAt, var samples = extended[window.id], !samples.isEmpty
+      else { continue }
+      let reachesNow = samples.contains { $0.resetsAt == resetsAt && $0.observedAt >= now }
+      if reachesNow { continue }
+      samples.append(
+        QuotaSample(resetsAt: resetsAt, observedAt: now, usedPercent: window.usedPercent)
+      )
+      extended[window.id] = samples
+    }
+    return extended
   }
 
   /// Whether the reading on screen is the one this phone took for itself. A reading Relay
@@ -102,8 +151,8 @@ struct SubscriptionDetailContent: Equatable {
       strings.append(contentsOf: windows.map { QuotaFormat.windowTitle($0) })
       strings.append(contentsOf: windows.map { QuotaFormat.remaining($0) })
     }
-    if isLocalReading {
-      strings.append(ThisDevice.displayName)
+    if drawsAccountHistory || isLocalReading {
+      strings.append(historyCaption)
       strings.append(SubscriptionDetailCopy.remainingHistory)
       if remainingHistories.values.contains(where: { $0.estimate != nil }) {
         strings.append("Estimate")
@@ -171,9 +220,12 @@ struct SubscriptionDetailView: View {
   /// What to call each source: the Account's Macs, and **This iPhone** for what this device read
   /// itself. A source with no name is a **Device**.
   let deviceNames: [String: String]
-  /// What this phone has read of its own quota over time. Only the reading it took itself is
-  /// drawn from these (ADR 0042).
+  /// What this phone has read of its own quota over time. Drawn unless the Account series is on.
   var samples = LocalQuotaSamples()
+  /// The Account history switch. Off keeps today's chart and copy.
+  var historySync = false
+  /// Samples folded from the Account read, keyed by window id. Nil is a miss or a failed read.
+  var accountSamples: [String: [QuotaSample]]? = nil
 
   @State private var selectedWindowID: String?
   @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -185,7 +237,9 @@ struct SubscriptionDetailView: View {
       subscription: subscription,
       deviceNames: deviceNames,
       samples: samples,
-      now: now
+      now: now,
+      historySync: historySync,
+      accountSamples: accountSamples
     )
     List {
       if dynamicTypeSize.isAccessibilitySize {
@@ -333,7 +387,7 @@ struct SubscriptionDetailView: View {
       Section {
         QuotaCard {
           historyHeader(content)
-          if !content.isLocalReading {
+          if !content.drawsAccountHistory && !content.isLocalReading {
             Text(SubscriptionDetailCopy.remoteOnlyHistory)
               .font(.body)
               .foregroundStyle(.primary)
@@ -383,23 +437,23 @@ struct SubscriptionDetailView: View {
   /// title is not clipped and both texts can grow with Dynamic Type.
   @ViewBuilder
   private func historyTitleRow(_ content: SubscriptionDetailContent) -> some View {
-    if !content.isLocalReading {
+    if !content.drawsAccountHistory && !content.isLocalReading {
       remainingHistoryTitle
     } else if dynamicTypeSize.isAccessibilitySize {
       VStack(alignment: .leading, spacing: 4) {
         remainingHistoryTitle.fixedSize(horizontal: false, vertical: true)
-        historyScope.fixedSize(horizontal: false, vertical: true)
+        historyScope(content).fixedSize(horizontal: false, vertical: true)
       }
     } else {
       ViewThatFits(in: .horizontal) {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
           remainingHistoryTitle.fixedSize()
           Spacer(minLength: 8)
-          historyScope.fixedSize()
+          historyScope(content).fixedSize()
         }
         VStack(alignment: .leading, spacing: 4) {
           remainingHistoryTitle.fixedSize(horizontal: false, vertical: true)
-          historyScope.fixedSize(horizontal: false, vertical: true)
+          historyScope(content).fixedSize(horizontal: false, vertical: true)
         }
       }
     }
@@ -413,8 +467,8 @@ struct SubscriptionDetailView: View {
       .accessibilityIdentifier("section.header.history")
   }
 
-  private var historyScope: some View {
-    Text(ThisDevice.displayName)
+  private func historyScope(_ content: SubscriptionDetailContent) -> some View {
+    Text(content.historyCaption)
       .font(QuotaDesign.Typography.support)
       .foregroundStyle(QuotaTheme.secondary)
       .accessibilityIdentifier("subscription.history.scope")

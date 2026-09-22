@@ -289,7 +289,13 @@ An inset-grouped `List` after the header:
   `remainingValue`, `QuotaMeter`, the live countdown row, and pace headline plus even-pace
   detail. Remaining is the strongest text. Empty: **No quota windows yet.**
 - Remaining history: a `QuotaCard` titled **Remaining history** with **This iPhone** beside the
-  title (DECISIONS K2; this phone has history only for readings it took itself). A menu picks
+  title when the chart is this phone's own samples. While the Account history switch is on and
+  the merged series has points, the same card draws that series and the caption is **From your
+  devices**. The merged points stop at the last change, so this iPhone's live reading is
+  appended at now before the fold; the solid line then meets the estimate the way a local
+  series does. A failed read with nothing cached keeps today's chart and copy. A cached
+  Account series stays on screen when that read fails, including after midnight when the
+  request's `since` is a new UTC day. A menu picks
   the window when there is more than one and this phone has readings for at least one of them;
   remote-only detail has no picker. The chart plots remaining 0–100 over the last visible
   span — `min` of sample retention and `max(24 hours, 4 × the window)`: 5 Hours is last 24
@@ -708,6 +714,14 @@ version under it, centred, then:
 - **Quota shows remaining quota this iPhone reads from the providers you connect, and the quota
   and usage QuotaBar reports from your Macs.**
 - **This iPhone never uploads its sign-ins. Only the readings it takes reach your Account.**
+
+An active session — not a pending one — shows the next section, the Account history switch
+**Share quota history across your devices** (`settings.history.sync`). Its footer is **Uploads
+this device's readings from the last 30 days, and new ones, to your Account. Turning it off
+deletes them from the Account.** The write is `history.sync` on the Account settings document.
+Signed out, or still confirming the Account, the section is absent. The switch is that document:
+a cached copy is what the toggle shows while a read is failing, and no document yet does not
+upload or clear stored history.
 
 Native rows **Version** (`CFBundleShortVersionString (CFBundleVersion)`), **Website**
 (`https://quota.gotry.io`), **GitHub** (the repository), and **License** with value **MIT**. No

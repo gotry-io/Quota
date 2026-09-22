@@ -10,6 +10,10 @@ enum GeneralSettingsCopy {
   static let refreshInterval = "Refresh Interval"
   static let uploadUsage = "Upload Usage to Account"
   static let uploadUsageHint = "Upload this Mac's Usage to your Quota account"
+  static let shareQuotaHistory = "Share quota history across your devices"
+  static let shareQuotaHistoryFootnote =
+    "Uploads this device's readings from the last 30 days, and new ones, to your Account. "
+    + "Turning it off deletes them from the Account."
   static let groupUsage = "Group Usage by project"
   static let groupUsageHint = "Show This Mac Usage broken down by repository"
   static let resetLocalData = "Reset Local Data"
@@ -115,6 +119,27 @@ struct GeneralSettingsView: View {
           Text(message)
         } else if let reason = model.accountFlow.syncUsageDisabledReason {
           Text(reason)
+        }
+      }
+
+      Section {
+        Toggle(
+          GeneralSettingsCopy.shareQuotaHistory,
+          isOn: Binding(
+            get: { model.accountSettings.historySync },
+            set: { model.setHistorySync($0) }
+          )
+        )
+        .disabled(model.accountFlow.syncUsageDisabledReason != nil)
+        .accessibilityLabel(GeneralSettingsCopy.shareQuotaHistory)
+        .accessibilityHint(GeneralSettingsCopy.shareQuotaHistoryFootnote)
+      } footer: {
+        VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xs) {
+          Text(GeneralSettingsCopy.shareQuotaHistoryFootnote)
+          if let status = model.quotaHistorySyncStatus {
+            Text(status)
+              .accessibilityIdentifier("settings.history-sync.status")
+          }
         }
       }
 

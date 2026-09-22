@@ -598,7 +598,13 @@ actor GatedUsageTransport: UsageTransport {
     }
   }
 
-  func quotaHistory(since: Date) async throws -> LocalServiceQuotaHistory {
+  func quotaHistory(
+    source: QuotaHistoryRequestSource,
+    provider: String?,
+    fingerprint: String?,
+    since: Date
+  ) async throws -> LocalServiceQuotaHistory {
+    let _ = (source, provider, fingerprint, since)
     throw LocalServiceClientError.invalidMessage
   }
 

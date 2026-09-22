@@ -6,9 +6,10 @@ import QuotaWire
 ///
 /// One entry per subscription and window id, oldest reading first. It is the phone's half of the
 /// same decision QuotaBar's service keeps in `cache.sqlite`: samples belong to the device that
-/// took them, are keyed by the local subscription selector, are kept for thirty days, and are
-/// never uploaded
-/// ([ADR 0042](../../../docs/decisions/0042-quota-history-is-local-samples.md)).
+/// took them, are keyed by the local subscription selector, and are kept for thirty days. They
+/// upload as downsampled buckets only while the Account's history switch is on
+/// ([ADR 0042](../../../docs/decisions/0042-quota-history-is-local-samples.md),
+/// [ADR 0062](../../../docs/decisions/0062-quota-history-may-follow-the-account.md)).
 struct LocalQuotaSamples: Codable, Equatable, Sendable {
   /// Journal files written before this version have no subscription key and cannot be
   /// attributed, so they are discarded on load.

@@ -205,10 +205,20 @@ actor LocalServiceClient: LocalServiceServing {
     return detail
   }
 
-  func quotaHistory(since: Date) async throws -> LocalServiceQuotaHistory {
+  func quotaHistory(
+    source: QuotaHistoryRequestSource,
+    provider: String?,
+    fingerprint: String?,
+    since: Date
+  ) async throws -> LocalServiceQuotaHistory {
     try await request(
       operation: "quota_history",
-      payload: QuotaHistoryPayload(since: since)
+      payload: QuotaHistoryPayload(
+        source: source,
+        provider: provider,
+        fingerprint: fingerprint,
+        since: since
+      )
     )
   }
 
@@ -880,15 +890,23 @@ private struct SetAccountSettingsPayload: Encodable {
   var ifMatch: String
 
   init(document: AccountSettingsDocument, ifMatch: String) {
-    self.document = StoredAccountSettingsDocument(alerts: document.alerts, budget: document.budget)
+    self.document = StoredAccountSettingsDocument(document)
     self.ifMatch = ifMatch
   }
 }
 
-/// The stored shape `set_account_settings` writes: policy only, no envelope.
+/// The stored shape `set_account_settings` writes. `history` is named only when this write
+/// changes the switch; absent means unchanged.
 private struct StoredAccountSettingsDocument: Encodable {
   var alerts: AccountSettingsDocument.Alerts
   var budget: AccountSettingsDocument.Budget
+  var history: AccountSettingsDocument.History?
+
+  init(_ document: AccountSettingsDocument) {
+    alerts = document.alerts
+    budget = document.budget
+    history = document.writesHistory ? document.history : nil
+  }
 }
 
 private struct EmptyPayload: Encodable {}
@@ -906,7 +924,29 @@ private struct UsagePeriodPayload: Encodable {
   let timezone: String
 }
 private struct QuotaHistoryPayload: Encodable {
+  let source: QuotaHistoryRequestSource
+  let provider: String?
+  let fingerprint: String?
   let since: Date
+
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(source.rawValue, forKey: .source)
+    if let provider {
+      try container.encode(provider, forKey: .provider)
+    }
+    if let fingerprint {
+      try container.encode(fingerprint, forKey: .fingerprint)
+    }
+    try container.encode(since, forKey: .since)
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case source
+    case provider
+    case fingerprint
+    case since
+  }
 }
 private struct SetQuotaRefreshIntervalPayload: Encodable { let intervalSeconds: Int }
 private struct SetOverviewSourcePinPayload: Encodable {

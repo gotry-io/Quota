@@ -38,9 +38,12 @@ struct DashboardProvider: Equatable, Identifiable {
   let resetsAt: Date?
   /// Remaining percent of the tightest (primary cadence) window, when this Mac has a reading.
   let remainingPercent: Double?
-  /// Remaining history per window id. Empty unless the reading on screen is the one this Mac
-  /// took: nothing else has samples behind it (ADR 0042).
+  /// Remaining history per window id. This Mac's samples, or the Account series when history
+  /// sync is on and that read has points.
   let remainingHistories: [String: QuotaRemainingHistory]
+  /// True when `remainingHistories` is the Account series. The caption is then
+  /// "From your devices"; otherwise a local reading keeps "This Mac".
+  let drawsAccountHistory: Bool
   let sources: [DashboardSourceRow]
   /// Whether the reading on screen is the one this Mac took for itself.
   let isLocalReading: Bool
@@ -58,10 +61,21 @@ struct DashboardProvider: Equatable, Identifiable {
     return parts.joined(separator: ", ")
   }
 
-  /// A window menu is only useful when this Mac has readings to plot for at least one window.
+  /// A window menu is only useful when the series on screen has readings for at least one window.
   var showsHistoryWindowPicker: Bool {
     quotaWindows.count > 1
       && remainingHistories.values.contains { !$0.observedPoints.isEmpty }
+  }
+
+  var historySource: QuotaHistorySource? {
+    if drawsAccountHistory { return .yourDevices }
+    if isLocalReading { return .thisDevice }
+    return nil
+  }
+
+  var historyCaption: String? {
+    guard let historySource else { return nil }
+    return QuotaHistoryCopy.sourceCaption(historySource, deviceNoun: DashboardQuotaCopy.thisMac)
   }
 }
 
@@ -247,11 +261,27 @@ final class DashboardModel {
     Task { @MainActor in
       await model.refresh()
       usage.loadQuotaHistory()
+      loadAccountHistory(now: Date())
     }
   }
 
   func loadHistory() {
     usage.loadQuotaHistory()
+    loadAccountHistory(now: Date())
+  }
+
+  /// With the history switch on, asks `quota_history` for the selected global-scope subscription.
+  func loadAccountHistory(now: Date) {
+    guard model.accountSettings.historySync else { return }
+    guard let id = resolvedSubscriptionID(now: now),
+      let identity = accountIdentity(for: id),
+      identity.scope == .global
+    else { return }
+    usage.loadAccountQuotaHistory(
+      subscriptionKey: id,
+      provider: identity.provider.rawValue,
+      fingerprint: identity.fingerprint
+    )
   }
 
   private func makeProvider(account: AccountQuotaPresentation, now: Date) -> DashboardProvider {
@@ -280,6 +310,21 @@ final class DashboardModel {
       paceHeadline = nil
       paceDetail = nil
     }
+    let accountSeries = model.accountSettings.historySync
+      ? usage.accountChartSamples(subscriptionKey: key) : nil
+    let accountHistories = accountSeries.map {
+      remainingHistories(
+        samplesByWindow: Self.seriesThroughNow($0, snapshot: snapshot, now: now),
+        snapshot: snapshot,
+        now: now
+      )
+    } ?? [:]
+    let drawsAccountHistory = accountHistories.values.contains { !$0.observedPoints.isEmpty }
+    let histories =
+      drawsAccountHistory
+      ? accountHistories
+      : (isLocalReading
+        ? remainingHistories(subscriptionKey: key, snapshot: snapshot, now: now) : [:])
     return DashboardProvider(
       id: key,
       provider: account.identity.provider,
@@ -293,12 +338,43 @@ final class DashboardModel {
       paceDetail: paceDetail,
       resetsAt: paceWindow?.resetsAt,
       remainingPercent: paceWindow?.remainingPercent,
-      remainingHistories: isLocalReading
-        ? remainingHistories(subscriptionKey: key, snapshot: snapshot, now: now) : [:],
+      remainingHistories: histories,
+      drawsAccountHistory: drawsAccountHistory,
       sources: sourceRows(overviewItem, snapshot: snapshot, now: now),
       isLocalReading: isLocalReading,
       isStale: account.state != .available
     )
+  }
+
+  private func accountIdentity(for subscriptionKey: String) -> QuotaSubscriptionIdentity? {
+    for provider in sidebarProviders {
+      for account in model.displaySnapshots(for: provider)
+      where Self.subscriptionSelector(for: account.identity) == subscriptionKey {
+        return account.identity
+      }
+    }
+    return nil
+  }
+
+  /// A merged Account series stops at the last change. The window on screen, at `now`, is
+  /// what a local series already ends on, so the solid line reaches the right edge.
+  static func seriesThroughNow(
+    _ samplesByWindow: [String: [QuotaSample]],
+    snapshot: QuotaSnapshot,
+    now: Date
+  ) -> [String: [QuotaSample]] {
+    var extended = samplesByWindow
+    for window in snapshot.windows {
+      guard let resetsAt = window.resetsAt, var samples = extended[window.id], !samples.isEmpty
+      else { continue }
+      let reachesNow = samples.contains { $0.resetsAt == resetsAt && $0.observedAt >= now }
+      if reachesNow { continue }
+      samples.append(
+        QuotaSample(resetsAt: resetsAt, observedAt: now, usedPercent: window.usedPercent)
+      )
+      extended[window.id] = samples
+    }
+    return extended
   }
 
   private func remainingHistories(
@@ -307,12 +383,20 @@ final class DashboardModel {
     now: Date
   ) -> [String: QuotaRemainingHistory] {
     let byWindow = usage.quotaHistorySamples?.samplesBySubscription[subscriptionKey] ?? [:]
+    return remainingHistories(samplesByWindow: byWindow, snapshot: snapshot, now: now)
+  }
+
+  private func remainingHistories(
+    samplesByWindow: [String: [QuotaSample]],
+    snapshot: QuotaSnapshot,
+    now: Date
+  ) -> [String: QuotaRemainingHistory] {
     var result: [String: QuotaRemainingHistory] = [:]
     for window in snapshot.windows {
       if let history = QuotaRemainingHistory.fold(
         window: QuotaHistoryReading(
           resetsAt: window.resetsAt, cadenceSeconds: window.durationSeconds),
-        samples: byWindow[window.id] ?? [],
+        samples: samplesByWindow[window.id] ?? [],
         usedPercent: window.usedPercent,
         now: now,
         isBalanceOnly: window.isBalanceOnly

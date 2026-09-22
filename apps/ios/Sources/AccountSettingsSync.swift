@@ -32,9 +32,15 @@ final class AccountSettingsSync {
   /// After any applied change — local or remote — so evaluation and reset reminders run now,
   /// not at the next refresh.
   @ObservationIgnored var onApplied: () -> Void = {}
+  /// After a history-switch edit has been written (or the write has failed and the local value
+  /// is what the producer should trust). The producer backfills or clears from here.
+  @ObservationIgnored var onHistoryEdited: @MainActor () async -> Void = {}
 
   /// Bumped after every apply so a view-scoped `SettingsModel` can reload from the stores.
   private(set) var generation = 0
+  /// The Account document's history switch. Nil means no document yet: the producer does not
+  /// upload and does not clear. A cached document seeds this at launch, so a failed GET keeps it.
+  private(set) var historySync: Bool? = nil
   /// Un-acknowledged local edits, oldest first, any Account this phone has queued for.
   private(set) var pending: [PendingAccountSettingsEdit] = []
   private var nextPendingID: UInt64 = 1
@@ -74,6 +80,33 @@ final class AccountSettingsSync {
       rememberPending(accountID: session.accountID, edit: edit)
     }
     await enqueue { await self.performPush() }
+    if case .setHistorySync = edit {
+      await onHistoryEdited()
+    }
+  }
+
+  /// Relay answered `409 history_sync_off`. The switch is off, unless a queued edit still names
+  /// it — that edit has not been acknowledged, so the toggle stays where the edit put it.
+  func noteHistorySyncOff() {
+    let namesSwitch = pending.contains { item in
+      if case .setHistorySync = item.edit { return true }
+      return false
+    }
+    guard !namesSwitch else { return }
+    historySync = false
+  }
+
+  /// The session is gone. The next Account's switch is unknown until its cache or a GET.
+  func noteSignedOut() {
+    historySync = nil
+  }
+
+  /// Copy `history.sync` from the cached document when this phone has not heard one yet.
+  func seedHistorySyncFromCache() async {
+    guard historySync == nil else { return }
+    guard (try? await account.loadSession()) != nil else { return }
+    guard let cached = try? await account.loadCachedSettings() else { return }
+    historySync = cached.document.history.sync
   }
 
   /// Current policy as the stores hold it. `enabled` is not included.
@@ -98,6 +131,7 @@ final class AccountSettingsSync {
   private func performRefresh() async {
     guard connectsToAccount, isSignedIn() else { return }
     guard let session = try? await account.loadSession() else { return }
+    await seedHistorySyncFromCache()
     let accountID = session.accountID
     let previous = try? await account.loadCachedSettings()
     let fetched: AccountSettingsDocument
@@ -123,6 +157,9 @@ final class AccountSettingsSync {
     }
     if previous?.document.revision != fetched.revision {
       applyPolicy(fetched.policy)
+      notifyApplied()
+    } else if historySync != Optional(fetched.history.sync) {
+      historySync = fetched.history.sync
       notifyApplied()
     }
   }
@@ -274,12 +311,15 @@ final class AccountSettingsSync {
       rulesStore.save(rules)
     case .setBudget(let amount, let alerts):
       budgetStore.save(UsageBudget(amountUSD: amount, alerts: alerts))
+    case .setHistorySync(let value):
+      historySync = value
     }
   }
 
   func applyPolicy(_ policy: AccountSettingsPolicy) {
     rulesStore.save(rulesStore.load().applying(policy))
     budgetStore.save(UsageBudget(policy: policy))
+    historySync = policy.historySync
   }
 
   private func notifyApplied() {
@@ -336,6 +376,7 @@ struct PendingAccountSettingsEdit: Equatable, Sendable {
     case paceAlerts
     case thresholds(String)
     case budget
+    case historySync
   }
 
   var target: Target { Target(edit) }
@@ -348,6 +389,7 @@ extension PendingAccountSettingsEdit.Target {
     case .setPaceAlerts: self = .paceAlerts
     case .setThresholds(let selector, _): self = .thresholds(selector)
     case .setBudget: self = .budget
+    case .setHistorySync: self = .historySync
     }
   }
 }
@@ -428,6 +470,7 @@ private struct PendingAccountSettingsEditRecord: Codable {
     case paceAlerts
     case thresholds
     case budget
+    case historySync
   }
 
   init(_ pending: PendingAccountSettingsEdit) {
@@ -448,6 +491,9 @@ private struct PendingAccountSettingsEditRecord: Codable {
       kind = .budget
       amountUSD = amount.map { NSDecimalNumber(decimal: $0).stringValue }
       budgetAlerts = alerts
+    case .setHistorySync(let value):
+      kind = .historySync
+      boolValue = value
     }
   }
 
@@ -469,6 +515,9 @@ private struct PendingAccountSettingsEditRecord: Codable {
         Decimal(string: $0, locale: Locale(identifier: "en_US_POSIX"))
       }
       edit = .setBudget(amount: amount, alerts: budgetAlerts)
+    case .historySync:
+      guard let boolValue else { return nil }
+      edit = .setHistorySync(boolValue)
     }
     return PendingAccountSettingsEdit(id: id ?? 1, accountID: accountID, edit: edit)
   }
