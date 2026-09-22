@@ -90,7 +90,8 @@ QuotaBar launches the fixed signed `Contents/Helpers/quota-service` path once. R
 and events are newline-delimited `snake_case` JSON with a 1 MiB line limit and request IDs.
 Operations are ping, state read, diagnose/recheck, refresh, cache reset, one custom Usage period
 (`usage_period { from, to, source, timezone }`: This Mac folds stored hours; Account is Relay's
-period read), one 30-day quota-history read (`quota_history { since }`), login/cancel, logout, provider
+period read), one quota-history read (`quota_history { since, source }`: `local` reads this Mac;
+`account` reads one subscription from Relay), login/cancel, logout, provider
 configuration, provider browser-session validate/commit/remove, Usage upload configuration, Account
 settings (`set_account_settings { document, if_match }` writes the document; `refresh_account_settings`
 forces a GET; both refuse a signed-out helper with the same error as other Account operations), and
@@ -169,13 +170,23 @@ Quota iOS keeps the same journal as a file in its own container. Both are kept t
 are folded by one rule — `history` in `packages/service` and `QuotaHistory` in
 `packages/apple-shared`, judged by
 `packages/protocol/fixtures/quota-history-conformance.json`. They stay on the device by default.
-While the Account's history switch is on, global-scope buckets upload to Relay and a read merges
-them ([ADR 0062](decisions/0062-quota-history-may-follow-the-account.md)). The website draws no
+While the Account's `history.sync` switch is on, the helper buckets each global-scope
+subscription's new samples past the per-Account watermark and `PUT`s them to
+`/api/v6/device/quota-history` (at most 2 000 points and 256 KiB, oldest first). The
+`false → true` transition backfills that window's span once. The watermark and that fact live in
+`identity.sqlite` and are cleared on sign-out and on `409 history_sync_off`. `413
+quota_history_full` stops the upload until the next collection. Relay merges on the read
+([ADR 0062](decisions/0062-quota-history-may-follow-the-account.md)). The website draws no
 history this cycle. A reading that arrived from another device still has no *local* samples; with
-the switch on, the chart may draw the Account series instead.
-`get_state` restates only the current-window slice Overview already draws; the main window reads the
-rest through `quota_history { since }`, a cache.sqlite read that collects nothing and reaches no
-network ([ADR 0051](decisions/0051-the-panel-glances-and-the-windows-explain.md)).
+the switch on, the chart asks `quota_history { since, source: account, provider, fingerprint }`
+and the helper reads `GET /api/v6/account/quota-history` for that one subscription (cached ETag;
+304 reuses the body) and answers the same sample shape as the local read.
+`get_state` restates only the current-window slice Overview already draws, and while signed in
+carries `history_sync` (`enabled`, `last_upload_at`, `last_error`) for the Settings caption.
+The key is absent when signed out. The main
+window reads the rest through `quota_history`; `source` defaults to `local`, a cache.sqlite read
+that collects nothing and reaches no network
+([ADR 0051](decisions/0051-the-panel-glances-and-the-windows-explain.md)).
 
 Relay keeps one observation per reporting device and resolves them on the read: an Account summary
 answers `subscriptions[]`, one entry per subscription key carrying the chosen reading and every
@@ -262,7 +273,7 @@ marks truncated unpriced-model detail with `unpriced_truncated`. Exact totals st
 clients surface the degradation.
 
 The local Usage report is a private presentation contract carried inside the IPC state, so it names
-no version of its own and moves with `ipc_version`, which is 4. Each window of a locally collected
+no version of its own and moves with `ipc_version`, which is 5. Each window of a locally collected
 reading also carries `history`, the fold of that window's own samples. State snapshots separately carry the Today,
 7 Days, 30 Days, and All summaries with exact totals, cost, `agents[].providers[].models[]`
 detail, and, for This Mac only, `projects[]` of at most 50 repository basenames
@@ -310,7 +321,8 @@ Alert policy, the monthly spend budget, and the quota-history switch follow the 
 [ADR 0062](decisions/0062-quota-history-may-follow-the-account.md)). The document is
 `GET` / `PUT /api/v2/account/settings`: remaining-percent thresholds keyed by an opaque selector,
 reset and pace switches, an optional budget amount, and `history.sync` (default false; omitted
-from a PUT means unchanged). `enabled` and delivery stay per device.
+from a PUT means unchanged). The helper's `set_account_settings` document includes `history`
+only when the write names the switch. `enabled` and delivery stay per device.
 `GET` is `account:read` with `ETag: "<revision>"` and `Cache-Control: private, no-cache`. `PUT`
 is `account:settings`, compare-and-set on `If-Match`, and a web session also presents a
 same-origin Origin. QuotaBar never talks to Relay itself: the helper fetches the document on the

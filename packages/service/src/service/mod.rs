@@ -265,9 +265,12 @@ pub trait LocalBackend: Send + Sync {
         let _ = (from, to, source, timezone);
         Err(BackendError::unavailable())
     }
-    /// This Mac's stored quota samples since `since`. Reads `cache.sqlite` only.
-    fn quota_history(&self, since: &str) -> Result<Value, BackendError> {
-        let _ = since;
+    /// Stored samples since `since`, or one Account subscription when `source` is `account`.
+    fn quota_history(
+        &self,
+        payload: &crate::protocol::QuotaHistoryPayload,
+    ) -> Result<Value, BackendError> {
+        let _ = payload;
         Err(BackendError::unavailable())
     }
     fn set_account_settings(
@@ -824,13 +827,14 @@ impl LocalService {
             .map_err(|error| error.error)
     }
 
-    /// Reads this Mac's stored quota samples since `since`. `get_state` keeps the current-window
-    /// slice; Dashboard asks for the rest here (ADR 0051).
+    /// Reads quota samples since `since`. `source` defaults to this Mac. `account` is one
+    /// subscription from Relay, in the same shape (ADR 0051, ADR 0062).
     fn quota_history(&self, request: &IpcRequest) -> Result<Value, IpcError> {
         let payload = request.decode_payload::<QuotaHistoryPayload>()?;
+        payload.validate()?;
         self.inner
             .backend
-            .quota_history(&payload.since)
+            .quota_history(&payload)
             .map_err(|error| error.error)
     }
 
@@ -3588,6 +3592,171 @@ mod tests {
         assert_eq!(
             refused.error.expect("error").code,
             ErrorCode::InvalidRequest
+        );
+
+        service.shutdown();
+        drop(service);
+        drop(state);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn quota_history_account_source_answers_the_local_shape_and_reuses_a_304() {
+        let body = serde_json::json!({
+            "protocol_version": 6,
+            "sync": true,
+            "windows": {
+                "five_hour": {
+                    "duration_seconds": 18000,
+                    "points": [{
+                        "resets_at": "2026-09-21T15:00:00.000Z",
+                        "bucket_start": "2026-09-21T10:00:00Z",
+                        "used_percent": 42.5
+                    }]
+                }
+            }
+        });
+        let encoded = serde_json::to_vec(&body).expect("json");
+        let responses = [
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nETag: \"hist-1\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                encoded.len(),
+                String::from_utf8(encoded).expect("utf8")
+            ),
+            "HTTP/1.1 304 Not Modified\r\nETag: \"hist-1\"\r\nConnection: close\r\n\r\n".to_owned(),
+        ];
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listener");
+        let address = listener.local_addr().expect("address");
+        let server = thread::spawn(move || {
+            let mut recorded = Vec::new();
+            for response in responses {
+                let (mut stream, _) = listener.accept().expect("request");
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .expect("timeout");
+                let mut request = [0_u8; 8_192];
+                let read = std::io::Read::read(&mut stream, &mut request).unwrap_or(0);
+                recorded.push(String::from_utf8_lossy(&request[..read]).into_owned());
+                std::io::Write::write_all(&mut stream, response.as_bytes()).expect("write");
+            }
+            recorded
+        });
+        let root =
+            std::env::temp_dir().join(format!("quota-service-account-history-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        state
+            .write_session_json(&serde_json::json!({
+                "schema_version": 1,
+                "status": "active",
+                "account_id": "account_1",
+                "display_label": "octocat",
+                "device_id": "device_1",
+                "device_generation": 1,
+                "usage_sync_revision": 0,
+                "usage_deleted_before": null,
+                "session": {
+                    "access_token": "qb_access_token_synthetic",
+                    "access_expires_at": "2099-01-01T00:00:00Z",
+                    "refresh_token": "qbr_refresh_token_synthetic",
+                    "refresh_expires_at": "2099-01-01T00:00:00Z"
+                }
+            }))
+            .expect("session");
+        let mut record = crate::state::QuotaHistorySyncRecord::default();
+        record.last_upload_at = Some("2026-09-21T10:05:00Z".to_owned());
+        record.last_error = None;
+        state
+            .set_quota_history_sync("account_1", &record)
+            .expect("record");
+        let document = serde_json::json!({
+            "protocol_version": 2,
+            "revision": 4,
+            "updated_at": "2026-09-21T10:00:00Z",
+            "alerts": {"reset_reminders": true, "pace_alerts": true, "thresholds": {}},
+            "budget": {"amount_usd": null, "alerts": true},
+            "history": {"sync": true}
+        });
+        state
+            .set_account_settings_cache("account_1", Some("\"4\""), &document)
+            .expect("settings");
+        let backend = Arc::new(crate::service::backend::NativeBackend::new(
+            state.clone(),
+            Arc::new(
+                crate::relay::RelayClient::for_test(&format!("http://{address}")).expect("relay"),
+            ),
+            "QuotaTest",
+            "test",
+        ));
+        let service = LocalService::new(state.clone(), Arc::new(RecordingSink::default()), backend);
+        let state_response = service.handle(
+            serde_json::from_value(serde_json::json!({
+                "type": "request",
+                "request_id": "gs",
+                "operation": "get_state",
+                "payload": {}
+            }))
+            .expect("get_state"),
+        );
+        let snapshot = state_response.result.expect("state");
+        assert_eq!(snapshot["ipc_version"], 5);
+        assert_eq!(snapshot["history_sync"]["enabled"], true);
+        assert_eq!(
+            snapshot["history_sync"]["last_upload_at"],
+            "2026-09-21T10:05:00Z"
+        );
+        assert!(snapshot["history_sync"]["last_error"].is_null());
+
+        let request = serde_json::json!({
+            "type": "request",
+            "request_id": "qh-account",
+            "operation": "quota_history",
+            "payload": {
+                "since": "2026-08-22T00:00:00Z",
+                "source": "account",
+                "provider": "codex",
+                "fingerprint": "account_test"
+            }
+        });
+        let key = QuotaOverviewIdentity::selector_for("codex", "account_test", "global", None);
+        let first = service
+            .handle(serde_json::from_value(request.clone()).expect("request"))
+            .result
+            .expect("result");
+        assert_eq!(
+            first["samples_by_subscription"][&key]["five_hour"][0]["observed_at"],
+            "2026-09-21T10:00:00Z"
+        );
+        assert_eq!(
+            first["samples_by_subscription"][&key]["five_hour"][0]["resets_at"],
+            "2026-09-21T15:00:00Z"
+        );
+        assert_eq!(
+            first["samples_by_subscription"][&key]["five_hour"][0]["used_percent"],
+            42.5
+        );
+        let second = service
+            .handle(serde_json::from_value(request).expect("request"))
+            .result
+            .expect("304");
+        assert_eq!(
+            second["samples_by_subscription"],
+            first["samples_by_subscription"]
+        );
+        let sent = server.join().expect("server");
+        assert!(
+            sent[0].contains("GET /api/v6/account/quota-history?"),
+            "{}",
+            sent[0]
+        );
+        assert!(sent[0].contains("provider=codex"), "{}", sent[0]);
+        assert!(sent[0].contains("fingerprint=account_test"), "{}", sent[0]);
+        assert!(
+            sent[1]
+                .to_ascii_lowercase()
+                .contains("if-none-match: \"hist-1\""),
+            "{}",
+            sent[1]
         );
 
         service.shutdown();
