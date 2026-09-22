@@ -274,6 +274,8 @@ final class AccountSettingsSync {
       rulesStore.save(rules)
     case .setBudget(let amount, let alerts):
       budgetStore.save(UsageBudget(amountUSD: amount, alerts: alerts))
+    case .setHistorySync:
+      return
     }
   }
 
@@ -336,6 +338,7 @@ struct PendingAccountSettingsEdit: Equatable, Sendable {
     case paceAlerts
     case thresholds(String)
     case budget
+    case historySync
   }
 
   var target: Target { Target(edit) }
@@ -348,6 +351,7 @@ extension PendingAccountSettingsEdit.Target {
     case .setPaceAlerts: self = .paceAlerts
     case .setThresholds(let selector, _): self = .thresholds(selector)
     case .setBudget: self = .budget
+    case .setHistorySync: self = .historySync
     }
   }
 }
@@ -428,6 +432,7 @@ private struct PendingAccountSettingsEditRecord: Codable {
     case paceAlerts
     case thresholds
     case budget
+    case historySync
   }
 
   init(_ pending: PendingAccountSettingsEdit) {
@@ -448,6 +453,9 @@ private struct PendingAccountSettingsEditRecord: Codable {
       kind = .budget
       amountUSD = amount.map { NSDecimalNumber(decimal: $0).stringValue }
       budgetAlerts = alerts
+    case .setHistorySync(let value):
+      kind = .historySync
+      boolValue = value
     }
   }
 
@@ -469,6 +477,9 @@ private struct PendingAccountSettingsEditRecord: Codable {
         Decimal(string: $0, locale: Locale(identifier: "en_US_POSIX"))
       }
       edit = .setBudget(amount: amount, alerts: budgetAlerts)
+    case .historySync:
+      guard let boolValue else { return nil }
+      edit = .setHistorySync(boolValue)
     }
     return PendingAccountSettingsEdit(id: id ?? 1, accountID: accountID, edit: edit)
   }

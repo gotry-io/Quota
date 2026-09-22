@@ -91,6 +91,10 @@ public enum AccountSettings: Sendable {
       next.alerts.thresholds[selector] = wireThresholds(values)
     case .setBudget(let amount, let alerts):
       next.budget = AccountSettingsDocument.Budget(amountUSD: amount, alerts: alerts)
+    case .setHistorySync(let value):
+      next.history.sync = value
+      next.writesHistory = true
+      next.historyPresent = true
     }
     return next
   }
@@ -156,6 +160,9 @@ public enum AccountSettingsEdit: Equatable, Sendable {
   case setThresholds(selector: String, [Int])
   /// The amount and its switch move together, because a budget editor writes one `UsageBudget`.
   case setBudget(amount: Decimal?, alerts: Bool)
+  /// Names `history` on the PUT. Any other edit leaves the key off, so absence still means
+  /// unchanged.
+  case setHistorySync(Bool)
 }
 
 /// What a device does the first time it sees the Account's copy of the policy.

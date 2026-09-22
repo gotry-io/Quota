@@ -336,6 +336,7 @@ final class AccountSettingsModel {
     case paceAlerts
     case budget
     case thresholds(String)
+    case historySync
   }
 
   private static func target(_ edit: AccountSettingsEdit) -> EditTarget {
@@ -344,6 +345,7 @@ final class AccountSettingsModel {
     case .setPaceAlerts: .paceAlerts
     case .setBudget: .budget
     case .setThresholds(let selector, _): .thresholds(selector)
+    case .setHistorySync: .historySync
     }
   }
 
@@ -396,6 +398,9 @@ private struct PersistedEdit: Codable {
       type = "budget"
       amountUSD = amount.map(Self.wireAmount)
       self.alerts = alerts
+    case .setHistorySync(let value):
+      type = "history_sync"
+      self.value = value
     }
   }
 
@@ -412,6 +417,8 @@ private struct PersistedEdit: Codable {
       guard let alerts else { return nil }
       let amount = amountUSD.flatMap { Decimal(string: $0, locale: Self.posix) }
       return .setBudget(amount: amount, alerts: alerts)
+    case "history_sync":
+      return value.map { .setHistorySync($0) }
     default:
       return nil
     }

@@ -133,6 +133,9 @@ private enum AccountSettingsFixture {
     case "set_budget_alerts":
       guard let value = fields["value"] as? Bool else { return nil }
       return .setBudget(amount: fresh.budget.amountUSD, alerts: value)
+    case "set_history_sync":
+      guard let value = fields["value"] as? Bool else { return nil }
+      return .setHistorySync(value)
     default:
       return nil
     }
