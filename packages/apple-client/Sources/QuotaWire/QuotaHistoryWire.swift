@@ -511,3 +511,20 @@ private func isAlignedQuotaHistoryBucket(_ bucketStart: Date, _ durationSeconds:
   let milliseconds = Int64((bucketStart.timeIntervalSince1970 * 1_000).rounded(.toNearestOrEven))
   return milliseconds % sizeMs == 0
 }
+
+extension QuotaHistoryUploadRequest {
+  public var pointCount: Int {
+    series.reduce(0) { $0 + $1.points.count }
+  }
+}
+
+/// The wire's spelling of an instant outside a JSON body — the `since` query of the read.
+public enum QuotaHistoryWireFormat {
+  public static func rfc3339UTC(_ date: Date) -> String {
+    let whole = Date(timeIntervalSince1970: date.timeIntervalSince1970.rounded(.down))
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime]
+    formatter.timeZone = TimeZone(secondsFromGMT: 0)
+    return formatter.string(from: whole)
+  }
+}
