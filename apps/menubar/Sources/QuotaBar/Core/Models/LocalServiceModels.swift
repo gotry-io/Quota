@@ -520,7 +520,7 @@ extension LocalServiceOverviewItem {
 struct LocalServiceState: Decodable, Sendable {
   /// The one private IPC version this app speaks. The two ship together, so a helper that
   /// announces anything else is not the one in this bundle.
-  static let supportedIPCVersion = 4
+  static let supportedIPCVersion = 5
 
   let ipcVersion: Int
   let revision: Int
@@ -534,6 +534,8 @@ struct LocalServiceState: Decodable, Sendable {
   /// Present only while signed in and the helper has already read the document. Signed out, the
   /// key is absent, not `null`.
   let accountSettings: LocalServiceAccountSettingsState?
+  /// Present only while signed in. Signed out, the key is absent, not `null`.
+  let historySync: LocalServiceHistorySync?
   let pricing: LocalServiceComponent<PricingCatalog>
   let providers: [LocalServiceProviderConfig]
   var providerStatus: [LocalServiceProviderStatus] = []
@@ -553,6 +555,7 @@ struct LocalServiceState: Decodable, Sendable {
     usage: LocalServiceComponent<LocalUsageReport>,
     account: LocalServiceComponent<LocalServiceAccountState>,
     accountSettings: LocalServiceAccountSettingsState? = nil,
+    historySync: LocalServiceHistorySync? = nil,
     pricing: LocalServiceComponent<PricingCatalog>,
     providers: [LocalServiceProviderConfig],
     providerStatus: [LocalServiceProviderStatus] = [],
@@ -571,6 +574,7 @@ struct LocalServiceState: Decodable, Sendable {
     self.usage = usage
     self.account = account
     self.accountSettings = accountSettings
+    self.historySync = historySync
     self.pricing = pricing
     self.providers = providers
     self.providerStatus = providerStatus
@@ -591,6 +595,7 @@ struct LocalServiceState: Decodable, Sendable {
     case usage
     case account
     case accountSettings
+    case historySync
     case pricing
     case providers
     case providerStatus
@@ -658,7 +663,7 @@ extension LocalServiceState {
       "ipcVersion", "revision", "usageUploadEnabled", "groupUsageByProject",
       "quotaRefreshIntervalSeconds",
       "usagePeriods", "quota", "usage",
-      "account", "accountSettings", "pricing", "providers", "providerStatus",
+      "account", "accountSettings", "historySync", "pricing", "providers", "providerStatus",
       "providerBrowserSessions",
       "browserScanEnabled",
       "overview", "cache",
@@ -676,6 +681,7 @@ extension LocalServiceState {
       LocalServiceComponent<LocalServiceAccountState>.self, forKey: .account)
     accountSettings = try container.decodeIfPresent(
       LocalServiceAccountSettingsState.self, forKey: .accountSettings)
+    historySync = try container.decodeIfPresent(LocalServiceHistorySync.self, forKey: .historySync)
     pricing = try container.decode(LocalServiceComponent<PricingCatalog>.self, forKey: .pricing)
     providers = try container.decode([LocalServiceProviderConfig].self, forKey: .providers)
     providerStatus = try container.decode(
@@ -702,6 +708,37 @@ struct LocalServiceAccountSettingsState: Decodable, Equatable, Sendable {
   var ifMatch: String { Self.ifMatch(revision) }
 
   static func ifMatch(_ revision: Int) -> String { "\"\(revision)\"" }
+}
+
+/// `get_state.history_sync`. Absent when signed out. The status line under the history switch.
+struct LocalServiceHistorySync: Decodable, Equatable, Sendable {
+  let enabled: Bool
+  let lastUploadAt: Date?
+  let lastError: String?
+
+  /// The last error, or "Last uploaded …" in the shared freshness phrasing. Nil when neither
+  /// has happened.
+  func statusLine(now: Date = Date()) -> String? {
+    if let lastError, !lastError.isEmpty { return lastError }
+    guard let lastUploadAt else { return nil }
+    return "Last uploaded \(FreshnessCopy.age(since: lastUploadAt, now: now))"
+  }
+}
+
+extension LocalServiceHistorySync {
+  init(from decoder: Decoder) throws {
+    try decoder.rejectUnknownWireKeys(["enabled", "lastUploadAt", "lastError"])
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    enabled = try container.decode(Bool.self, forKey: .enabled)
+    lastUploadAt = try container.decodeIfPresent(Date.self, forKey: .lastUploadAt)
+    lastError = try container.decodeIfPresent(String.self, forKey: .lastError)
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case enabled
+    case lastUploadAt
+    case lastError
+  }
 }
 
 /// What `set_account_settings` answers: the document Relay now holds, and whether this write

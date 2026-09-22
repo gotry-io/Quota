@@ -501,6 +501,77 @@ struct AccountSettingsModelTests {
     #expect(call.ifMatch == "\"1\"")
     #expect(await secondRecord.calls.count == 1)
   }
+
+  @Test
+  func historySwitchWriteNamesHistoryAndLeavesAlertsAndBudget() async throws {
+    let record = AccountSettingsWriteRecord()
+    let defaults = notificationDefaultsSuite()
+    defer { defaults.tearDown() }
+    let model = settingsModel(record: record, defaults: defaults.store)
+    model.apply(
+      signedInSettingsState(
+        settings: LocalServiceAccountSettingsState(
+          document: accountSettingsDocument(
+            revision: 1, resetReminders: false, amountUSD: 40, budgetAlerts: false),
+          revision: 1
+        )
+      )
+    )
+    #expect(!model.accountSettings.historySync)
+    model.setHistorySync(true)
+    #expect(model.accountSettings.historySync)
+    try await waitUntil { await record.calls.count == 1 }
+
+    let call = try #require(await record.calls.first)
+    #expect(call.document.writesHistory)
+    #expect(call.document.history.sync)
+    #expect(!call.document.alerts.resetReminders)
+    #expect(call.document.alerts.paceAlerts)
+    #expect(call.document.budget.amountUSD == 40)
+    #expect(!call.document.budget.alerts)
+    let body = try JSONSerialization.jsonObject(with: try call.document.updateRequestJSON())
+    let fields = try #require(body as? [String: Any])
+    #expect(fields["history"] as? [String: Bool] == ["sync": true])
+    let alerts = try #require(fields["alerts"] as? [String: Any])
+    #expect(alerts["reset_reminders"] as? Bool == false)
+  }
+
+  @Test
+  func historySwitchConflictReappliesOnce() async throws {
+    let record = AccountSettingsWriteRecord()
+    let defaults = notificationDefaultsSuite()
+    defer { defaults.tearDown() }
+    let fresh = accountSettingsDocument(
+      revision: 3, resetReminders: true, paceAlerts: false, amountUSD: 80)
+    let written = accountSettingsDocument(
+      revision: 4, resetReminders: true, paceAlerts: false, amountUSD: 80)
+    await record.queue(.success(.conflict(fresh)))
+    await record.queue(.success(.written(written)))
+    let signedIn = signedInSettingsState(
+      settings: LocalServiceAccountSettingsState(
+        document: accountSettingsDocument(revision: 1, resetReminders: false, amountUSD: 10),
+        revision: 1
+      )
+    )
+    let model = settingsModel(record: record, defaults: defaults.store, state: signedIn)
+    model.apply(signedIn)
+    model.setHistorySync(true)
+    try await waitUntil { await record.calls.count == 2 }
+
+    let calls = await record.calls
+    #expect(calls.count == 2)
+    #expect(calls[0].document.writesHistory)
+    #expect(calls[0].document.history.sync)
+    #expect(!calls[0].document.alerts.resetReminders)
+    let second = calls[1]
+    #expect(second.ifMatch == "\"3\"")
+    #expect(second.document.writesHistory)
+    #expect(second.document.history.sync)
+    #expect(second.document.alerts.resetReminders)
+    #expect(!second.document.alerts.paceAlerts)
+    #expect(second.document.budget.amountUSD == 80)
+    #expect(model.accountSettings.historySync)
+  }
 }
 
 @MainActor

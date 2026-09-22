@@ -40,6 +40,12 @@ struct LaunchAtLoginControllerTests {
     #expect(!LaunchWindowPreference.fallback)
     #expect(GeneralSettingsCopy.refreshInterval == "Refresh Interval")
     #expect(GeneralSettingsCopy.uploadUsage == "Upload Usage to Account")
+    #expect(GeneralSettingsCopy.shareQuotaHistory == "Share quota history across your devices")
+    #expect(
+      GeneralSettingsCopy.shareQuotaHistoryFootnote
+        == "Uploads this device's readings from the last 30 days, and new ones, to your Account. "
+        + "Turning it off deletes them from the Account."
+    )
     #expect(GeneralSettingsCopy.groupUsage == "Group Usage by project")
     #expect(GeneralSettingsCopy.resetLocalData == "Reset Local Data")
     #expect(ResetLocalDataCopy.title == "Reset Local Data?")

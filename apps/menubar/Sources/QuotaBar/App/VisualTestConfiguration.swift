@@ -63,6 +63,7 @@
     case providerCodex = "provider-codex"
     case mainQuota = "main-quota"
     case mainQuotaCodex = "main-quota-codex"
+    case mainQuotaYourDevices = "main-quota-your-devices"
     case mainToday = "main-today"
     case mainUsage = "main-usage"
     case mainUsageLocal = "main-usage-local"
@@ -80,7 +81,8 @@
       switch self {
       case .overview: []
       case .providerCodex: [.provider(.codex)]
-      case .mainQuota, .mainQuotaCodex, .mainToday, .mainUsage, .mainUsageLocal, .mainUsageCustom,
+      case .mainQuota, .mainQuotaCodex, .mainQuotaYourDevices, .mainToday, .mainUsage,
+        .mainUsageLocal, .mainUsageCustom,
         .mainAccount,
         .mainAgents, .mainAgentsCodex, .mainAgentsLiteLLMKey, .mainNotifications, .mainMenuBar,
         .mainGeneral, .mainSupport:
@@ -90,7 +92,7 @@
 
     var mainPage: MainPage? {
       switch self {
-      case .mainQuota, .mainQuotaCodex: .quota
+      case .mainQuota, .mainQuotaCodex, .mainQuotaYourDevices: .quota
       case .mainToday, .mainUsage, .mainUsageLocal, .mainUsageCustom: .usage
       case .mainAccount: .account
       case .mainAgents, .mainAgentsCodex, .mainAgentsLiteLLMKey: .agents
@@ -235,7 +237,19 @@
       if route == .mainUsageCustom {
         seedAccountCustomPeriod(on: model)
       }
+      if route == .mainQuotaYourDevices {
+        seedYourDevicesHistory(on: model)
+      }
       return model
+    }
+
+    @MainActor
+    private func seedYourDevicesHistory(on model: MenuBarViewModel) {
+      model.accountSettings.applyVisualHistorySync(true)
+      guard let samples = model.usage.quotaHistorySamples else { return }
+      for key in samples.samplesBySubscription.keys {
+        model.usage.seedAccountQuotaHistoryForVisuals(samples, subscriptionKey: key)
+      }
     }
 
     @MainActor

@@ -34,7 +34,7 @@
       }
 
       let dirPath = ProcessInfo.processInfo.environment["QUOTABAR_SCREENSHOTS"] ?? ""
-      // Rendering the 60-cell matrix inside the default parallel suite starves the wait-loop
+      // Rendering the 64-cell matrix inside the default parallel suite starves the wait-loop
       // tests on a slow runner, so capture is opt-in: `swift test` without the env var is a
       // no-op, and scripts/test-swift.sh runs this test alone, afterwards, with it set.
       guard !dirPath.isEmpty else { return }
@@ -46,6 +46,7 @@
         "provider-codex",
         "main-quota",
         "main-quota-codex",
+        "main-quota-your-devices",
         "main-today",
         "main-usage",
         "main-usage-local",

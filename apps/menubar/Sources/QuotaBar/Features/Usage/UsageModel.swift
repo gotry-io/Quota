@@ -10,8 +10,25 @@ protocol UsageTransport: Sendable {
   func usagePeriod(
     from: String, to: String, source: UsageSource, timezone: String
   ) async throws -> LocalServiceUsageDetail
-  /// This Mac's stored quota samples since `since`. Reads cache.sqlite only.
-  func quotaHistory(since: Date) async throws -> LocalServiceQuotaHistory
+  /// Stored quota samples since `since`. `local` reads this Mac. `account` reads one
+  /// subscription Relay already merged; `provider` and `fingerprint` name it.
+  func quotaHistory(
+    source: QuotaHistoryRequestSource,
+    provider: String?,
+    fingerprint: String?,
+    since: Date
+  ) async throws -> LocalServiceQuotaHistory
+}
+
+enum QuotaHistoryRequestSource: String, Sendable {
+  case local
+  case account
+}
+
+extension UsageTransport {
+  func quotaHistory(since: Date) async throws -> LocalServiceQuotaHistory {
+    try await quotaHistory(source: .local, provider: nil, fingerprint: nil, since: since)
+  }
 }
 
 /// Usage, history, and the monthly budget. Quota projection stays on
@@ -32,10 +49,15 @@ final class UsageModel {
   /// Folded 30-day quota history, keyed subscription selector then window id. Empty until
   /// ``loadQuotaHistory()``; state pushes keep the current-window slice Overview already draws.
   private(set) var quotaHistory: [String: [String: QuotaHistory]] = [:]
-  /// The samples the last `quota_history` read returned, so a later surface can re-fold a range.
+  /// The samples the last local `quota_history` read returned, so a later surface can re-fold a range.
   private(set) var quotaHistorySamples: LocalServiceQuotaHistory?
-  /// Why the last `quota_history` read failed. Dashboard's line, not the panel's.
+  /// Why the last local `quota_history` read failed. Dashboard's line, not the panel's.
   private(set) var quotaHistoryErrorMessage: String?
+  /// Account series already read, keyed by the local subscription selector. A failed read
+  /// leaves the previous value. Empty means this session has not cached that subscription.
+  private(set) var accountHistoryBySubscription: [String: LocalServiceQuotaHistory] = [:]
+  /// Bumps when an account read finishes, so a test can see a failure that changed nothing else.
+  private(set) var accountHistoryEpoch = 0
   /// The monthly budget, and how far into it this month's spend has gone.
   private(set) var budget: UsageBudget
   private(set) var budgetMonthDetail: LocalServiceUsageDetail?
@@ -87,6 +109,12 @@ final class UsageModel {
   @ObservationIgnored
   private var quotaHistoryTask: Task<Void, Never>?
 
+  @ObservationIgnored
+  private var accountHistoryTask: Task<Void, Never>?
+
+  @ObservationIgnored
+  private var accountHistoryGeneration: UInt64 = 0
+
   /// Overview rows used to fold `quota_history`. Updated from ``acceptState``; not a second
   /// copy of service state beyond what folding needs.
   @ObservationIgnored
@@ -114,6 +142,7 @@ final class UsageModel {
     customUsageTask?.cancel()
     budgetMonthTask?.cancel()
     quotaHistoryTask?.cancel()
+    accountHistoryTask?.cancel()
   }
 
   /// Takes the Usage slice of an accepted `get_state`. Custom folds are discarded and asked
@@ -159,6 +188,14 @@ final class UsageModel {
       quotaHistory = Self.foldQuotaHistory(
         quotaHistorySamples, overview: overview, now: now)
     }
+  }
+
+  /// Visual QA: treat an already-folded local payload as the cached Account series.
+  func seedAccountQuotaHistoryForVisuals(
+    _ history: LocalServiceQuotaHistory,
+    subscriptionKey: String
+  ) {
+    accountHistoryBySubscription[subscriptionKey] = history
   }
 
   func usageDetail(source: UsageSource, period: UsagePeriod) -> LocalServiceUsageDetail? {
@@ -214,6 +251,10 @@ final class UsageModel {
     customUsageTask = nil
     customUsageLoading = false
     hasAccountSession = false
+    accountHistoryGeneration += 1
+    accountHistoryTask?.cancel()
+    accountHistoryTask = nil
+    accountHistoryBySubscription = [:]
     refreshBudgetMonth()
   }
 
@@ -237,6 +278,63 @@ final class UsageModel {
         return
       } catch {
         quotaHistoryErrorMessage = Self.message(for: error)
+      }
+    }
+  }
+
+  /// The Account series for one subscription, as samples `QuotaRemainingHistory.fold` already
+  /// takes. Nil when this session has no cached points for it. `observedAt` on an account
+  /// sample is the bucket start.
+  func accountChartSamples(subscriptionKey: String) -> [String: [QuotaSample]]? {
+    guard let payload = accountHistoryBySubscription[subscriptionKey] else { return nil }
+    let windows = payload.samplesBySubscription[subscriptionKey] ?? [:]
+    var converted: [String: [QuotaSample]] = [:]
+    for (windowID, samples) in windows {
+      let buckets = samples.map { sample in
+        QuotaHistorySync.Bucket(
+          resetsAt: sample.resetsAt,
+          bucketStart: sample.observedAt,
+          usedPercent: sample.usedPercent
+        )
+      }
+      let series = QuotaHistorySync.samples(from: buckets)
+      if !series.isEmpty {
+        converted[windowID] = series
+      }
+    }
+    return converted.isEmpty ? nil : converted
+  }
+
+  /// Asks for the Account series of one global-scope subscription. A failure keeps the
+  /// previous cache; the first failure leaves nothing cached.
+  func loadAccountQuotaHistory(
+    subscriptionKey: String,
+    provider: String,
+    fingerprint: String
+  ) {
+    guard let transport else { return }
+    guard !provider.isEmpty, !fingerprint.isEmpty else { return }
+    accountHistoryTask?.cancel()
+    accountHistoryGeneration += 1
+    let generation = accountHistoryGeneration
+    let since = now().addingTimeInterval(-Double(QuotaHistory.retentionDays) * 86_400)
+    accountHistoryTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      do {
+        let payload = try await transport.quotaHistory(
+          source: .account,
+          provider: provider,
+          fingerprint: fingerprint,
+          since: since
+        )
+        guard !Task.isCancelled, generation == accountHistoryGeneration else { return }
+        accountHistoryBySubscription[subscriptionKey] = payload
+        accountHistoryEpoch += 1
+      } catch is CancellationError {
+        return
+      } catch {
+        guard !Task.isCancelled, generation == accountHistoryGeneration else { return }
+        accountHistoryEpoch += 1
       }
     }
   }
