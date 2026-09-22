@@ -263,7 +263,10 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   row. `PUT /api/v2/account/settings` requires `account:settings` and `If-Match`; a web session
   also presents a same-origin Origin. Missing `If-Match` is `428`; stale is `412` with the current
   document. Rate limit is `profileMutation` (30 / 10 min) per Account. The compare-and-set is one
-  `UPDATE … WHERE revision = ?` or `INSERT … WHERE NOT EXISTS`.
+  `UPDATE … WHERE revision = ?` or `INSERT … WHERE NOT EXISTS`. The document also carries
+  `history.sync` (default false). Omitted from a PUT means unchanged. `true → false` deletes every
+  `quota_history` row of the Account in the same transaction
+  ([ADR 0062](decisions/0062-quota-history-may-follow-the-account.md)).
 
 ## Upload, Usage, and deletion safety
 
@@ -278,7 +281,10 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   stripped, and the value is capped at 128 characters.
 - An upload carries no sequence: a reading is placed by `(provider, fingerprint)` and ordered by
   when it was observed, an hour is replaced only by a strictly newer `scan_version`, and the
-  response names what it accepted and ignored.
+  response names what it accepted and ignored. Quota-history buckets upsert on
+  `(device_id, provider, fingerprint, window_id, resets_at, bucket_start)` keeping the larger
+  `used_percent`, and are refused while `history.sync` is false. A point more than one bucket
+  ahead of now is refused. An Account already at 50 000 rows is `413 quota_history_full`.
 - Relay keeps one quota observation per `(device_id, provider, fingerprint)` and deletes it seven
   days after the moment it describes. Readers stop presenting a reading as current a day after it
   was observed, so retention only bounds what an account keeps from a device that stopped reporting;
@@ -300,9 +306,14 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   a local opaque subscription selector (`subscription_key`), provider, window id, `resets_at`,
   `observed_at`, `used_percent`, and the optional remaining, limit, and unit. They carry no
   credential, no account label, and no fingerprint; a reading whose numbers have not moved is not
-  written again; they are deleted after 30 days; and they leave the device never — no wire schema
-  names a sample and Relay has no route that accepts one
-  ([ADR 0042](decisions/0042-quota-history-is-local-samples.md)).
+  written again; they are deleted after 30 days. They stay on the device by default. While the
+  Account's `history.sync` switch is on, global-scope readings upload as downsampled buckets
+  (`used_percent` only, named by `(provider, fingerprint)`, never the local selector) and Relay
+  keeps them as long as the chart for that window shows — two days for a five-hour window, up
+  to thirty days for weekly and monthly ones (`min(30 d, max(48 h, 4 × duration_seconds))`);
+  turning the switch off deletes what it holds
+  ([ADR 0042](decisions/0042-quota-history-is-local-samples.md),
+  [ADR 0062](decisions/0062-quota-history-may-follow-the-account.md)).
 - Local session rows in `cache.sqlite` (`usage_sessions`) retain only: the file-index hash, agent,
   a basename `project_key` (never a path), `started_at`, `last_activity_at`, message and token
   counts, optional `cost_micros`, and `top_model`. They keep no session id, conversation id, prompt,

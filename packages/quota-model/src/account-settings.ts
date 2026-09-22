@@ -31,6 +31,7 @@ export function normalizeAccountSettings(input: unknown): NormalizeAccountSettin
         amount_usd: amount === null ? null : canonicalAmountUSD(amount),
         alerts: parsed.data.budget.alerts,
       },
+      history: parsed.data.history ?? { sync: false },
     },
   };
 }
@@ -41,6 +42,7 @@ export type FirstSyncAccountDocument = {
   revision: number;
   alerts: AccountSettings["alerts"];
   budget: AccountSettings["budget"];
+  history?: AccountSettings["history"];
 };
 
 export type FirstSyncPlan = {
@@ -54,7 +56,9 @@ export type FirstSyncPlan = {
  *
  * Revision 0 is no row. Non-default local values seed it; defaults write nothing. A row wins
  * for every policy field, and local thresholds for selectors the Account does not name are
- * merged in once.
+ * merged in once. The history switch is never seeded from a device: a device has no local
+ * value for it, so a first write omits `history` and an Account row's switch is adopted as
+ * stored.
  */
 export function planFirstSync(
   local: AccountSettings,
@@ -64,8 +68,12 @@ export function planFirstSync(
     if (isDefaultAccountSettings(local)) {
       return { action: "adopt", local: cloneAccountSettings(local), write: null };
     }
-    const seeded = cloneAccountSettings(local);
-    return { action: "seed", local: seeded, write: cloneAccountSettings(seeded) };
+    const seeded = policyWithoutHistory(local);
+    return {
+      action: "seed",
+      local: { ...cloneAccountSettings(seeded), history: { sync: false } },
+      write: cloneAccountSettings(seeded),
+    };
   }
   const extras = extraThresholds(local.alerts.thresholds, account.alerts.thresholds);
   const adopted: AccountSettings = {
@@ -78,6 +86,7 @@ export function planFirstSync(
       amount_usd: account.budget.amount_usd,
       alerts: account.budget.alerts,
     },
+    history: { sync: account.history?.sync ?? false },
   };
   if (Object.keys(extras).length === 0) {
     return { action: "adopt", local: adopted, write: null };
@@ -94,7 +103,8 @@ export type AccountSettingsEdit =
   | { kind: "set_reset_reminders"; value: boolean }
   | { kind: "set_pace_alerts"; value: boolean }
   | { kind: "set_budget_amount"; value: string | null }
-  | { kind: "set_budget_alerts"; value: boolean };
+  | { kind: "set_budget_alerts"; value: boolean }
+  | { kind: "set_history_sync"; value: boolean };
 
 /**
  * Replay one local edit onto the document a 412 just returned. Selectors the editor does not
@@ -117,6 +127,9 @@ export function reapplyEdit(edit: AccountSettingsEdit, fresh: AccountSettings): 
       return next;
     case "set_budget_alerts":
       next.budget.alerts = edit.value;
+      return next;
+    case "set_history_sync":
+      next.history = { sync: edit.value };
       return next;
   }
 }
@@ -142,6 +155,11 @@ function extraThresholds(
   return extras;
 }
 
+function policyWithoutHistory(settings: AccountSettings): AccountSettings {
+  const cloned = cloneAccountSettings(settings);
+  return { alerts: cloned.alerts, budget: cloned.budget };
+}
+
 function cloneAccountSettings(settings: AccountSettings): AccountSettings {
   const thresholds: AccountSettings["alerts"]["thresholds"] = {};
   for (const [selector, values] of Object.entries(settings.alerts.thresholds)) {
@@ -157,5 +175,6 @@ function cloneAccountSettings(settings: AccountSettings): AccountSettings {
       amount_usd: settings.budget.amount_usd,
       alerts: settings.budget.alerts,
     },
+    ...(settings.history === undefined ? {} : { history: { sync: settings.history.sync } }),
   };
 }

@@ -32,6 +32,9 @@ import {
   PublicProfileUpdateRequestSchema,
   PublicUsageResponseSchema,
   QuotaCollectionReportSchema,
+  QuotaHistoryResponseSchema,
+  QuotaHistoryUploadResponseSchema,
+  QuotaHistoryUploadSchema,
   QuotaSnapshotEnvelopeSchema,
   QuotaSnapshotUploadResponseSchema,
   RelayErrorEnvelopeSchema,
@@ -72,6 +75,9 @@ const AccountHttpPayloadSchema = z.union([
   PublicUsageResponseSchema,
   AccountSettingsUpdateRequestSchema,
   AccountSettingsResponseSchema,
+  QuotaHistoryUploadSchema,
+  QuotaHistoryUploadResponseSchema,
+  QuotaHistoryResponseSchema,
   RelayErrorEnvelopeSchema,
 ]);
 

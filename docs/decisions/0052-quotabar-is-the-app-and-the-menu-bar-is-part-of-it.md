@@ -3,6 +3,8 @@
 - Status: Accepted
 - Date: 2026-09-16
 - Amended: 2026-09-18
+- Amended: 2026-09-21 by [ADR 0062](0062-quota-history-may-follow-the-account.md): samples may
+  follow the Account when the Account's history switch is on.
 - Amended by [ADR 0054](0054-quotabar-is-resident-in-the-menu-bar.md)
 - Supersedes the window and activation parts of
   [ADR 0051](0051-the-panel-glances-and-the-windows-explain.md)
@@ -48,10 +50,12 @@ launch (Finder, Spotlight, `open -a`) shows it after the status items exist. Clo
 window never quits; a Dock click reopens it. ⌘Q still terminates.
 
 **The data rules of [ADR 0042](0042-quota-history-is-local-samples.md) and
-[ADR 0051](0051-the-panel-glances-and-the-windows-explain.md) are unchanged.** Samples stay on
-this Mac for thirty days and never upload. The state push keeps the current-window slice Overview
-already draws. The main window reads the rest through `quota_history { since }`. The website and
-the Account gain no history view. Menu Bar preferences stay one form.
+[ADR 0051](0051-the-panel-glances-and-the-windows-explain.md) still describe the local journal.**
+Samples stay on this Mac for thirty days. They upload only while the Account's history switch is
+on ([ADR 0062](0062-quota-history-may-follow-the-account.md)). The state push keeps the
+current-window slice Overview already draws. The main window reads the rest through
+`quota_history { since }`. The website draws no history this cycle. Menu Bar preferences stay
+one form.
 
 ## Consequences
 

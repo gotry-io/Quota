@@ -34,6 +34,7 @@ import {
   LocalProviderIdSchema,
   LocalUsageReportSchema,
   MANAGED_DATA_PROTOCOL_VERSION,
+  MAXIMUM_QUOTA_HISTORY_POINTS_PER_UPLOAD,
   MAXIMUM_SNAPSHOTS_PER_ENVELOPE,
   OAuthTokenResponseSchema,
   PROTOCOL_VERSION,
@@ -48,6 +49,9 @@ import {
   ProviderIdSchema,
   RESERVED_PUBLIC_PROFILE_HANDLES,
   QuotaCollectionReportSchema,
+  QuotaHistoryResponseReadSchema,
+  QuotaHistoryResponseSchema,
+  QuotaHistoryUploadSchema,
   QuotaSnapshotEnvelopeSchema,
   QuotaSnapshotUploadResponseSchema,
   SessionRefreshResponseSchema,
@@ -1248,8 +1252,24 @@ describe("quota protocol", () => {
       revision: 7,
       updated_at: "2026-09-21T10:00:00Z",
       ...settings,
+      history: { sync: false },
     };
     expect(AccountSettingsResponseSchema.parse(response)).toEqual(response);
+    expect(
+      AccountSettingsUpdateRequestSchema.parse({
+        protocol_version: PROTOCOL_VERSION,
+        ...settings,
+        history: { sync: true },
+      }),
+    ).toEqual({
+      protocol_version: PROTOCOL_VERSION,
+      ...settings,
+      history: { sync: true },
+    });
+    expect(AccountSettingsSchema.parse({ ...settings, history: { sync: true } })).toEqual({
+      ...settings,
+      history: { sync: true },
+    });
     expect(AccountSettingsResponseReadSchema.parse({ ...response, extra: "future" }).extra).toBe(
       "future",
     );
@@ -1319,6 +1339,7 @@ describe("quota protocol", () => {
       ["amount over cap", { ...settings, budget: { amount_usd: "1000000.01", alerts: true } }],
       ["three fraction digits", { ...settings, budget: { amount_usd: "1.234", alerts: true } }],
       ["amount as number", { ...settings, budget: { amount_usd: 250, alerts: true } }],
+      ["history extra field", { ...settings, history: { sync: false, extra: true } }],
       [
         "257 selectors",
         {
@@ -1352,6 +1373,98 @@ describe("quota protocol", () => {
         ...settings,
       }).success,
     ).toBe(false);
+  });
+
+  it("takes a downsampled quota-history upload only when buckets are aligned", () => {
+    const series = {
+      provider: "codex" as const,
+      fingerprint: "account_test",
+      window_id: "five_hour",
+      duration_seconds: 18_000,
+      points: [
+        {
+          resets_at: "2026-09-21T15:00:00Z",
+          bucket_start: "2026-09-21T10:00:00Z",
+          used_percent: 42.5,
+        },
+      ],
+    };
+    const upload = {
+      protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
+      generation: 3,
+      series: [series],
+    };
+    expect(QuotaHistoryUploadSchema.parse(upload)).toEqual(upload);
+    expect(
+      QuotaHistoryUploadSchema.safeParse({
+        ...upload,
+        series: [{ ...series, fingerprint_scope: "global" }],
+      }).success,
+    ).toBe(false);
+    expect(
+      QuotaHistoryUploadSchema.safeParse({
+        ...upload,
+        series: [
+          {
+            ...series,
+            points: [{ ...series.points[0], bucket_start: "2026-09-21T10:00:01Z" }],
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      QuotaHistoryUploadSchema.safeParse({
+        ...upload,
+        series: [
+          {
+            ...series,
+            duration_seconds: 86_401,
+            points: [{ ...series.points[0], bucket_start: "2026-09-21T10:15:00Z" }],
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      QuotaHistoryUploadSchema.safeParse({
+        ...upload,
+        series: [
+          {
+            ...series,
+            points: [{ ...series.points[0], used_percent: 100.1 }],
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    const tooMany = {
+      ...upload,
+      series: [
+        {
+          ...series,
+          points: Array.from(
+            { length: MAXIMUM_QUOTA_HISTORY_POINTS_PER_UPLOAD + 1 },
+            (_, index) => ({
+              resets_at: "2026-09-21T15:00:00Z",
+              bucket_start: "2026-09-21T10:00:00Z",
+              used_percent: Math.min(100, index),
+            }),
+          ),
+        },
+      ],
+    };
+    expect(QuotaHistoryUploadSchema.safeParse(tooMany).success).toBe(false);
+    expect(
+      protocol.RelayErrorEnvelopeSchema.parse({
+        error: { code: "quota_history_full", message: "This Account is full." },
+      }).error.code,
+    ).toBe("quota_history_full");
+
+    const off = {
+      protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
+      sync: false,
+      windows: {},
+    };
+    expect(QuotaHistoryResponseSchema.parse(off)).toEqual(off);
+    expect(QuotaHistoryResponseReadSchema.parse({ ...off, extra: true }).extra).toBe(true);
   });
 
   it("keeps agent, device, account, and quota out of the shape a public page answers with", () => {

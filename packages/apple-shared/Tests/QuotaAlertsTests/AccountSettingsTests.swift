@@ -54,8 +54,52 @@ struct AccountSettingsTests {
     let rewritten = try AccountSettingsDocument.decode(try document.updateRequestJSON())
     #expect(rewritten.alerts == document.alerts)
     #expect(rewritten.budget == document.budget)
+    #expect(rewritten.history.sync == false)
     #expect(rewritten.revision == 0)
     #expect(rewritten.updatedAt == nil)
+  }
+
+  @Test func aDocumentWithoutHistoryDecodesAsSyncOffAndAWriteOmitsIt() throws {
+    let document = try AccountSettingsDocument.decode(
+      Data(
+        """
+        {
+          "protocol_version": 2,
+          "revision": 1,
+          "updated_at": "2026-09-21T10:00:00Z",
+          "alerts": { "reset_reminders": true, "pace_alerts": true, "thresholds": {} },
+          "budget": { "amount_usd": null, "alerts": true }
+        }
+        """.utf8
+      )
+    )
+    #expect(document.history.sync == false)
+    let object = try JSONSerialization.jsonObject(with: try document.updateRequestJSON())
+    let fields = try #require(object as? [String: Any])
+    #expect(fields["history"] == nil)
+    #expect(fields.keys.sorted() == ["alerts", "budget", "protocol_version"])
+  }
+
+  @Test func anExplicitHistorySwitchIsStoredAndAWriteThatNamesItSendsIt() throws {
+    let document = try AccountSettingsDocument.decode(
+      Data(
+        """
+        {
+          "alerts": { "reset_reminders": true, "pace_alerts": true, "thresholds": {} },
+          "budget": { "amount_usd": null, "alerts": true },
+          "history": { "sync": true }
+        }
+        """.utf8
+      )
+    )
+    #expect(document.history.sync)
+    #expect(document.writesHistory == false)
+    var named = document
+    named.writesHistory = true
+    let object = try JSONSerialization.jsonObject(with: try named.updateRequestJSON())
+    let fields = try #require(object as? [String: Any])
+    let history = try #require(fields["history"] as? [String: Any])
+    #expect(history["sync"] as? Bool == true)
   }
 
   /// The strict check is over the stored shape, so `revision`, `updated_at`, and the

@@ -3,6 +3,8 @@
 - Status: Partially superseded
 - Date: 2026-09-16
 - Superseded by: 0052
+- Amended: 2026-09-21 by [ADR 0062](0062-quota-history-may-follow-the-account.md): samples may
+  leave this Mac while the Account's history switch is on.
 - Follows [ADR 0035](0035-quota-pace-is-derived-from-the-reading.md),
   [ADR 0037](0037-a-public-profile-shows-usage-not-quota.md),
   [ADR 0039](0039-project-attribution-stays-local.md), and
@@ -58,7 +60,8 @@ while a window is open; closing the last one returns to accessory. QuotaBar stay
 
 **Dashboard reads 30-day history through a dedicated read-only IPC operation, not on every
 state push (plan B).** The operation is `quota_history { since }`. The state push keeps the
-current-window slice Overview already draws. The samples still never leave this Mac.
+current-window slice Overview already draws. The samples stay on this Mac by default; they may follow the Account when the Account's history
+switch is on ([ADR 0062](0062-quota-history-may-follow-the-account.md)).
 
 ## Consequences
 
@@ -90,9 +93,9 @@ Dashboard   dashboard | dashboard-codex | dashboard-usage | dashboard-usage-loca
 
 **History is plan B.** Dashboard reads this Mac's 30-day samples through the private
 `quota_history { since }` IPC operation. The state push keeps the current-window slice Overview
-already draws. Samples never leave this Mac; `quota` and Relay are untouched. A later fold that
-actually fits in 200 KB would be a reason to revisit Plan A. Until a measurement says so, the
-30-day journal is a read, not a push.
+already draws. Samples stay on this Mac by default; they may follow the Account when the Account's history
+switch is on ([ADR 0062](0062-quota-history-may-follow-the-account.md)). Until a measurement
+says otherwise, the 30-day journal is a read, not a push.
 
 **Activation.** QuotaBar stays `LSUIElement`. Opening Settings or Dashboard registers the window
 with `WindowActivation`, which switches the process to `.regular` so a Dock icon and ⌘Tab entry

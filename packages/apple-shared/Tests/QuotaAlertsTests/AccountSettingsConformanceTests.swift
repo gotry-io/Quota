@@ -43,8 +43,8 @@ struct AccountSettingsConformanceTests {
         continue
       }
       let written = try #require(plan.write, "\(name)")
-      let stored = try AccountSettingsFixture.stored(written)
-      #expect(stored == write as NSDictionary, "\(name)")
+      let body = try AccountSettingsFixture.writeBody(written)
+      #expect(body == write as NSDictionary, "\(name)")
       // The revision a seed or a merge states in `If-Match` is the one the Account answered.
       #expect(written.revision == account.revision, "\(name)")
     }
@@ -82,9 +82,14 @@ private enum AccountSettingsFixture {
     try AccountSettingsDocument.decode(try json(value))
   }
 
-  /// The document as a write states it, less the `protocol_version` every write carries, so a case
-  /// can be compared with the stored shape the fixture spells out.
+  /// The stored policy as the fixture spells it: `alerts`, `budget`, and `history`.
   static func stored(_ document: AccountSettingsDocument) throws -> NSDictionary {
+    let object = try JSONSerialization.jsonObject(with: try document.storedJSON())
+    return try #require(object as? [String: Any]) as NSDictionary
+  }
+
+  /// The PUT body, less `protocol_version`. `history` is present only when this write names it.
+  static func writeBody(_ document: AccountSettingsDocument) throws -> NSDictionary {
     let object = try JSONSerialization.jsonObject(with: try document.updateRequestJSON())
     var fields = try #require(object as? [String: Any])
     fields.removeValue(forKey: "protocol_version")

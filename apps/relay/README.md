@@ -17,7 +17,7 @@ fields and enum members its build cannot name, at any depth. Adding either to a 
 therefore not a breaking change. See
 [ADR 0023](../../docs/decisions/0023-strict-writes-tolerant-reads.md).
 
-The v6 data contract is five routes
+The v6 data contract is seven routes
 ([ADR 0024](../../docs/decisions/0024-hour-versioned-usage-and-daily-rollups.md),
 [ADR 0055](../../docs/decisions/0055-an-account-period-is-a-local-date-range.md)):
 
@@ -58,6 +58,24 @@ The v6 data contract is five routes
   `{from,to}` does not roll over with the wall clock. A matching `If-None-Match` returns 304
   before any Usage SQL. The contract is
   `packages/protocol/fixtures/usage-period-conformance.json`.
+- `PUT /api/v6/device/quota-history` stores this device's downsampled remaining-quota buckets
+  while the Account `history.sync` switch is on. `device:write` and the current generation.
+  At most 2 000 points and 256 KiB. `bucket_start` must be aligned to 900 s or 3 600 s from
+  `duration_seconds`. A point older than the series' span plus one bucket, or more than one
+  bucket ahead of now, is 400. Upsert keeps the larger `used_percent` and writes
+  `duration_seconds` / `expires_at` even when the percent is not larger. The latest duration
+  declared for a window rewrites every row of that window. `409 history_sync_off` while the
+  switch is false. `413 quota_history_full` at 50 000 rows. The answer is the newest
+  `bucket_start` now held per series.
+- `GET /api/v6/account/quota-history?provider=&fingerprint=&since=` answers one global-scope
+  subscription's merged buckets, `MAX(used_percent)` in SQL, oldest first, `since` clamped per
+  window to that window's span (`min(30 d, max(48 h, 4 × duration_seconds))`: 48 h for a
+  five-hour window, 28 d weekly, 30 d monthly). `ETag` from the switch plus
+  `(count, max(updated_at))`; 304 before the rows are read. With the switch off:
+  `{ "sync": false, "windows": {} }`. A row expires at that same span, swept 5 000 rows an
+  hour. The contract is
+  `packages/protocol/fixtures/quota-history-sync-conformance.json`
+  ([ADR 0062](../../docs/decisions/0062-quota-history-may-follow-the-account.md)).
 
 The four periods in a summary are the four every client opens on. Any other period a Usage page
 offers — a week, a month, a range someone picked — is the same local-date window the period read
@@ -186,12 +204,14 @@ cacheable. `GET /api/v6/account/summary`, `GET /api/v6/account/usage/activity`, 
 `private, no-cache` with a strong `ETag`, and answer a matching `If-None-Match` with 304 before
 running any Usage query.
 
-`GET` / `PUT /api/v2/account/settings` is the Account alert-policy and budget document
-([ADR 0061](../../docs/decisions/0061-alert-policy-and-the-budget-follow-the-account.md)).
+`GET` / `PUT /api/v2/account/settings` is the Account alert-policy, budget, and history-sync
+document ([ADR 0061](../../docs/decisions/0061-alert-policy-and-the-budget-follow-the-account.md),
+[ADR 0062](../../docs/decisions/0062-quota-history-may-follow-the-account.md)).
 `GET` is `account:read`, `ETag: "<revision>"`, `Cache-Control: private, no-cache`. `PUT` is
 `account:settings` and compare-and-set on `If-Match`; a browser also presents a same-origin
-Origin. No row is the default document at revision 0. Live sessions gain the scope in
-migration 0033.
+Origin. `history` omitted means unchanged. No row is the default document at revision 0,
+including `history.sync: false`. Live sessions gain the scope in migration 0033. Turning
+`history.sync` from true to false deletes `quota_history` in the same write.
 
 Every document response carries `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin`,
 `X-Frame-Options: DENY`, and a Content Security Policy that allows scripts, styles, images, fonts,

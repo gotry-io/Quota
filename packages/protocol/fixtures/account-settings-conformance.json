@@ -1,5 +1,5 @@
 {
-  "$comment": "Account settings document: remaining-quota thresholds keyed by an opaque 12-hex selector, reset/pace switches, and an optional monthly budget amount. `normalize` is the stored document or a refusal. `first_sync` is what a device does the first time it sees an Account document (seed / adopt / adopt_and_merge). `reapply` is the one local edit replayed onto the fresh document after a 412. TypeScript (`packages/quota-model`), Swift, and Rust each answer this file. See ADR 0061.",
+  "$comment": "Account settings document: remaining-quota thresholds keyed by an opaque 12-hex selector, reset/pace switches, an optional monthly budget amount, and `history.sync` (default false). A document without `history` normalizes to `sync: false`. `history` omitted from a write means unchanged. The switch is never seeded from a device. `normalize` is the stored document or a refusal. `first_sync` is what a device does the first time it sees an Account document (seed / adopt / adopt_and_merge). `reapply` is the one local edit replayed onto the fresh document after a 412. TypeScript (`packages/quota-model`), Swift, and Rust each answer this file. See ADR 0061 and ADR 0062.",
   "normalize": [
     {
       "name": "a valid pair and a two-decimal budget are stored as written",
@@ -28,6 +28,9 @@
           "budget": {
             "amount_usd": "250.00",
             "alerts": true
+          },
+          "history": {
+            "sync": false
           }
         }
       }
@@ -55,6 +58,9 @@
           "budget": {
             "amount_usd": null,
             "alerts": true
+          },
+          "history": {
+            "sync": false
           }
         }
       }
@@ -86,6 +92,9 @@
           "budget": {
             "amount_usd": "0.01",
             "alerts": false
+          },
+          "history": {
+            "sync": false
           }
         }
       }
@@ -241,6 +250,9 @@
           "budget": {
             "amount_usd": "0.50",
             "alerts": true
+          },
+          "history": {
+            "sync": false
           }
         }
       }
@@ -268,6 +280,9 @@
           "budget": {
             "amount_usd": "1000000.00",
             "alerts": true
+          },
+          "history": {
+            "sync": false
           }
         }
       }
@@ -295,6 +310,72 @@
           "budget": {
             "amount_usd": "250.50",
             "alerts": true
+          },
+          "history": {
+            "sync": false
+          }
+        }
+      }
+    },
+    {
+      "name": "a document without history normalizes to sync false",
+      "input": {
+        "alerts": {
+          "reset_reminders": true,
+          "pace_alerts": true,
+          "thresholds": {}
+        },
+        "budget": {
+          "amount_usd": null,
+          "alerts": true
+        }
+      },
+      "expected": {
+        "ok": {
+          "alerts": {
+            "reset_reminders": true,
+            "pace_alerts": true,
+            "thresholds": {}
+          },
+          "budget": {
+            "amount_usd": null,
+            "alerts": true
+          },
+          "history": {
+            "sync": false
+          }
+        }
+      }
+    },
+    {
+      "name": "an explicit history switch is stored as written",
+      "input": {
+        "alerts": {
+          "reset_reminders": true,
+          "pace_alerts": true,
+          "thresholds": {}
+        },
+        "budget": {
+          "amount_usd": null,
+          "alerts": true
+        },
+        "history": {
+          "sync": true
+        }
+      },
+      "expected": {
+        "ok": {
+          "alerts": {
+            "reset_reminders": true,
+            "pace_alerts": true,
+            "thresholds": {}
+          },
+          "budget": {
+            "amount_usd": null,
+            "alerts": true
+          },
+          "history": {
+            "sync": true
           }
         }
       }
@@ -341,6 +422,9 @@
           "budget": {
             "amount_usd": "250.00",
             "alerts": false
+          },
+          "history": {
+            "sync": false
           }
         },
         "write": {
@@ -354,6 +438,63 @@
           "budget": {
             "amount_usd": "250.00",
             "alerts": false
+          }
+        }
+      }
+    },
+    {
+      "name": "the history switch is never seeded from a device",
+      "local": {
+        "alerts": {
+          "reset_reminders": false,
+          "pace_alerts": true,
+          "thresholds": {}
+        },
+        "budget": {
+          "amount_usd": "10.00",
+          "alerts": true
+        },
+        "history": {
+          "sync": true
+        }
+      },
+      "account": {
+        "revision": 0,
+        "alerts": {
+          "reset_reminders": true,
+          "pace_alerts": true,
+          "thresholds": {}
+        },
+        "budget": {
+          "amount_usd": null,
+          "alerts": true
+        }
+      },
+      "expected": {
+        "action": "seed",
+        "local": {
+          "alerts": {
+            "reset_reminders": false,
+            "pace_alerts": true,
+            "thresholds": {}
+          },
+          "budget": {
+            "amount_usd": "10.00",
+            "alerts": true
+          },
+          "history": {
+            "sync": false
+          }
+        },
+        "write": {
+          "alerts": {
+            "reset_reminders": false,
+            "pace_alerts": true,
+            "thresholds": {}
+          },
+          "budget": {
+            "amount_usd": "10.00",
+            "alerts": true
           }
         }
       }
@@ -442,6 +583,9 @@
           "budget": {
             "amount_usd": "100.00",
             "alerts": true
+          },
+          "history": {
+            "sync": false
           }
         },
         "write": {
@@ -456,6 +600,9 @@
           "budget": {
             "amount_usd": "100.00",
             "alerts": true
+          },
+          "history": {
+            "sync": false
           }
         }
       }
@@ -502,6 +649,9 @@
           "budget": {
             "amount_usd": "100.00",
             "alerts": true
+          },
+          "history": {
+            "sync": false
           }
         },
         "write": null
@@ -609,6 +759,41 @@
         "budget": {
           "amount_usd": "75.50",
           "alerts": false
+        }
+      }
+    },
+    {
+      "name": "an edit that does not touch history leaves it",
+      "edit": {
+        "kind": "set_budget_alerts",
+        "value": false
+      },
+      "fresh": {
+        "alerts": {
+          "reset_reminders": true,
+          "pace_alerts": true,
+          "thresholds": {}
+        },
+        "budget": {
+          "amount_usd": "50.00",
+          "alerts": true
+        },
+        "history": {
+          "sync": true
+        }
+      },
+      "expected": {
+        "alerts": {
+          "reset_reminders": true,
+          "pace_alerts": true,
+          "thresholds": {}
+        },
+        "budget": {
+          "amount_usd": "50.00",
+          "alerts": false
+        },
+        "history": {
+          "sync": true
         }
       }
     }

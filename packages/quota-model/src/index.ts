@@ -1451,3 +1451,20 @@ export {
   planFirstSync,
   reapplyEdit,
 } from "./account-settings.ts";
+
+export {
+  type BucketQuotaSamplesResult,
+  type QuotaHistoryLocalSample,
+  type QuotaHistoryMergePoint,
+  type QuotaHistorySyncedPoint,
+  QUOTA_HISTORY_MAX_SPAN_SECONDS,
+  QUOTA_HISTORY_MIN_SPAN_SECONDS,
+  QUOTA_HISTORY_SPAN_DURATION_MULTIPLE,
+  bucketQuotaSamples,
+  mergeQuotaHistory,
+  quotaHistoryExpiresAt,
+  quotaHistorySpanCutoffMs,
+  quotaHistorySpanSeconds,
+  quotaHistoryUploadHasOutOfRangePoint,
+  quotaHistoryUploadPointOutOfRange,
+} from "./quota-history-sync.ts";

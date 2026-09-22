@@ -2,6 +2,8 @@
 
 - Status: Accepted
 - Date: 2026-09-21
+- Amended: 2026-09-21 by [ADR 0062](0062-quota-history-may-follow-the-account.md): the document
+  gains `history: { sync }`, default false; absent in a PUT means unchanged.
 - Updates [ADR 0013](0013-readonly-ios-account-client.md), [ADR 0027](0027-one-token-per-client.md),
   [ADR 0053](0053-one-alert-delivery-package-for-both-apps.md)
 - Supersedes the budget section of [ADR 0040](0040-a-period-is-folded-where-its-days-already-are.md)
@@ -37,9 +39,14 @@ The document is `GET` / `PUT /api/v2/account/settings` (control plane, `PROTOCOL
     "pace_alerts": true,
     "thresholds": { "a1b2c3d4e5f6": [20, 10] }
   },
-  "budget": { "amount_usd": "250.00", "alerts": true }
+  "budget": { "amount_usd": "250.00", "alerts": true },
+  "history": { "sync": false }
 }
 ```
+
+`history.sync` is the Account-level switch for quota-history upload
+([ADR 0062](0062-quota-history-may-follow-the-account.md)). Default false. Omitted from a `PUT`
+means unchanged. The stored and response documents always carry it.
 
 - `thresholds` keys are `SHA-256(provider|fingerprint|scope|source_id)[0:12]` in hex. Values are
   1–2 integers in 1…99, strictly descending. At most 256 selectors. Absence of a selector means
@@ -49,7 +56,8 @@ The document is `GET` / `PUT /api/v2/account/settings` (control plane, `PROTOCOL
 - `enabled` is not in the document. It is the per-device permission mirror: both apps force it
   off when the system denies notifications. Dedup state and pending reminders stay per device
   ([ADR 0053](0053-one-alert-delivery-package-for-both-apps.md)).
-- An Account with no row answers the defaults at `revision: 0`.
+- An Account with no row answers the defaults at `revision: 0`, including `history.sync: false`.
+  The switch is never seeded from a device.
 
 **Writes are compare-and-set, not last-writer-wins.** `GET` answers `ETag: "<revision>"` and
 `Cache-Control: private, no-cache`; `If-None-Match` is 304. `PUT` requires `If-Match`. Missing is

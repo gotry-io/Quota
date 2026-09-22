@@ -24,8 +24,10 @@ public enum AccountSettings: Sendable {
   /// document comes back at `revision` zero.
   public static func normalize(_ json: Data) -> AccountSettingsNormalization {
     guard AccountSettingsDocument.namesOnlyStoredKeys(json),
-      let document = try? AccountSettingsDocument.decode(json)
+      let decoded = try? AccountSettingsDocument.decode(json)
     else { return .refused }
+    var document = decoded
+    document.historyPresent = true
     return .ok(document)
   }
 
@@ -33,14 +35,18 @@ public enum AccountSettings: Sendable {
   ///
   /// Revision zero is an Account with no row: values of this device's own seed it, and the
   /// defaults write nothing. A row wins for every policy field, and the local thresholds for
-  /// selectors the Account does not name are merged into it once.
+  /// selectors the Account does not name are merged into it once. The history switch is never
+  /// seeded from a device: a first write omits `history`, and an Account row's switch is
+  /// adopted as stored.
   public static func planFirstSync(
     local: AccountSettingsPolicy,
     account: AccountSettingsDocument
   ) -> AccountSettingsFirstSync {
     if account.revision == 0 {
       if local.isDefault { return .adopt(policy: local) }
-      return .seed(write: AccountSettingsDocument(policy: local, revision: account.revision))
+      var seeded = local
+      seeded.historySync = false
+      return .seed(write: AccountSettingsDocument(policy: seeded, revision: account.revision))
     }
     var thresholds = account.alerts.thresholds
     var merged = false
@@ -53,12 +59,17 @@ public enum AccountSettings: Sendable {
       paceAlerts: account.alerts.paceAlerts,
       thresholds: thresholds,
       budgetAmountUSD: account.budget.amountUSD,
-      budgetAlerts: account.budget.alerts
+      budgetAlerts: account.budget.alerts,
+      historySync: account.history.sync
     )
     guard merged else { return .adopt(policy: adopted) }
     return .adoptAndMerge(
       policy: adopted,
-      write: AccountSettingsDocument(policy: adopted, revision: account.revision)
+      write: AccountSettingsDocument(
+        policy: adopted,
+        revision: account.revision,
+        writesHistory: true
+      )
     )
   }
 
@@ -105,24 +116,30 @@ public struct AccountSettingsPolicy: Equatable, Sendable {
   public var thresholds: [String: [Int]]
   public var budgetAmountUSD: Decimal?
   public var budgetAlerts: Bool
+  /// Whether remaining-quota history follows the Account. A device has no local value for this
+  /// switch, so first sync never seeds it.
+  public var historySync: Bool
 
   public init(
     resetReminders: Bool,
     paceAlerts: Bool,
     thresholds: [String: [Int]],
     budgetAmountUSD: Decimal?,
-    budgetAlerts: Bool
+    budgetAlerts: Bool,
+    historySync: Bool = false
   ) {
     self.resetReminders = resetReminders
     self.paceAlerts = paceAlerts
     self.thresholds = thresholds
     self.budgetAmountUSD = budgetAmountUSD
     self.budgetAlerts = budgetAlerts
+    self.historySync = historySync
   }
 
   /// Whether these are the values a device starts with, which is what decides a first sync: an
   /// Account with no row takes them only when the device has something of its own to say. A
-  /// selector that was edited to the default pair still counts as something.
+  /// selector that was edited to the default pair still counts as something. The history switch
+  /// is not a local value, so it does not count.
   public var isDefault: Bool {
     resetReminders == AlertRules.defaultResetReminders
       && paceAlerts == AlertRules.defaultPaceAlerts
@@ -186,7 +203,8 @@ extension AccountSettingsPolicy {
 
 extension AccountSettingsDocument {
   /// The document these policy values write, at the revision the write states in `If-Match`.
-  public init(policy: AccountSettingsPolicy, revision: Int) {
+  /// `writesHistory` is set when this write names the switch; a seed omits it.
+  public init(policy: AccountSettingsPolicy, revision: Int, writesHistory: Bool = false) {
     self.init(
       revision: revision,
       alerts: Alerts(
@@ -194,7 +212,10 @@ extension AccountSettingsDocument {
         paceAlerts: policy.paceAlerts,
         thresholds: policy.thresholds
       ),
-      budget: Budget(amountUSD: policy.budgetAmountUSD, alerts: policy.budgetAlerts)
+      budget: Budget(amountUSD: policy.budgetAmountUSD, alerts: policy.budgetAlerts),
+      history: History(sync: policy.historySync),
+      writesHistory: writesHistory,
+      historyPresent: writesHistory
     )
   }
 
@@ -205,7 +226,8 @@ extension AccountSettingsDocument {
       paceAlerts: alerts.paceAlerts,
       thresholds: alerts.thresholds,
       budgetAmountUSD: budget.amountUSD,
-      budgetAlerts: budget.alerts
+      budgetAlerts: budget.alerts,
+      historySync: history.sync
     )
   }
 }

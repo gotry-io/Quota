@@ -1,0 +1,418 @@
+{
+  "$comment": "How a device downsamples local remaining-quota samples into uploadable buckets (`bucket`) and how several devices' buckets merge into the one series an Account read draws (`merge`). Bucket size is 900 s when the window's duration_seconds is at most 86 400, otherwise 3 600 s; bucket_start is floor(observed_at / size) × size in UTC; a bucket's value is the maximum used_percent in it for that resets_at; a bucket whose value equals the previous uploaded bucket of the same (window, resets_at) is not sent; a new resets_at is a new series. The span of a window is min(30 d, max(48 h, 4 × duration_seconds)): five-hour → 48 h, weekly → 28 d, monthly → 30 d. Points older than that span are not uploaded; a series with no duration_seconds is refused. Merge takes the maximum used_percent per (window_id, resets_at, bucket_start), oldest first. Shape is JSON only: TypeScript (`packages/quota-model`), Swift, and Rust each answer this file. See ADR 0062. The fold a surface draws is still quota-history-conformance.json.",
+  "now": "2026-09-21T12:00:00Z",
+  "short_window_bucket_seconds": 900,
+  "long_window_bucket_seconds": 3600,
+  "short_window_max_duration_seconds": 86400,
+  "span_min_seconds": 172800,
+  "span_max_seconds": 2592000,
+  "span_duration_multiple": 4,
+  "retention_days": 30,
+  "bucket": [
+    {
+      "name": "a five-hour window buckets at 900 seconds and takes the maximum inside a bucket",
+      "duration_seconds": 18000,
+      "samples": [
+        {
+          "resets_at": "2026-09-21T15:00:00Z",
+          "observed_at": "2026-09-21T10:00:01Z",
+          "used_percent": 10
+        },
+        {
+          "resets_at": "2026-09-21T15:00:00Z",
+          "observed_at": "2026-09-21T10:07:00Z",
+          "used_percent": 14.5
+        },
+        {
+          "resets_at": "2026-09-21T15:00:00Z",
+          "observed_at": "2026-09-21T10:14:59Z",
+          "used_percent": 12
+        },
+        {
+          "resets_at": "2026-09-21T15:00:00Z",
+          "observed_at": "2026-09-21T10:15:00Z",
+          "used_percent": 20
+        }
+      ],
+      "previous": [],
+      "expected": [
+        {
+          "resets_at": "2026-09-21T15:00:00Z",
+          "bucket_start": "2026-09-21T10:00:00Z",
+          "used_percent": 14.5
+        },
+        {
+          "resets_at": "2026-09-21T15:00:00Z",
+          "bucket_start": "2026-09-21T10:15:00Z",
+          "used_percent": 20
+        }
+      ]
+    },
+    {
+      "name": "a window of 86400 seconds still buckets at 900 seconds",
+      "duration_seconds": 86400,
+      "samples": [
+        {
+          "resets_at": "2026-09-22T00:00:00Z",
+          "observed_at": "2026-09-21T10:16:00Z",
+          "used_percent": 8
+        }
+      ],
+      "previous": [],
+      "expected": [
+        {
+          "resets_at": "2026-09-22T00:00:00Z",
+          "bucket_start": "2026-09-21T10:15:00Z",
+          "used_percent": 8
+        }
+      ]
+    },
+    {
+      "name": "a window longer than 86400 seconds buckets at 3600 seconds",
+      "duration_seconds": 86401,
+      "samples": [
+        {
+          "resets_at": "2026-09-28T00:00:00Z",
+          "observed_at": "2026-09-21T10:16:00Z",
+          "used_percent": 8
+        },
+        {
+          "resets_at": "2026-09-28T00:00:00Z",
+          "observed_at": "2026-09-21T10:59:59Z",
+          "used_percent": 9
+        },
+        {
+          "resets_at": "2026-09-28T00:00:00Z",
+          "observed_at": "2026-09-21T11:00:00Z",
+          "used_percent": 11
+        }
+      ],
+      "previous": [],
+      "expected": [
+        {
+          "resets_at": "2026-09-28T00:00:00Z",
+          "bucket_start": "2026-09-21T10:00:00Z",
+          "used_percent": 9
+        },
+        {
+          "resets_at": "2026-09-28T00:00:00Z",
+          "bucket_start": "2026-09-21T11:00:00Z",
+          "used_percent": 11
+        }
+      ]
+    },
+    {
+      "name": "a new resets_at is a new series and does not skip against the previous window",
+      "duration_seconds": 18000,
+      "samples": [
+        {
+          "resets_at": "2026-09-21T15:00:00Z",
+          "observed_at": "2026-09-21T14:00:00Z",
+          "used_percent": 40
+        },
+        {
+          "resets_at": "2026-09-21T20:00:00Z",
+          "observed_at": "2026-09-21T15:00:00Z",
+          "used_percent": 40
+        }
+      ],
+      "previous": [],
+      "expected": [
+        {
+          "resets_at": "2026-09-21T15:00:00Z",
+          "bucket_start": "2026-09-21T14:00:00Z",
+          "used_percent": 40
+        },
+        {
+          "resets_at": "2026-09-21T20:00:00Z",
+          "bucket_start": "2026-09-21T15:00:00Z",
+          "used_percent": 40
+        }
+      ]
+    },
+    {
+      "name": "a bucket whose value equals the previous uploaded bucket of the same resets_at is not sent",
+      "duration_seconds": 18000,
+      "samples": [
+        {
+          "resets_at": "2026-09-21T15:00:00Z",
+          "observed_at": "2026-09-21T10:00:00Z",
+          "used_percent": 40
+        },
+        {
+          "resets_at": "2026-09-21T15:00:00Z",
+          "observed_at": "2026-09-21T10:16:00Z",
+          "used_percent": 40
+        },
+        {
+          "resets_at": "2026-09-21T15:00:00Z",
+          "observed_at": "2026-09-21T10:31:00Z",
+          "used_percent": 50
+        }
+      ],
+      "previous": [],
+      "expected": [
+        {
+          "resets_at": "2026-09-21T15:00:00Z",
+          "bucket_start": "2026-09-21T10:00:00Z",
+          "used_percent": 40
+        },
+        {
+          "resets_at": "2026-09-21T15:00:00Z",
+          "bucket_start": "2026-09-21T10:30:00Z",
+          "used_percent": 50
+        }
+      ]
+    },
+    {
+      "name": "an unchanged value against a previously uploaded bucket of the same resets_at is not sent",
+      "duration_seconds": 18000,
+      "samples": [
+        {
+          "resets_at": "2026-09-21T15:00:00Z",
+          "observed_at": "2026-09-21T10:16:00Z",
+          "used_percent": 42.5
+        },
+        {
+          "resets_at": "2026-09-21T15:00:00Z",
+          "observed_at": "2026-09-21T10:31:00Z",
+          "used_percent": 48
+        }
+      ],
+      "previous": [
+        {
+          "resets_at": "2026-09-21T15:00:00Z",
+          "bucket_start": "2026-09-21T10:00:00Z",
+          "used_percent": 42.5
+        }
+      ],
+      "expected": [
+        {
+          "resets_at": "2026-09-21T15:00:00Z",
+          "bucket_start": "2026-09-21T10:30:00Z",
+          "used_percent": 48
+        }
+      ]
+    },
+    {
+      "name": "bucket_start is aligned to the window's size in UTC",
+      "duration_seconds": 18000,
+      "samples": [
+        {
+          "resets_at": "2026-09-21T15:00:00Z",
+          "observed_at": "2026-09-21T10:14:59.999Z",
+          "used_percent": 3
+        }
+      ],
+      "previous": [],
+      "expected": [
+        {
+          "resets_at": "2026-09-21T15:00:00Z",
+          "bucket_start": "2026-09-21T10:00:00Z",
+          "used_percent": 3
+        }
+      ]
+    },
+    {
+      "name": "a five-hour window does not upload a 3-day-old sample",
+      "now": "2026-09-21T10:00:00Z",
+      "duration_seconds": 18000,
+      "samples": [
+        {
+          "resets_at": "2026-09-21T15:00:00Z",
+          "observed_at": "2026-09-18T10:00:00Z",
+          "used_percent": 40
+        }
+      ],
+      "previous": [],
+      "expected": []
+    },
+    {
+      "name": "a weekly window does upload a 3-day-old sample",
+      "now": "2026-09-21T10:00:00Z",
+      "duration_seconds": 604800,
+      "samples": [
+        {
+          "resets_at": "2026-09-28T00:00:00Z",
+          "observed_at": "2026-09-18T10:00:00Z",
+          "used_percent": 40
+        }
+      ],
+      "previous": [],
+      "expected": [
+        {
+          "resets_at": "2026-09-28T00:00:00Z",
+          "bucket_start": "2026-09-18T10:00:00Z",
+          "used_percent": 40
+        }
+      ]
+    },
+    {
+      "name": "a sample exactly at the span is uploaded and one older is not",
+      "now": "2026-09-21T10:00:00Z",
+      "duration_seconds": 18000,
+      "samples": [
+        {
+          "resets_at": "2026-09-21T15:00:00Z",
+          "observed_at": "2026-09-19T10:00:00Z",
+          "used_percent": 10
+        },
+        {
+          "resets_at": "2026-09-21T15:00:00Z",
+          "observed_at": "2026-09-19T09:59:59Z",
+          "used_percent": 9
+        }
+      ],
+      "previous": [],
+      "expected": [
+        {
+          "resets_at": "2026-09-21T15:00:00Z",
+          "bucket_start": "2026-09-19T10:00:00Z",
+          "used_percent": 10
+        }
+      ]
+    },
+    {
+      "name": "a series without duration_seconds is refused",
+      "now": "2026-09-21T10:00:00Z",
+      "samples": [
+        {
+          "resets_at": "2026-09-21T15:00:00Z",
+          "observed_at": "2026-09-21T10:00:00Z",
+          "used_percent": 10
+        }
+      ],
+      "previous": [],
+      "expected": {
+        "refused": true
+      }
+    }
+  ],
+  "merge": [
+    {
+      "name": "two devices keep the higher used_percent at the same bucket",
+      "devices": [
+        [
+          {
+            "window_id": "five_hour",
+            "resets_at": "2026-09-21T15:00:00Z",
+            "bucket_start": "2026-09-21T10:00:00Z",
+            "used_percent": 40
+          },
+          {
+            "window_id": "five_hour",
+            "resets_at": "2026-09-21T15:00:00Z",
+            "bucket_start": "2026-09-21T10:15:00Z",
+            "used_percent": 44
+          }
+        ],
+        [
+          {
+            "window_id": "five_hour",
+            "resets_at": "2026-09-21T15:00:00Z",
+            "bucket_start": "2026-09-21T10:00:00Z",
+            "used_percent": 42.5
+          }
+        ]
+      ],
+      "expected": [
+        {
+          "window_id": "five_hour",
+          "resets_at": "2026-09-21T15:00:00Z",
+          "bucket_start": "2026-09-21T10:00:00Z",
+          "used_percent": 42.5
+        },
+        {
+          "window_id": "five_hour",
+          "resets_at": "2026-09-21T15:00:00Z",
+          "bucket_start": "2026-09-21T10:15:00Z",
+          "used_percent": 44
+        }
+      ]
+    },
+    {
+      "name": "disjoint buckets union, oldest first, and a second window stays apart",
+      "devices": [
+        [
+          {
+            "window_id": "five_hour",
+            "resets_at": "2026-09-21T15:00:00Z",
+            "bucket_start": "2026-09-21T10:15:00Z",
+            "used_percent": 20
+          },
+          {
+            "window_id": "weekly",
+            "resets_at": "2026-09-28T00:00:00Z",
+            "bucket_start": "2026-09-21T10:00:00Z",
+            "used_percent": 7
+          }
+        ],
+        [
+          {
+            "window_id": "five_hour",
+            "resets_at": "2026-09-21T15:00:00Z",
+            "bucket_start": "2026-09-21T10:00:00Z",
+            "used_percent": 10
+          }
+        ]
+      ],
+      "expected": [
+        {
+          "window_id": "five_hour",
+          "resets_at": "2026-09-21T15:00:00Z",
+          "bucket_start": "2026-09-21T10:00:00Z",
+          "used_percent": 10
+        },
+        {
+          "window_id": "five_hour",
+          "resets_at": "2026-09-21T15:00:00Z",
+          "bucket_start": "2026-09-21T10:15:00Z",
+          "used_percent": 20
+        },
+        {
+          "window_id": "weekly",
+          "resets_at": "2026-09-28T00:00:00Z",
+          "bucket_start": "2026-09-21T10:00:00Z",
+          "used_percent": 7
+        }
+      ]
+    },
+    {
+      "name": "three devices merge by maximum at each bucket",
+      "devices": [
+        [
+          {
+            "window_id": "five_hour",
+            "resets_at": "2026-09-21T15:00:00Z",
+            "bucket_start": "2026-09-21T10:00:00Z",
+            "used_percent": 10
+          }
+        ],
+        [
+          {
+            "window_id": "five_hour",
+            "resets_at": "2026-09-21T15:00:00Z",
+            "bucket_start": "2026-09-21T10:00:00Z",
+            "used_percent": 30
+          }
+        ],
+        [
+          {
+            "window_id": "five_hour",
+            "resets_at": "2026-09-21T15:00:00Z",
+            "bucket_start": "2026-09-21T10:00:00Z",
+            "used_percent": 21
+          }
+        ]
+      ],
+      "expected": [
+        {
+          "window_id": "five_hour",
+          "resets_at": "2026-09-21T15:00:00Z",
+          "bucket_start": "2026-09-21T10:00:00Z",
+          "used_percent": 30
+        }
+      ]
+    }
+  ]
+}

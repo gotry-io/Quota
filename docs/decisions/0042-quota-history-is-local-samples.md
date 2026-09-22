@@ -1,8 +1,13 @@
 # ADR 0042: Quota history is local samples
 
-- Status: Accepted
+- Status: Partially superseded
 - Date: 2026-09-07
+- Superseded by: 0062
 - Amended: 2026-09-19
+- Amended: 2026-09-21 by [ADR 0062](0062-quota-history-may-follow-the-account.md): a sample is
+  still one reading of one window, kept by the device that took it, but it may leave when the
+  Account's history switch is on. The local fold, the selector, and thirty-day retention on the
+  device are unchanged.
 - Extends [ADR 0035](0035-quota-pace-is-derived-from-the-reading.md), and follows
   [ADR 0017](0017-derived-observation-freshness.md),
   [ADR 0021](0021-identity-store-and-disposable-cache.md), and
@@ -21,7 +26,9 @@ The device already takes those readings. What it did not do was remember them.
 
 ## Decision
 
-**A sample is one reading of one window, kept by the device that took it, and it never leaves.**
+**A sample is one reading of one window, kept by the device that took it.** It stays on that
+device by default. It may follow the Account when the Account's history switch is on
+([ADR 0062](0062-quota-history-may-follow-the-account.md)).
 
 QuotaBar's service writes one row per window per collection into `cache.sqlite`'s `quota_samples`
 (`subscription_key`, `provider`, `window_id`, `resets_at`, `observed_at`, `used_percent`,
@@ -30,12 +37,14 @@ QuotaBar's service writes one row per window per collection into `cache.sqlite`'
 (`SubscriptionSelector.make` / `QuotaOverviewIdentity::selector`): the first 12 lowercase hex
 characters of SHA-256 of `provider|fingerprint|scope|source_id`. It never leaves the device.
 Quota iOS keeps the same journal as a file in its own Application Support container, beside the
-last local collection. Neither is uploaded: no `UsageRow`, no quota envelope, and no managed
-contract names a sample, and Relay gains no route.
+last local collection. The local journal is not a Usage row and not a quota envelope. Relay accepts downsampled
+buckets only while the Account switch is on
+([ADR 0062](0062-quota-history-may-follow-the-account.md)).
 A projection a producer stamped is a projection its readers cannot check
 ([ADR 0035](0035-quota-pace-is-derived-from-the-reading.md)); a *history* a producer stamped is
-worse, because it also asserts what some other device saw. The website and the Account show no
-history at all — the cloud daily bucket stays a separate, later decision.
+worse, because it also asserts what some other device saw. The website draws no history this
+cycle. With the Account switch on, Apple clients may draw the merged Account series
+([ADR 0062](0062-quota-history-may-follow-the-account.md)).
 
 **A refresh that reads the same numbers twice writes one row.** Within one `resets_at`, a reading
 identical to the last stored one adds nothing to the curve and is dropped.
@@ -87,12 +96,12 @@ a **Today** section.
 
 - A device that has just been installed, or whose cache was rebuilt, shows meters and pace and no
   line until it has collected twice. That is the honest answer: it has one reading.
-- Two devices reading one subscription draw different lines, because each drew what it saw. The
-  Overview row still names one reading; the history belongs to the source, not to the account.
+- Two devices reading one subscription draw different lines until the Account switch is on, because
+  each drew what it saw. The Overview row still names one reading; with the switch off, the
+  history belongs to the source, not to the account.
 - Adding a case to the conformance fixture is how the fold changes, and a runtime that cannot
   answer the new case fails in its own test run.
-- The upload path, the wire schemas, and Relay are untouched, so this decision cannot regress what
-  leaves the machine.
+- Upload is a later, optional path: [ADR 0062](0062-quota-history-may-follow-the-account.md).
 - QuotaBar's Dashboard reads this history through the private `quota_history { since }` IPC
   operation; the state push keeps the current-window slice Overview already draws
   ([ADR 0051](0051-the-panel-glances-and-the-windows-explain.md)).
@@ -105,3 +114,10 @@ unequal timestamps mixed into one curve. Identity is the subscription selector b
 already compute; it stays local. Old `cache.sqlite` rows cannot be attributed and are dropped
 on the disposable-store migration (ADR 0021). A Quota iOS journal written without a
 subscription key (0.0.4) is discarded on load for the same reason.
+
+## Amendment 2026-09-21
+
+The central "never leaves" sentence is superseded by
+[ADR 0062](0062-quota-history-may-follow-the-account.md). The local sample, the selector, the
+fold fixture, and thirty-day retention on the device remain. What changed is that an Account
+may opt into a downsampled upload of global-scope buckets, merged on the read.

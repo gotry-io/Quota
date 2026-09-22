@@ -1,9 +1,19 @@
 import {
+  QUOTA_HISTORY_MAX_SPAN_SECONDS,
+  QUOTA_HISTORY_MIN_SPAN_SECONDS,
+  QUOTA_HISTORY_SPAN_DURATION_MULTIPLE,
+  quotaHistoryExpiresAt,
+  quotaHistorySpanSeconds,
+  quotaHistoryUploadHasOutOfRangePoint,
+} from "@gotry-io/quota-model";
+import {
   ACCOUNT_SETTINGS_UNSET_UPDATED_AT,
   AccountSettingsSchema,
+  canonicalRfc3339Utc,
   DEFAULT_ACCOUNT_SETTINGS,
   IOS_OAUTH_CLIENT_ID,
   type ProviderId,
+  type QuotaHistoryUpload,
   QuotaSnapshotSchema,
 } from "@gotry-io/quota-protocol";
 import type {
@@ -40,6 +50,9 @@ import type {
   PublicProfileRecord,
   PublicProfileWriteInput,
   PublicProfileWriteResult,
+  QuotaHistoryReadRow,
+  QuotaHistoryStamp,
+  QuotaHistoryWriteResult,
   QuotaSnapshotSubmission,
   RateLimitInput,
   RateLimitResult,
@@ -104,6 +117,21 @@ function snapshotWriteIsAccepted(
     stored.status === "available" &&
     incoming.status !== "available"
   );
+}
+
+const quotaHistorySpanSql = `MIN(${QUOTA_HISTORY_MAX_SPAN_SECONDS}, MAX(${QUOTA_HISTORY_MIN_SPAN_SECONDS}, ${QUOTA_HISTORY_SPAN_DURATION_MULTIPLE} * duration_seconds))`;
+
+/** RFC3339 `T`/`Z` is not a datetime SQLite's `strftime('%s')` will parse. */
+function sqliteEpochSql(value: string): string {
+  return `CAST(strftime('%s', replace(replace(${value}, 'T', ' '), 'Z', '')) AS INTEGER)`;
+}
+
+function quotaHistoryInSpanSql(column: string, nowPlaceholder: string): string {
+  return `${sqliteEpochSql(column)} >= ${sqliteEpochSql(nowPlaceholder)} - ${quotaHistorySpanSql}`;
+}
+
+function quotaHistoryExpiresAtSql(bucketStartColumn: string, spanPlaceholder: string): string {
+  return `strftime('%Y-%m-%dT%H:%M:%SZ', ${sqliteEpochSql(bucketStartColumn)} + ${spanPlaceholder}, 'unixepoch')`;
 }
 
 export class D1AccountState implements AccountState {
@@ -196,6 +224,16 @@ export class D1AccountState implements AccountState {
            )`,
         )
         .bind(input.usage_fold_before, input.limit),
+      // Own 5 000-row batch: a row expires when `expires_at` is before now.
+      this.database
+        .prepare(
+          `DELETE FROM quota_history WHERE rowid IN (
+             SELECT rowid FROM quota_history
+             WHERE expires_at < ?1
+             ORDER BY expires_at ASC LIMIT 5000
+           )`,
+        )
+        .bind(input.quota_history_now),
     ]);
   }
 
@@ -1159,9 +1197,9 @@ export class D1AccountState implements AccountState {
     input: AccountSettingsWriteInput,
   ): Promise<AccountSettingsWriteResult> {
     const settingsJson = JSON.stringify(input.settings);
-    const row =
+    const write =
       input.expected_revision === 0
-        ? await this.database
+        ? this.database
             .prepare(
               `INSERT INTO account_settings (
                  account_id, revision, settings_json, created_at, updated_at
@@ -1171,22 +1209,238 @@ export class D1AccountState implements AccountState {
                RETURNING account_id, revision, settings_json, created_at, updated_at`,
             )
             .bind(input.account_id, settingsJson, input.written_at)
-            .first<AccountSettingsRow>()
-        : await this.database
+        : this.database
             .prepare(
               `UPDATE account_settings
                SET revision = revision + 1, settings_json = ?2, updated_at = ?3
                WHERE account_id = ?1 AND revision = ?4
                RETURNING account_id, revision, settings_json, created_at, updated_at`,
             )
-            .bind(input.account_id, settingsJson, input.written_at, input.expected_revision)
-            .first<AccountSettingsRow>();
-    if (row) return { outcome: "written", record: accountSettingsRecord(row) };
+            .bind(input.account_id, settingsJson, input.written_at, input.expected_revision);
+    const turnOff = input.delete_quota_history === true;
+    const statements = turnOff
+      ? [
+          write,
+          this.database
+            .prepare(
+              `DELETE FROM quota_history
+               WHERE account_id = ?1 AND changes() > 0`,
+            )
+            .bind(input.account_id),
+        ]
+      : [write];
+    const results = await this.database.batch<AccountSettingsRow>(statements);
+    const row = resultRow<AccountSettingsRow>(results[0]);
+    if (row) {
+      return { outcome: "written", record: accountSettingsRecord(row) };
+    }
     const current = await this.getAccountSettings(input.account_id);
     return {
       outcome: "conflict",
       current: current ?? synthesizedAccountSettings(input.account_id),
     };
+  }
+
+  async isQuotaHistorySyncOn(accountId: string): Promise<boolean> {
+    const sync = await this.database
+      .prepare(
+        `SELECT json_extract(settings_json, '$.history.sync') AS sync
+         FROM account_settings WHERE account_id = ?1`,
+      )
+      .bind(accountId)
+      .first<number | boolean | null>("sync");
+    return sync === 1 || sync === true;
+  }
+
+  async recordQuotaHistory(
+    principal: DeviceWriterPrincipal,
+    upload: QuotaHistoryUpload,
+    receivedAt: string,
+    rowLimit: number,
+  ): Promise<QuotaHistoryWriteResult> {
+    if (!(await this.isQuotaHistorySyncOn(principal.account_id))) {
+      return { outcome: "history_sync_off" };
+    }
+    const control = await this.database
+      .prepare(
+        `SELECT generation
+         FROM devices
+         WHERE id = ?1 AND account_id = ?2 AND signed_out_at IS NULL AND deleted_at IS NULL`,
+      )
+      .bind(principal.device_id, principal.account_id)
+      .first<{ generation: number }>();
+    if (
+      !control ||
+      control.generation !== principal.device_generation ||
+      upload.generation !== principal.device_generation
+    ) {
+      return { outcome: "stale_device" };
+    }
+    if (quotaHistoryUploadHasOutOfRangePoint(upload, receivedAt)) {
+      return { outcome: "invalid_request" };
+    }
+    const insert = this.database.prepare(
+      `INSERT INTO quota_history (
+         device_id, account_id, provider, fingerprint, window_id, resets_at, bucket_start,
+         used_percent, duration_seconds, updated_at, expires_at
+       )
+       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11
+       WHERE EXISTS (
+         SELECT 1 FROM devices
+         WHERE id = ?1 AND account_id = ?2 AND generation = ?12
+           AND signed_out_at IS NULL AND deleted_at IS NULL
+       )
+       AND EXISTS (
+         SELECT 1 FROM account_settings
+         WHERE account_id = ?2 AND json_extract(settings_json, '$.history.sync') = 1
+       )
+       ON CONFLICT(device_id, provider, fingerprint, window_id, resets_at, bucket_start)
+       DO UPDATE SET
+         used_percent = MAX(quota_history.used_percent, excluded.used_percent),
+         duration_seconds = excluded.duration_seconds,
+         expires_at = excluded.expires_at,
+         updated_at = CASE
+           WHEN excluded.used_percent > quota_history.used_percent
+             OR quota_history.duration_seconds != excluded.duration_seconds
+             OR quota_history.expires_at != excluded.expires_at
+           THEN excluded.updated_at
+           ELSE quota_history.updated_at
+         END`,
+    );
+    const rewriteDuration = this.database.prepare(
+      `UPDATE quota_history
+       SET duration_seconds = ?5,
+           expires_at = ${quotaHistoryExpiresAtSql("bucket_start", "?6")},
+           updated_at = ?7
+       WHERE account_id = ?1
+         AND provider = ?2
+         AND fingerprint = ?3
+         AND window_id = ?4
+         AND duration_seconds != ?5`,
+    );
+    const statements = [
+      this.database.prepare(
+        `CREATE TEMP TABLE IF NOT EXISTS quota_history_ceiling (
+           n INTEGER NOT NULL,
+           max_n INTEGER NOT NULL,
+           CONSTRAINT quota_history_full CHECK (n < max_n)
+         )`,
+      ),
+      this.database.prepare("DELETE FROM quota_history_ceiling"),
+      this.database
+        .prepare(
+          `INSERT INTO quota_history_ceiling (n, max_n)
+           SELECT COUNT(*), ?2 FROM quota_history WHERE account_id = ?1`,
+        )
+        .bind(principal.account_id, rowLimit),
+      ...upload.series.map((series) =>
+        rewriteDuration.bind(
+          principal.account_id,
+          series.provider,
+          series.fingerprint,
+          series.window_id,
+          series.duration_seconds,
+          quotaHistorySpanSeconds(series.duration_seconds),
+          receivedAt,
+        ),
+      ),
+      ...upload.series.flatMap((series) =>
+        series.points.map((point) => {
+          const bucketStart = canonicalRfc3339Utc(point.bucket_start);
+          return insert.bind(
+            principal.device_id,
+            principal.account_id,
+            series.provider,
+            series.fingerprint,
+            series.window_id,
+            canonicalRfc3339Utc(point.resets_at),
+            bucketStart,
+            point.used_percent,
+            series.duration_seconds,
+            receivedAt,
+            quotaHistoryExpiresAt(bucketStart, series.duration_seconds),
+            principal.device_generation,
+          );
+        }),
+      ),
+    ];
+    try {
+      await this.database.batch(statements);
+    } catch (error) {
+      if (isQuotaHistoryFull(error)) return { outcome: "quota_history_full" };
+      throw error;
+    }
+    if (!(await this.isQuotaHistorySyncOn(principal.account_id))) {
+      return { outcome: "history_sync_off" };
+    }
+    const wanted = new Set(
+      upload.series.map(
+        (series) => `${series.provider}\0${series.fingerprint}\0${series.window_id}`,
+      ),
+    );
+    const watermarks = await this.database
+      .prepare(
+        `SELECT provider, fingerprint, window_id, MAX(bucket_start) AS bucket_start
+         FROM quota_history
+         WHERE device_id = ?1 AND account_id = ?2
+         GROUP BY provider, fingerprint, window_id`,
+      )
+      .bind(principal.device_id, principal.account_id)
+      .all<{
+        provider: ProviderId;
+        fingerprint: string;
+        window_id: string;
+        bucket_start: string;
+      }>();
+    return {
+      outcome: "written",
+      series: watermarks.results.filter((row) =>
+        wanted.has(`${row.provider}\0${row.fingerprint}\0${row.window_id}`),
+      ),
+    };
+  }
+
+  async quotaHistoryStamp(
+    accountId: string,
+    provider: string,
+    fingerprint: string,
+    since: string,
+    now: string,
+  ): Promise<QuotaHistoryStamp> {
+    const row = await this.database
+      .prepare(
+        `SELECT COUNT(*) AS count, MAX(updated_at) AS updated_at
+         FROM quota_history
+         WHERE account_id = ?1 AND provider = ?2 AND fingerprint = ?3
+           AND bucket_start >= ?4
+           AND ${quotaHistoryInSpanSql("bucket_start", "?5")}`,
+      )
+      .bind(accountId, provider, fingerprint, since, now)
+      .first<{ count: number; updated_at: string | null }>();
+    return { count: row?.count ?? 0, updated_at: row?.updated_at ?? null };
+  }
+
+  async readQuotaHistory(
+    accountId: string,
+    provider: string,
+    fingerprint: string,
+    since: string,
+    now: string,
+  ): Promise<QuotaHistoryReadRow[]> {
+    const rows = await this.database
+      .prepare(
+        `SELECT window_id, MAX(duration_seconds) AS duration_seconds, resets_at, bucket_start,
+                MAX(used_percent) AS used_percent
+         FROM quota_history
+         WHERE account_id = ?1 AND provider = ?2 AND fingerprint = ?3
+           AND bucket_start >= ?4
+           AND ${quotaHistoryInSpanSql("bucket_start", "?5")}
+         GROUP BY window_id, resets_at, bucket_start
+         ORDER BY window_id ASC, resets_at ASC, bucket_start ASC`,
+      )
+      .bind(accountId, provider, fingerprint, since, now)
+      .all<QuotaHistoryReadRow>();
+    return rows.results;
   }
 
   async findEnabledPublicProfile(handle: string): Promise<PublicProfileRecord | null> {
@@ -1331,6 +1585,13 @@ export class D1AccountState implements AccountState {
       this.database
         .prepare(`DELETE FROM login_grants WHERE device_id = ?2 AND account_id = ?1`)
         .bind(accountId, deviceId),
+      this.database
+        .prepare(
+          `DELETE FROM quota_history WHERE device_id = ?2 AND EXISTS (
+             SELECT 1 FROM devices WHERE id = ?2 AND account_id = ?1
+           )`,
+        )
+        .bind(accountId, deviceId),
     ]);
     return resultRow<DeleteDeviceResult>(results[0]);
   }
@@ -1366,6 +1627,7 @@ export class D1AccountState implements AccountState {
       this.database.prepare("DELETE FROM account_identities WHERE account_id = ?1").bind(accountId),
       this.database.prepare("DELETE FROM public_profiles WHERE account_id = ?1").bind(accountId),
       this.database.prepare("DELETE FROM account_settings WHERE account_id = ?1").bind(accountId),
+      this.database.prepare("DELETE FROM quota_history WHERE account_id = ?1").bind(accountId),
       this.database.prepare("DELETE FROM devices WHERE account_id = ?1").bind(accountId),
       this.database.prepare("DELETE FROM accounts WHERE id = ?1 RETURNING id").bind(accountId),
     ]);
@@ -1656,6 +1918,14 @@ function isUniqueHandleViolation(error: unknown): boolean {
     error instanceof Error &&
     error.message.includes("UNIQUE constraint failed") &&
     error.message.includes("public_profiles")
+  );
+}
+
+function isQuotaHistoryFull(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.includes("CHECK constraint failed") &&
+    error.message.includes("quota_history_full")
   );
 }
 

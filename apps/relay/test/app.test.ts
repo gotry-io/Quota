@@ -880,6 +880,7 @@ describe("managed Relay on SQLite", () => {
       "email_challenges",
       "login_grants",
       "public_profiles",
+      "quota_history",
       "quota_snapshots",
       "rate_limit_counters",
       "sessions",
