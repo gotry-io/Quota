@@ -330,7 +330,7 @@ final class QuotaHistoryCoordinator {
         now: now,
         lastUploaded: lastUploaded
       )
-      guard !buckets.isEmpty else { continue }
+      guard let buckets, !buckets.isEmpty else { continue }
       series.append(
         QuotaHistoryUploadRequest.Series(
           provider: snapshot.provider,

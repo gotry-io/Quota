@@ -86,7 +86,7 @@ public struct QuotaHistoryUploadRequest: Codable, Equatable, Sendable {
     public let fingerprint: String
     public let windowId: String
     public let durationSeconds: Int
-    public let points: [Point]
+    public var points: [Point]
 
     public init(
       provider: ProviderID,
