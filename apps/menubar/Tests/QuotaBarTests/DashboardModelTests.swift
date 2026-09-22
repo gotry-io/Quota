@@ -282,6 +282,9 @@
           isBalanceOnly: window.isBalanceOnly
         )
       )
+      #expect(codex.historyCaption == "This Mac")
+      #expect(codex.historySource == .thisDevice)
+      #expect(!codex.drawsAccountHistory)
       #expect(codex.remainingHistories[window.id] == folded)
       #expect(!folded.observedPoints.isEmpty)
       #expect(!codex.sources.isEmpty)
@@ -344,6 +347,8 @@
       let dashboard = DashboardModel(model: model, defaults: defaults.store)
       let subscription = try #require(dashboard.subscriptions(now: now).first)
       #expect(!subscription.isLocalReading)
+      #expect(subscription.historyCaption == nil)
+      #expect(subscription.historySource == nil)
       #expect(subscription.remainingHistories.isEmpty)
       #expect(subscription.sources.map(\.displayName) == ["Studio Mac"])
       #expect(subscription.rowAccessibilityLabel.contains(ProviderID.codex.displayName))
@@ -443,6 +448,218 @@
           == [80, 20]
       )
     }
+
+    @Test
+    func accountHistoryReplacesTheLocalSeriesWhileTheSwitchIsOn() async throws {
+      let defaults = dashboardDefaults()
+      defer { defaults.tearDown() }
+      let now = Date(timeIntervalSince1970: 1_788_100_000)
+      let reset = now.addingTimeInterval(2 * 3_600)
+      let item = historySubscription(fingerprint: "account_hist", used: 20, now: now, reset: reset)
+      let key = item.identity.subscriptionSelector
+      let local = historyPayload(key: key, reset: reset, observedAt: now, used: 20)
+      let account = historyPayload(key: key, reset: reset, observedAt: now, used: 70)
+      let script = QuotaHistoryAccountScript([.success(account)])
+      let state = signedInSettingsState(
+        settings: LocalServiceAccountSettingsState(
+          document: accountSettingsDocument(revision: 1),
+          revision: 1
+        ),
+        overview: [item]
+      )
+      let model = MenuBarViewModel(
+        client: StubLocalService(
+          state: state, quotaHistoryValue: local, accountQuotaHistory: script)
+      )
+      model.apply(state)
+      model.usage.loadQuotaHistory()
+      let dashboard = DashboardModel(model: model, defaults: defaults.store)
+      try await waitUntil {
+        dashboard.subscriptions(now: now).first?.remainingHistories["five_hour"] != nil
+      }
+      let before = try #require(dashboard.subscriptions(now: now).first)
+      #expect(before.historySource == .thisDevice)
+      let localFold = try #require(foldedHistory(samples: local, key: key, item: item, now: now))
+      #expect(before.remainingHistories["five_hour"] == localFold)
+
+      model.setHistorySync(true)
+      let epoch = model.usage.accountHistoryEpoch
+      dashboard.loadAccountHistory(now: now)
+      try await waitUntil { model.usage.accountHistoryEpoch > epoch }
+      let after = try #require(dashboard.subscriptions(now: now).first)
+      #expect(after.historyCaption == "From your devices")
+      #expect(after.historySource == .yourDevices)
+      #expect(after.drawsAccountHistory)
+      let buckets = (account.samplesBySubscription[key]?["five_hour"] ?? []).map { sample in
+        QuotaHistorySync.Bucket(
+          resetsAt: sample.resetsAt, bucketStart: sample.observedAt, usedPercent: sample.usedPercent)
+      }
+      let accountFold = try #require(
+        QuotaRemainingHistory.fold(
+          window: QuotaHistoryReading(resetsAt: reset, cadenceSeconds: 18_000),
+          samples: QuotaHistorySync.samples(from: buckets),
+          usedPercent: 20,
+          now: now
+        )
+      )
+      #expect(after.remainingHistories["five_hour"] == accountFold)
+      #expect(after.remainingHistories["five_hour"] != localFold)
+    }
+
+    @Test
+    func accountSeriesAppendsTheCurrentReadingAtNow() async throws {
+      let defaults = dashboardDefaults()
+      defer { defaults.tearDown() }
+      let now = Date(timeIntervalSince1970: 1_788_100_000)
+      let reset = now.addingTimeInterval(2 * 3_600)
+      let lastChange = now.addingTimeInterval(-2 * 3_600)
+      let item = historySubscription(fingerprint: "account_hist", used: 80, now: now, reset: reset)
+      let key = item.identity.subscriptionSelector
+      let local = historyPayload(key: key, reset: reset, observedAt: now, used: 80)
+      let account = historyPayload(key: key, reset: reset, observedAt: lastChange, used: 40)
+      let script = QuotaHistoryAccountScript([.success(account)])
+      let state = signedInSettingsState(
+        settings: LocalServiceAccountSettingsState(
+          document: accountSettingsDocument(revision: 1),
+          revision: 1
+        ),
+        overview: [item]
+      )
+      let model = MenuBarViewModel(
+        client: StubLocalService(
+          state: state, quotaHistoryValue: local, accountQuotaHistory: script)
+      )
+      model.apply(state)
+      model.setHistorySync(true)
+      let dashboard = DashboardModel(model: model, defaults: defaults.store)
+      let epoch = model.usage.accountHistoryEpoch
+      dashboard.loadAccountHistory(now: now)
+      try await waitUntil { model.usage.accountHistoryEpoch > epoch }
+      let history = try #require(
+        dashboard.subscriptions(now: now).first?.remainingHistories["five_hour"]
+      )
+      let last = try #require(history.observedPoints.last)
+      #expect(last.date == now)
+      #expect(last.remainingPercent == RemainingQuotaFormat.remainingPercent(usedPercent: 80))
+      #expect(history.observedPoints.contains { $0.date == lastChange })
+    }
+
+    @Test
+    func aFailedAccountReadWithNothingCachedKeepsThisMac() async throws {
+      let defaults = dashboardDefaults()
+      defer { defaults.tearDown() }
+      let now = Date(timeIntervalSince1970: 1_788_100_000)
+      let reset = now.addingTimeInterval(2 * 3_600)
+      let item = historySubscription(fingerprint: "account_hist", used: 20, now: now, reset: reset)
+      let key = item.identity.subscriptionSelector
+      let local = historyPayload(key: key, reset: reset, observedAt: now, used: 20)
+      let script = QuotaHistoryAccountScript([
+        .failure(LocalServiceClientError.connectionClosed)
+      ])
+      let state = signedInSettingsState(
+        settings: LocalServiceAccountSettingsState(
+          document: accountSettingsDocument(revision: 1),
+          revision: 1
+        ),
+        overview: [item]
+      )
+      let model = MenuBarViewModel(
+        client: StubLocalService(
+          state: state, quotaHistoryValue: local, accountQuotaHistory: script)
+      )
+      model.apply(state)
+      model.usage.loadQuotaHistory()
+      model.setHistorySync(true)
+      let dashboard = DashboardModel(model: model, defaults: defaults.store)
+      try await waitUntil { model.usage.quotaHistorySamples != nil }
+      let epoch = model.usage.accountHistoryEpoch
+      dashboard.loadAccountHistory(now: now)
+      try await waitUntil { model.usage.accountHistoryEpoch > epoch }
+      let subscription = try #require(dashboard.subscriptions(now: now).first)
+      #expect(subscription.historyCaption == "This Mac")
+      #expect(subscription.historySource == .thisDevice)
+      #expect(!subscription.drawsAccountHistory)
+      #expect(
+        subscription.remainingHistories["five_hour"]
+          == foldedHistory(samples: local, key: key, item: item, now: now)
+      )
+    }
+
+    @Test
+    func aFailedAccountReadKeepsTheCachedAccountSeries() async throws {
+      let defaults = dashboardDefaults()
+      defer { defaults.tearDown() }
+      let now = Date(timeIntervalSince1970: 1_788_100_000)
+      let reset = now.addingTimeInterval(2 * 3_600)
+      let item = historySubscription(fingerprint: "account_hist", used: 20, now: now, reset: reset)
+      let key = item.identity.subscriptionSelector
+      let local = historyPayload(key: key, reset: reset, observedAt: now, used: 20)
+      let account = historyPayload(key: key, reset: reset, observedAt: now, used: 70)
+      let script = QuotaHistoryAccountScript([
+        .success(account),
+        .failure(LocalServiceClientError.connectionClosed),
+      ])
+      let state = signedInSettingsState(
+        settings: LocalServiceAccountSettingsState(
+          document: accountSettingsDocument(revision: 1),
+          revision: 1
+        ),
+        overview: [item]
+      )
+      let model = MenuBarViewModel(
+        client: StubLocalService(
+          state: state, quotaHistoryValue: local, accountQuotaHistory: script)
+      )
+      model.apply(state)
+      model.setHistorySync(true)
+      let dashboard = DashboardModel(model: model, defaults: defaults.store)
+      let first = model.usage.accountHistoryEpoch
+      dashboard.loadAccountHistory(now: now)
+      try await waitUntil { model.usage.accountHistoryEpoch > first }
+      #expect(dashboard.subscriptions(now: now).first?.historyCaption == "From your devices")
+      let cached = dashboard.subscriptions(now: now).first?.remainingHistories["five_hour"]
+
+      let second = model.usage.accountHistoryEpoch
+      dashboard.loadAccountHistory(now: now)
+      try await waitUntil { model.usage.accountHistoryEpoch > second }
+      let subscription = try #require(dashboard.subscriptions(now: now).first)
+      #expect(subscription.historyCaption == "From your devices")
+      #expect(subscription.remainingHistories["five_hour"] == cached)
+      #expect(subscription.drawsAccountHistory)
+    }
+
+    @Test
+    func yourDevicesRouteDrawsTheAccountCaption() throws {
+      let defaults = dashboardDefaults()
+      defer { defaults.tearDown() }
+      let referenceDate = Date(timeIntervalSince1970: 1_785_752_430)
+      let configuration = try #require(
+        VisualTestConfiguration(
+          arguments: ["QuotaBar", "--fixture", "content", "--route", "main-quota-your-devices"],
+          referenceDate: referenceDate
+        )
+      )
+      configuration.prepareEnvironment()
+      let model = configuration.makeModel()
+      let dashboard = DashboardModel(
+        model: model, defaults: defaults.store, selection: configuration.quotaSelection)
+      let codex = try #require(
+        dashboard.subscriptions(now: referenceDate).first { $0.provider == .codex }
+      )
+      #expect(codex.historyCaption == QuotaHistoryCopy.sourceCaption(
+        .yourDevices, deviceNoun: "This Mac"))
+      #expect(codex.drawsAccountHistory)
+      #expect(!(codex.remainingHistories.values.allSatisfy { $0.observedPoints.isEmpty }))
+      #expect(
+        QuotaHistorySync.samples(from: [
+          QuotaHistorySync.Bucket(
+            resetsAt: referenceDate,
+            bucketStart: referenceDate.addingTimeInterval(-60),
+            usedPercent: 12.5
+          )
+        ]).first?.observedAt == referenceDate.addingTimeInterval(-60)
+      )
+    }
   }
 
   private struct DashboardDefaultsSuite {
@@ -451,6 +668,102 @@
 
     func tearDown() {
       store.removePersistentDomain(forName: name)
+    }
+  }
+
+  private func historySubscription(
+    fingerprint: String, used: Double, now: Date, reset: Date
+  ) -> LocalServiceOverviewItem {
+    let snapshot = QuotaSnapshot(
+      provider: .codex,
+      account: QuotaAccount(
+        fingerprint: fingerprint,
+        label: fingerprint,
+        plan: "Plus",
+        fingerprintScope: .global
+      ),
+      windows: [
+        QuotaWindow(
+          id: "five_hour",
+          title: "5 Hours",
+          usedPercent: used,
+          resetsAt: reset,
+          durationSeconds: 18_000
+        )
+      ],
+      status: .available,
+      observedAt: now
+    )
+    let source = LocalServiceOverviewSource(
+      sourceID: "local",
+      kind: .local,
+      deviceID: nil,
+      displayName: "This Mac",
+      observedAt: now,
+      isStale: false,
+      snapshot: snapshot
+    )
+    return LocalServiceOverviewItem(
+      identity: LocalServiceOverviewIdentity(
+        provider: .codex,
+        fingerprint: fingerprint,
+        scope: .global,
+        sourceID: nil
+      ),
+      snapshot: snapshot,
+      sources: [source],
+      selectedSourceID: source.sourceID,
+      selectedSourceDisplayName: source.displayName,
+      automaticSourceID: source.sourceID,
+      automaticSourceDisplayName: source.displayName,
+      isStale: false
+    )
+  }
+
+  private func historyPayload(
+    key: String, reset: Date, observedAt: Date, used: Double
+  ) -> LocalServiceQuotaHistory {
+    LocalServiceQuotaHistory(
+      samplesBySubscription: [
+        key: [
+          "five_hour": [
+            QuotaSample(resetsAt: reset, observedAt: observedAt, usedPercent: used)
+          ]
+        ]
+      ],
+      utcOffsetSeconds: 0
+    )
+  }
+
+  private func foldedHistory(
+    samples: LocalServiceQuotaHistory,
+    key: String,
+    item: LocalServiceOverviewItem,
+    now: Date
+  ) -> QuotaRemainingHistory? {
+    guard let window = item.snapshot.windows.first else { return nil }
+    return QuotaRemainingHistory.fold(
+      window: QuotaHistoryReading(
+        resetsAt: window.resetsAt, cadenceSeconds: window.durationSeconds),
+      samples: samples.samplesBySubscription[key]?[window.id] ?? [],
+      usedPercent: window.usedPercent,
+      now: now
+    )
+  }
+
+  @MainActor
+  private func waitUntil(
+    _ condition: @escaping @MainActor () async -> Bool,
+    seconds: Double = 5
+  ) async throws {
+    let deadline = ContinuousClock.now + .seconds(seconds)
+    while await !condition() {
+      if ContinuousClock.now >= deadline {
+        Issue.record("timed out waiting for condition")
+        return
+      }
+      await Task.yield()
+      try await Task.sleep(for: .milliseconds(10))
     }
   }
 

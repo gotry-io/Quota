@@ -9,15 +9,15 @@ a private Rust child at `Contents/Helpers/quota-service`, and the public `quota`
 QuotaBar launches the fixed signed service path and keeps a persistent stdin/stdout NDJSON IPC v5
 connection. The helper emits `{"type":"event","event":"ready","ipc_version":5}` once it has opened
 its local state; QuotaBar sends nothing before that and shows its loading state, restarts one start
-that stays silent for a minute, and reports the service unavailable after a second. `get_state`
-carries `account_settings { document, revision }` while signed in, and `history_sync`
-`{ enabled, last_upload_at, last_error }` for the history-switch caption (that key is absent
-when signed out). A write is
-`set_account_settings { document, if_match }` and answers `written` or `conflict` with the current
-document; `history` is on that document only when the write names the switch.
-`refresh_account_settings` forces a GET. `quota_history` takes `source` (`local` by default, or
-`account` for one subscription). Seed, adopt, merge, and 412 re-apply stay in
-Swift. Requests have no
+that stays silent for a minute, and reports the service unavailable after a second. A helper that
+announces any other `ipc_version` is refused. `get_state` carries `account_settings { document,
+revision }` while signed in, and `history_sync { enabled, last_upload_at, last_error }` while signed
+in — the key is absent when signed out, not null. A write is `set_account_settings { document,
+if_match }` and answers `written` or `conflict` with the current document. The document names
+`history: { sync }` only when that write changes the switch, and omits `history` otherwise.
+`refresh_account_settings` forces a GET. `quota_history` takes `source` of `local` or `account`;
+`account` also names `provider` and `fingerprint` for one subscription, and the answer is the same
+shape as `local`. Seed, adopt, merge, and 412 re-apply stay in Swift. Requests have no
 deadline. While one is outstanding QuotaBar pings every five seconds, and a helper that misses two
 consecutive pings is terminated, killed if it will not exit, and replaced on the next request. If
 the helper cannot initialize its owner-only state, it stays on the IPC boundary and returns only a

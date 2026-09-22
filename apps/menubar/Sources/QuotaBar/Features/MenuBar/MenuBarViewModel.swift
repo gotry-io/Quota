@@ -93,6 +93,12 @@ final class MenuBarViewModel {
   private(set) var isRefreshing = false
   private(set) var isUpdatingUsageUpload = false
   private(set) var usageUploadEnabled = true
+  /// The helper's `history_sync` while signed in. Nil when signed out.
+  private(set) var quotaHistorySync: LocalServiceHistorySync?
+
+  var quotaHistorySyncStatus: String? {
+    quotaHistorySync?.statusLine()
+  }
   private(set) var isUpdatingGroupUsageByProject = false
   private(set) var groupUsageByProject = true
   private(set) var quotaRefreshIntervalSeconds = QuotaRefreshInterval.fallback.rawValue
@@ -328,6 +334,7 @@ final class MenuBarViewModel {
       self.usage.accountDidGoAway()
       self.browserConnection.accountDidGoAway()
       self.accountSettings.accountDidGoAway()
+      self.quotaHistorySync = nil
       try? self.notificationStore.clear()
       self.resetScheduler.removeAll()
     }
@@ -935,6 +942,7 @@ final class MenuBarViewModel {
     revision = state.revision
     cache = state.cache
     usageUploadEnabled = state.usageUploadEnabled
+    quotaHistorySync = state.historySync
     groupUsageByProject = state.groupUsageByProject
     quotaRefreshIntervalSeconds = state.quotaRefreshIntervalSeconds
     report = state.quota.value
@@ -1051,6 +1059,10 @@ final class MenuBarViewModel {
       persistNotificationRules { $0.enabled = false }
       resetScheduler.removeAll()
     }
+  }
+
+  func setHistorySync(_ enabled: Bool) {
+    accountSettings.noteLocalEdit(.setHistorySync(enabled))
   }
 
   func setResetReminders(_ enabled: Bool) {

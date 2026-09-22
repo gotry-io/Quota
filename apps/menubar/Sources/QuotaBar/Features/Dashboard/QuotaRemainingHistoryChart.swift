@@ -2,7 +2,7 @@ import Charts
 import QuotaPresentation
 import SwiftUI
 
-/// Labelled remaining 0–100 over calendar time for one window this Mac read itself.
+/// Labelled remaining 0–100 over calendar time for one window.
 ///
 /// Solid segments are observations; a reset starts a new segment; a dashed segment is the
 /// ADR 0035 estimate at reset, the same projection the pace headline uses. See ADR 0042.
@@ -10,6 +10,7 @@ struct QuotaRemainingHistoryChart: View {
   let history: QuotaRemainingHistory
   var tint: Color = QuotaPalette.accent
   var windowTitle: String = ""
+  var historySource: QuotaHistorySource = .thisDevice
 
   @State private var observedListOpen = false
 
@@ -157,7 +158,15 @@ struct QuotaRemainingHistoryChart: View {
 
   private var summary: String {
     var parts: [String] = []
-    if windowTitle.isEmpty {
+    if historySource == .yourDevices {
+      if windowTitle.isEmpty {
+        parts.append("Remaining history from your devices, \(history.spanDescription)")
+      } else {
+        parts.append(
+          "Remaining history from your devices for \(windowTitle), \(history.spanDescription)"
+        )
+      }
+    } else if windowTitle.isEmpty {
       parts.append("Remaining history on this Mac, \(history.spanDescription)")
     } else {
       parts.append(

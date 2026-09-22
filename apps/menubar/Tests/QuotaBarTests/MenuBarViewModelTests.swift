@@ -1016,6 +1016,19 @@ private func unavailableUsage(now: Date) -> LocalUsageReport {
   )
 }
 
+final class QuotaHistoryAccountScript: @unchecked Sendable {
+  var results: [Result<LocalServiceQuotaHistory, any Error>]
+
+  init(_ results: [Result<LocalServiceQuotaHistory, any Error>]) {
+    self.results = results
+  }
+
+  func next() throws -> LocalServiceQuotaHistory {
+    guard !results.isEmpty else { throw LocalServiceClientError.invalidMessage }
+    return try results.removeFirst().get()
+  }
+}
+
 actor AccountSettingsWriteRecord {
   private(set) var calls: [(document: AccountSettingsDocument, ifMatch: String)] = []
   var results: [Result<LocalServiceAccountSettingsWriteResult, Error>] = []
@@ -1131,6 +1144,8 @@ struct StubLocalService: LocalServiceServing {
   let customPeriod: LocalServiceUsageDetail?
   /// What `quota_history` answers, for the tests that load 30-day samples on demand.
   let quotaHistoryValue: LocalServiceQuotaHistory?
+  /// What `quota_history` with `source: account` answers, in order. Nil refuses the read.
+  let accountQuotaHistory: QuotaHistoryAccountScript?
   let accountSettingsWriteRecord: AccountSettingsWriteRecord?
 
   init(
@@ -1146,6 +1161,7 @@ struct StubLocalService: LocalServiceServing {
     pinRecord: PinCallRecord? = nil,
     customPeriod: LocalServiceUsageDetail? = nil,
     quotaHistoryValue: LocalServiceQuotaHistory? = nil,
+    accountQuotaHistory: QuotaHistoryAccountScript? = nil,
     accountSettingsWriteRecord: AccountSettingsWriteRecord? = nil
   ) {
     stateValue = state
@@ -1161,6 +1177,7 @@ struct StubLocalService: LocalServiceServing {
     self.pinRecord = pinRecord
     self.customPeriod = customPeriod
     self.quotaHistoryValue = quotaHistoryValue
+    self.accountQuotaHistory = accountQuotaHistory
     self.accountSettingsWriteRecord = accountSettingsWriteRecord
   }
 
@@ -1174,7 +1191,17 @@ struct StubLocalService: LocalServiceServing {
     return customPeriod
   }
 
-  func quotaHistory(since: Date) async throws -> LocalServiceQuotaHistory {
+  func quotaHistory(
+    source: QuotaHistoryRequestSource,
+    provider: String?,
+    fingerprint: String?,
+    since: Date
+  ) async throws -> LocalServiceQuotaHistory {
+    let _ = (provider, fingerprint, since)
+    if source == .account {
+      guard let accountQuotaHistory else { throw LocalServiceClientError.invalidMessage }
+      return try accountQuotaHistory.next()
+    }
     guard let quotaHistoryValue else { throw LocalServiceClientError.invalidMessage }
     return quotaHistoryValue
   }

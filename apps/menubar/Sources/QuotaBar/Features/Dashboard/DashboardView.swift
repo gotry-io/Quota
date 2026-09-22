@@ -41,8 +41,15 @@ struct DashboardView: View {
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .accessibilityIdentifier("quota.workspace")
+    .onAppear {
+      dashboard.loadAccountHistory(now: now)
+    }
     .onChange(of: selectedID) { _, _ in
       selectedHistoryWindowID = nil
+      dashboard.loadAccountHistory(now: now)
+    }
+    .onChange(of: dashboard.model.accountSettings.historySync) { _, _ in
+      dashboard.loadAccountHistory(now: now)
     }
   }
 
@@ -302,8 +309,8 @@ private struct DashboardSubscriptionDetail: View {
           .quotaRowTitleStyle()
           .accessibilityAddTraits(.isHeader)
         Spacer(minLength: QuotaDesign.Spacing.sm)
-        if item.isLocalReading {
-          Text(DashboardQuotaCopy.thisMac)
+        if let caption = item.historyCaption {
+          Text(caption)
             .quotaMetaStyle()
             .accessibilityIdentifier("quota.history.scope")
         }
@@ -324,22 +331,23 @@ private struct DashboardSubscriptionDetail: View {
 
   @ViewBuilder
   private var historyBody: some View {
-    if !item.isLocalReading {
-      Text(DashboardQuotaCopy.remoteOnlyHistory)
-        .quotaSecondaryStyle()
-        .fixedSize(horizontal: false, vertical: true)
-        .accessibilityIdentifier("quota.history")
-    } else if let window = selectedHistoryWindow,
+    if let window = selectedHistoryWindow,
       let history = item.remainingHistories[window.id],
       !history.observedPoints.isEmpty
     {
       QuotaRemainingHistoryChart(
         history: history,
         tint: QuotaPalette.usageColor(remainingPercent: window.remainingPercent),
-        windowTitle: window.displayTitle
+        windowTitle: window.displayTitle,
+        historySource: item.historySource ?? .thisDevice
       )
-    } else {
+    } else if item.historySource == .yourDevices || item.isLocalReading {
       Text(DashboardQuotaCopy.notEnoughHistory)
+        .quotaSecondaryStyle()
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityIdentifier("quota.history")
+    } else {
+      Text(DashboardQuotaCopy.remoteOnlyHistory)
         .quotaSecondaryStyle()
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityIdentifier("quota.history")
