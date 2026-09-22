@@ -23,7 +23,7 @@ struct SettingsAboutView: View {
         .multilineTextAlignment(.center)
       }
 
-      if model.hasAccountSession {
+      if model.showsShareQuotaHistory {
         Section {
           Toggle(isOn: historySync) {
             Text(SettingsCopy.shareQuotaHistory)
@@ -53,7 +53,7 @@ struct SettingsAboutView: View {
 
   private var historySync: Binding<Bool> {
     Binding(
-      get: { model.accountSettings.historySync },
+      get: { model.accountSettings.historySync == true },
       set: { enabled in
         Task { await model.accountSettings.apply(.setHistorySync(enabled)) }
       }

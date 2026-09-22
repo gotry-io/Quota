@@ -31,8 +31,10 @@ protocol QuotaHistoryWatermarkStoring: Sendable {
   func clear() throws
 }
 
-/// The last Account history read for one subscription, beside `account-usage.json`.
-/// A later read offers the ETag; `304` keeps this body.
+/// The last Account history read for each subscription, beside `account-usage.json`.
+/// One entry per subscription: a later read replaces it. A cached body is reused when `since`
+/// has moved to the next UTC day; the chart clamps. `304` sends the ETag only when `since`
+/// still matches.
 struct QuotaHistoryReadCacheFile: Codable, Equatable, Sendable {
   struct Entry: Codable, Equatable, Sendable {
     var accountID: String
@@ -42,9 +44,12 @@ struct QuotaHistoryReadCacheFile: Codable, Equatable, Sendable {
     var etag: String?
     var body: QuotaHistoryReadResponse
 
-    func matches(accountID: String, provider: String, fingerprint: String, since: Date) -> Bool {
+    func sameSubscription(accountID: String, provider: String, fingerprint: String) -> Bool {
       self.accountID == accountID && self.provider == provider && self.fingerprint == fingerprint
-        && abs(self.since.timeIntervalSince(since)) < 1
+    }
+
+    func sinceMatches(_ since: Date) -> Bool {
+      abs(self.since.timeIntervalSince(since)) < 1
     }
   }
 
@@ -52,15 +57,46 @@ struct QuotaHistoryReadCacheFile: Codable, Equatable, Sendable {
 
   static let empty = QuotaHistoryReadCacheFile(entries: [])
 
-  func entry(
-    accountID: String,
-    provider: String,
-    fingerprint: String,
-    since: Date
-  ) -> Entry? {
-    entries.first {
-      $0.matches(accountID: accountID, provider: provider, fingerprint: fingerprint, since: since)
+  /// The newest cached body for this subscription, whatever `since` it was stored under.
+  func entry(accountID: String, provider: String, fingerprint: String) -> Entry? {
+    var found: Entry?
+    for entry in entries
+    where entry.sameSubscription(
+      accountID: accountID,
+      provider: provider,
+      fingerprint: fingerprint
+    ) {
+      if let current = found, entry.since < current.since { continue }
+      found = entry
     }
+    return found
+  }
+
+  mutating func replace(_ entry: Entry) {
+    entries.removeAll {
+      $0.sameSubscription(
+        accountID: entry.accountID,
+        provider: entry.provider,
+        fingerprint: entry.fingerprint
+      )
+    }
+    entries.append(entry)
+  }
+
+  /// One body per subscription. A file written before that rule keeps the newest `since`.
+  func keepingNewestPerSubscription() -> QuotaHistoryReadCacheFile {
+    var best: [String: Entry] = [:]
+    var order: [String] = []
+    for entry in entries {
+      let key = "\(entry.accountID)\u{0}\(entry.provider)\u{0}\(entry.fingerprint)"
+      if let current = best[key] {
+        if entry.since >= current.since { best[key] = entry }
+      } else {
+        order.append(key)
+        best[key] = entry
+      }
+    }
+    return QuotaHistoryReadCacheFile(entries: order.compactMap { best[$0] })
   }
 }
 
@@ -143,6 +179,7 @@ struct FileQuotaHistoryWatermarkStore: QuotaHistoryWatermarkStoring {
 
 struct FileQuotaHistoryReadStore: QuotaHistoryReadStoring {
   let fileURL: URL
+  private let memory = QuotaHistoryReadMemory()
 
   init(directory: URL) {
     fileURL = directory.appendingPathComponent("quota-history-read.json", isDirectory: false)
@@ -153,16 +190,48 @@ struct FileQuotaHistoryReadStore: QuotaHistoryReadStoring {
     return FileQuotaHistoryReadStore(directory: directory)
   }
 
+  /// Decodes the file on the first call. Later calls return that value until `save` or `clear`.
   func load() throws -> QuotaHistoryReadCacheFile {
-    try QuotaHistoryJSONFile.load(QuotaHistoryReadCacheFile.self, from: fileURL) ?? .empty
+    if let cached = memory.cached() { return cached }
+    let decoded =
+      try QuotaHistoryJSONFile.load(QuotaHistoryReadCacheFile.self, from: fileURL) ?? .empty
+    let compact = decoded.keepingNewestPerSubscription()
+    if compact != decoded {
+      try QuotaHistoryJSONFile.save(compact, to: fileURL)
+    }
+    memory.store(compact)
+    return compact
   }
 
   func save(_ value: QuotaHistoryReadCacheFile) throws {
-    try QuotaHistoryJSONFile.save(value, to: fileURL)
+    let compact = value.keepingNewestPerSubscription()
+    memory.store(compact)
+    try QuotaHistoryJSONFile.save(compact, to: fileURL)
   }
 
   func clear() throws {
+    memory.store(.empty)
     try QuotaHistoryJSONFile.remove(fileURL)
+  }
+}
+
+/// The decoded read cache. The file is this process's, so a second `load` does not decode it again.
+private final class QuotaHistoryReadMemory: @unchecked Sendable {
+  private let lock = NSLock()
+  private var value: QuotaHistoryReadCacheFile?
+  private var ready = false
+
+  func cached() -> QuotaHistoryReadCacheFile? {
+    lock.lock()
+    defer { lock.unlock() }
+    return ready ? value : nil
+  }
+
+  func store(_ file: QuotaHistoryReadCacheFile) {
+    lock.lock()
+    value = file
+    ready = true
+    lock.unlock()
   }
 }
 

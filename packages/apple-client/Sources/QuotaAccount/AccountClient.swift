@@ -477,23 +477,37 @@ public actor AccountClient {
   }
 
   /// What one quota-history upload pass stored, and the error that stopped a later chunk.
+  /// `cancelled` means the caller stopped the pass; chunks already accepted stay in `responses`.
   public struct QuotaHistoryUploadBatch: Equatable, Sendable {
     public var responses: [QuotaHistoryUploadResponse]
     public var error: RelayClientError?
+    public var cancelled: Bool
 
-    public init(responses: [QuotaHistoryUploadResponse], error: RelayClientError?) {
+    public init(
+      responses: [QuotaHistoryUploadResponse],
+      error: RelayClientError?,
+      cancelled: Bool = false
+    ) {
       self.responses = responses
       self.error = error
+      self.cancelled = cancelled
     }
   }
 
   /// Upload downsampled buckets, one device-sync then each chunk. A failed chunk keeps the
-  /// responses of the chunks that were accepted before it.
+  /// responses of the chunks that were accepted before it. A cancelled caller stops before the
+  /// next chunk.
   public func uploadQuotaHistory(
     chunks: [[QuotaHistoryUploadRequest.Series]]
   ) async -> QuotaHistoryUploadBatch {
+    if Task.isCancelled {
+      return QuotaHistoryUploadBatch(responses: [], error: nil, cancelled: true)
+    }
     while snapshotUploadBusy {
       await withCheckedContinuation { snapshotUploadWaiters.append($0) }
+    }
+    if Task.isCancelled {
+      return QuotaHistoryUploadBatch(responses: [], error: nil, cancelled: true)
     }
     snapshotUploadBusy = true
     defer { finishSnapshotUploadLock() }
@@ -511,6 +525,8 @@ public actor AccountClient {
         let control = try await relay.fetchDeviceSync(accessToken: session.accessToken)
         return control.deviceGeneration
       }
+    } catch is CancellationError {
+      return QuotaHistoryUploadBatch(responses: [], error: nil, cancelled: true)
     } catch let error as RelayClientError {
       return QuotaHistoryUploadBatch(responses: [], error: error)
     } catch let error as AccountClientError {
@@ -520,6 +536,9 @@ public actor AccountClient {
     }
     var responses: [QuotaHistoryUploadResponse] = []
     for series in prepared {
+      if Task.isCancelled {
+        return QuotaHistoryUploadBatch(responses: responses, error: nil, cancelled: true)
+      }
       do {
         let response = try await withAuthorizedSession { session in
           guard session.deviceID != nil else { throw AccountClientError.notADevice }
@@ -529,6 +548,8 @@ public actor AccountClient {
           )
         }
         responses.append(response)
+      } catch is CancellationError {
+        return QuotaHistoryUploadBatch(responses: responses, error: nil, cancelled: true)
       } catch let error as RelayClientError {
         return QuotaHistoryUploadBatch(responses: responses, error: error)
       } catch let error as AccountClientError {

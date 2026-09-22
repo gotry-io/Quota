@@ -38,8 +38,9 @@ final class AccountSettingsSync {
 
   /// Bumped after every apply so a view-scoped `SettingsModel` can reload from the stores.
   private(set) var generation = 0
-  /// Whether remaining-quota history follows the Account, as the last document or edit said.
-  private(set) var historySync = false
+  /// The Account document's history switch. Nil means no document yet: the producer does not
+  /// upload and does not clear. A cached document seeds this at launch, so a failed GET keeps it.
+  private(set) var historySync: Bool? = nil
   /// Un-acknowledged local edits, oldest first, any Account this phone has queued for.
   private(set) var pending: [PendingAccountSettingsEdit] = []
   private var nextPendingID: UInt64 = 1
@@ -84,9 +85,28 @@ final class AccountSettingsSync {
     }
   }
 
-  /// Relay answered `409 history_sync_off`. The switch is off; do not write that again from here.
+  /// Relay answered `409 history_sync_off`. The switch is off, unless a queued edit still names
+  /// it — that edit has not been acknowledged, so the toggle stays where the edit put it.
   func noteHistorySyncOff() {
+    let namesSwitch = pending.contains { item in
+      if case .setHistorySync = item.edit { return true }
+      return false
+    }
+    guard !namesSwitch else { return }
     historySync = false
+  }
+
+  /// The session is gone. The next Account's switch is unknown until its cache or a GET.
+  func noteSignedOut() {
+    historySync = nil
+  }
+
+  /// Copy `history.sync` from the cached document when this phone has not heard one yet.
+  func seedHistorySyncFromCache() async {
+    guard historySync == nil else { return }
+    guard (try? await account.loadSession()) != nil else { return }
+    guard let cached = try? await account.loadCachedSettings() else { return }
+    historySync = cached.document.history.sync
   }
 
   /// Current policy as the stores hold it. `enabled` is not included.
@@ -111,6 +131,7 @@ final class AccountSettingsSync {
   private func performRefresh() async {
     guard connectsToAccount, isSignedIn() else { return }
     guard let session = try? await account.loadSession() else { return }
+    await seedHistorySyncFromCache()
     let accountID = session.accountID
     let previous = try? await account.loadCachedSettings()
     let fetched: AccountSettingsDocument
@@ -137,7 +158,7 @@ final class AccountSettingsSync {
     if previous?.document.revision != fetched.revision {
       applyPolicy(fetched.policy)
       notifyApplied()
-    } else if historySync != fetched.history.sync {
+    } else if historySync != Optional(fetched.history.sync) {
       historySync = fetched.history.sync
       notifyApplied()
     }

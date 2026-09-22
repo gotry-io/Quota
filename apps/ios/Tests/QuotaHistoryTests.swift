@@ -1,6 +1,7 @@
 import Foundation
 import os
 import QuotaAccount
+import QuotaAlerts
 import QuotaPresentation
 import QuotaProviderSessions
 import QuotaProviderWeb
@@ -74,10 +75,11 @@ struct QuotaHistoryTests {
     await model.quotaHistory.sync()
 
     #expect(transport.bodies(path: "/api/v6/device/quota-history", method: "PUT").count == 1)
-    #expect(model.accountSettings.historySync)
+    #expect(model.accountSettings.historySync == true)
     #expect(model.banner == nil)
     let stored = try watermarks.load().accounts["account_01"]
-    #expect((stored?.series ?? []).isEmpty)
+    let series = stored?.series ?? []
+    #expect(series.isEmpty)
   }
 
   @Test func theBackgroundRefreshAwaitsTheHistoryUpload() async throws {
@@ -286,6 +288,288 @@ struct QuotaHistoryTests {
     #expect(chunks[1].flatMap(\.points).count == 1)
     #expect(chunks[0].flatMap(\.points).first?.bucketStart == points[0].bucketStart)
   }
+
+  @Test func twoThousandFiveHundredPointsChunkWellUnderASecond() throws {
+    let resets = Fixtures.date("2026-09-21T15:00:00Z")
+    let points = (0..<2_500).map { index in
+      QuotaHistoryUploadRequest.Point(
+        resetsAt: resets,
+        bucketStart: resets.addingTimeInterval(Double(index) * 900),
+        usedPercent: Double(index % 100)
+      )
+    }
+    let series = QuotaHistoryUploadRequest.Series(
+      provider: .codex,
+      fingerprint: "account_test",
+      windowId: "five_hour",
+      durationSeconds: 18_000,
+      points: points
+    )
+    let clock = ContinuousClock()
+    let started = clock.now
+    let chunks = QuotaHistoryChunker.chunks([series])
+    #expect(clock.now - started < .seconds(1))
+    let flat = chunks.flatMap { $0.flatMap(\.points) }
+    #expect(flat.count == 2_500)
+    #expect(flat.first?.bucketStart == points[0].bucketStart)
+    #expect(flat.last?.bucketStart == points[2_499].bucketStart)
+    for chunk in chunks {
+      let count = chunk.flatMap(\.points).count
+      #expect(count <= QuotaHistoryUploadRequest.maximumPoints)
+      #expect(!chunk.isEmpty)
+      let body = try WireCodec.encodeRequest(
+        QuotaHistoryUploadRequest(generation: Int.max, series: chunk)
+      )
+      #expect(body.count <= QuotaHistoryUploadRequest.maximumBytes)
+    }
+  }
+
+  @Test func aTightByteCapSplitsWithoutExceedingIt() throws {
+    let resets = Fixtures.date("2026-09-21T15:00:00Z")
+    let points = (0..<4).map { index in
+      QuotaHistoryUploadRequest.Point(
+        resetsAt: resets,
+        bucketStart: resets.addingTimeInterval(Double(index) * 900),
+        usedPercent: 10
+      )
+    }
+    let series = QuotaHistoryUploadRequest.Series(
+      provider: .codex,
+      fingerprint: "account_test",
+      windowId: "five_hour",
+      durationSeconds: 18_000,
+      points: points
+    )
+    let one = try WireCodec.encodeRequest(
+      QuotaHistoryUploadRequest(
+        generation: Int.max,
+        series: [
+          QuotaHistoryUploadRequest.Series(
+            provider: .codex,
+            fingerprint: "account_test",
+            windowId: "five_hour",
+            durationSeconds: 18_000,
+            points: [points[0]]
+          )
+        ]
+      )
+    )
+    let chunks = QuotaHistoryChunker.chunks([series], maxBytes: one.count)
+    #expect(chunks.count == 4)
+    #expect(chunks.flatMap { $0.flatMap(\.points) }.count == 4)
+    for chunk in chunks {
+      let body = try WireCodec.encodeRequest(
+        QuotaHistoryUploadRequest(generation: Int.max, series: chunk)
+      )
+      #expect(body.count <= one.count)
+    }
+  }
+
+  @Test func aFailedSettingsReadWithCachedSyncOnDoesNotBackfill() async throws {
+    let watermarks = MemoryQuotaHistoryWatermarkStore()
+    let resets = Fixtures.date("2026-09-21T15:00:00Z")
+    let newest = Fixtures.date("2026-09-21T10:15:00Z")
+    try watermarks.save(
+      QuotaHistoryWatermarkFile(
+        accounts: [
+          "account_01": QuotaHistoryWatermarkFile.Account(
+            observedSync: true,
+            series: [
+              QuotaHistoryWatermarkFile.Series(
+                provider: "codex",
+                fingerprint: "account_test",
+                windowID: "five_hour",
+                newestBucketStart: newest,
+                lastUploaded: [
+                  QuotaHistorySync.Bucket(
+                    resetsAt: resets,
+                    bucketStart: newest,
+                    usedPercent: 20
+                  )
+                ]
+              )
+            ]
+          )
+        ]
+      )
+    )
+    let transport = HistoryTransport(settingsStatus: 500)
+    let model = historyModel(
+      transport: transport,
+      watermarks: watermarks,
+      settings: cachedHistorySettings(sync: true)
+    )
+
+    await model.restore()
+    await model.waitForDetachedLaunchWork()
+
+    #expect(model.accountSettings.historySync == true)
+    let stored = try #require(watermarks.load().accounts["account_01"])
+    #expect(stored.observedSync)
+    #expect(!stored.series.isEmpty)
+    #expect(historyPutBodies(transport).allSatisfy { !$0.contains("2026-09-21T10:00:00Z") })
+
+    transport.settingsStatus = 200
+    await model.refresh()
+    await model.waitForDetachedLaunchWork()
+    await model.quotaHistory.sync()
+
+    #expect(model.accountSettings.historySync == true)
+    #expect(historyPutBodies(transport).allSatisfy { !$0.contains("2026-09-21T10:00:00Z") })
+    #expect(try watermarks.load().accounts["account_01"]?.observedSync == true)
+  }
+
+  @Test func cachedSyncOnOfflineKeepsTheToggleAndTheAccountSeries() async throws {
+    let reads = MemoryQuotaHistoryReadStore()
+    try reads.save(
+      QuotaHistoryReadCacheFile(entries: [
+        historyReadEntry(since: Fixtures.date("2026-08-21T00:00:00Z"))
+      ])
+    )
+    let transport = HistoryTransport(readStatus: 500, settingsStatus: 500)
+    let model = historyModel(
+      transport: transport,
+      watermarks: MemoryQuotaHistoryWatermarkStore(),
+      reads: reads,
+      settings: cachedHistorySettings(sync: true)
+    )
+
+    await model.restore()
+    await model.waitForDetachedLaunchWork()
+    #expect(model.accountSettings.historySync == true)
+    #expect(model.showsShareQuotaHistory)
+    let subscription = try #require(
+      model.subscriptions.first { $0.snapshot.account.fingerprint == "account_test" }
+    )
+
+    await model.loadAccountQuotaHistory(for: subscription)
+
+    let samples = model.quotaHistory.samplesBySubscription[subscription.key]
+    let content = SubscriptionDetailContent.make(
+      subscription: subscription,
+      deviceNames: [:],
+      samples: model.localSamples,
+      historySync: model.accountSettings.historySync == true,
+      accountSamples: samples
+    )
+    #expect(content.drawsAccountHistory)
+    #expect(content.historyCaption == "From your devices")
+    #expect(content.remainingHistories["five_hour"]?.observedPoints.isEmpty == false)
+    #expect(try reads.load().entries.count == 1)
+  }
+
+  @Test func theHistorySwitchIsHiddenUntilTheSessionIsActive() {
+    let model = historyModel(
+      transport: HistoryTransport(),
+      watermarks: MemoryQuotaHistoryWatermarkStore()
+    )
+    #expect(!model.showsShareQuotaHistory)
+    model.poseSession(activation: .pending, deviceID: "device_phone")
+    #expect(!model.showsShareQuotaHistory)
+    model.poseSession(activation: .active, deviceID: "device_phone")
+    #expect(model.showsShareQuotaHistory)
+  }
+
+  @Test func aPendingHistorySyncOnSurvivesHistorySyncOff() async throws {
+    let transport = HistoryTransport(
+      historyStatus: 409,
+      historyCode: "history_sync_off",
+      settingsPUTStatus: 500
+    )
+    let model = historyModel(
+      transport: transport,
+      watermarks: MemoryQuotaHistoryWatermarkStore()
+    )
+    poseHistory(model)
+
+    await model.accountSettings.apply(.setHistorySync(true))
+
+    #expect(transport.bodies(path: "/api/v6/device/quota-history", method: "PUT").count == 1)
+    #expect(model.accountSettings.historySync == true)
+    #expect(model.accountSettings.pending.map(\.edit) == [.setHistorySync(true)])
+  }
+
+  @Test func cancellingTheOuterTaskStopsBeforeTheNextChunk() async throws {
+    let transport = HistoryTransport(holdFirstHistoryPut: true)
+    let model = historyModel(
+      transport: transport,
+      watermarks: MemoryQuotaHistoryWatermarkStore(),
+      settings: cachedHistorySettings(sync: true)
+    )
+    poseHistory(model)
+    await model.accountSettings.seedHistorySyncFromCache()
+    model.quotaHistory.maximumPointsPerChunk = 1
+    #expect(model.accountSettings.historySync == true)
+
+    let task = Task { @MainActor in
+      await model.quotaHistory.sync()
+    }
+    var waited = false
+    for _ in 0..<100 {
+      if transport.isWaitingForHistory {
+        waited = true
+        break
+      }
+      try await Task.sleep(for: .milliseconds(20))
+    }
+    #expect(waited)
+    task.cancel()
+    transport.releaseHistory()
+    await task.value
+    #expect(transport.bodies(path: "/api/v6/device/quota-history", method: "PUT").count == 1)
+  }
+
+  @Test func aFailedUploadDoesNotBucketAgainWithinAMinute() async throws {
+    let clock = MutableDate(historyNow)
+    let transport = HistoryTransport(historyStatus: 500, historyCode: "unavailable")
+    let model = historyModel(
+      transport: transport,
+      watermarks: MemoryQuotaHistoryWatermarkStore(),
+      now: { clock.date }
+    )
+
+    await model.restore()
+    await model.waitForDetachedLaunchWork()
+    let puts = transport.bodies(path: "/api/v6/device/quota-history", method: "PUT").count
+    let syncs = deviceSyncCount(transport)
+    #expect(puts == 1)
+
+    await model.quotaHistory.sync()
+    #expect(transport.bodies(path: "/api/v6/device/quota-history", method: "PUT").count == puts)
+    #expect(deviceSyncCount(transport) == syncs)
+
+    clock.date = historyNow.addingTimeInterval(61)
+    await model.quotaHistory.sync()
+    #expect(transport.bodies(path: "/api/v6/device/quota-history", method: "PUT").count == puts + 1)
+    #expect(deviceSyncCount(transport) == syncs + 1)
+  }
+
+  @Test func theReadCacheKeepsOneEntryAndDecodesTheFileOnce() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "quota-history-read-\(UUID().uuidString)",
+      isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let older = historyReadEntry(since: Fixtures.date("2026-08-21T00:00:00Z"))
+    let newer = historyReadEntry(since: Fixtures.date("2026-08-22T00:00:00Z"))
+    var legacy = QuotaHistoryReadCacheFile(entries: [older, newer])
+    legacy.replace(newer)
+    #expect(legacy.entries.count == 1)
+    let raw = QuotaHistoryReadCacheFile(entries: [older, newer])
+    let store = FileQuotaHistoryReadStore(directory: directory)
+    try WireCodec.encode(raw).write(to: store.fileURL)
+    let loaded = try store.load()
+    #expect(loaded.entries.count == 1)
+    #expect(loaded.entry(
+      accountID: "account_01",
+      provider: "codex",
+      fingerprint: "account_test"
+    )?.since == newer.since)
+    try Data("nope".utf8).write(to: store.fileURL)
+    let again = try store.load()
+    #expect(again == loaded)
+  }
 }
 
 // MARK: - Fixture
@@ -297,7 +581,9 @@ private func historyModel(
   transport: HistoryTransport,
   watermarks: MemoryQuotaHistoryWatermarkStore,
   reads: MemoryQuotaHistoryReadStore = MemoryQuotaHistoryReadStore(),
-  journal: LocalQuotaSamples? = nil
+  journal: LocalQuotaSamples? = nil,
+  settings: CachedAccountSettings? = nil,
+  now: @escaping @Sendable () -> Date = { historyNow }
 ) -> AppModel {
   let snapshot = historySnapshot()
   let providerSessions = MemoryProviderSessionStore(
@@ -317,7 +603,8 @@ private func historyModel(
       relay: RelayClient(transport: transport),
       sessionStore: MemoryAccountSessionStore(session: Fixtures.session(deviceID: "device_phone")),
       summaryStore: MemoryAccountSummaryStore(value: nil),
-      now: { historyNow }
+      settingsStore: MemoryAccountSettingsStore(value: settings),
+      now: now
     ),
     authenticator: ScriptedAuthenticator(result: .failure(AuthorizationError.cancelled)),
     providerSessions: providerSessions,
@@ -334,8 +621,108 @@ private func historyModel(
     ),
     settingsDefaults: UserDefaults(suiteName: "QuotaTests.History.\(UUID().uuidString)")!,
     syncAccountSettings: true,
-    now: { historyNow }
+    now: now
   )
+}
+
+@MainActor
+private func poseHistory(_ model: AppModel) {
+  model.pose(
+    phase: .signedIn,
+    sessionActivation: .active,
+    sessionDeviceID: "device_phone",
+    summary: nil,
+    fetchedAt: nil,
+    fromCache: false,
+    isRefreshing: false,
+    banner: nil,
+    expiredMessage: nil,
+    localCollection: LocalCollection(collectedAt: historyNow, snapshots: [historySnapshot()]),
+    localSamples: historyJournal(matching: historySnapshot()),
+    selectedTab: .quota,
+    presentsSignIn: false,
+    identities: .idle,
+    providerStatus: [:],
+    skipsRestore: true,
+    isOfflineFixture: false,
+    displayClockIsFixed: true
+  )
+}
+
+private func cachedHistorySettings(sync: Bool) -> CachedAccountSettings {
+  CachedAccountSettings(
+    accountID: "account_01",
+    etag: "\"1\"",
+    document: AccountSettingsDocument(
+      revision: 1,
+      updatedAt: historyNow,
+      alerts: AccountSettingsDocument.Alerts(
+        resetReminders: true,
+        paceAlerts: true,
+        thresholds: [:]
+      ),
+      budget: AccountSettingsDocument.Budget(amountUSD: nil, alerts: true),
+      history: AccountSettingsDocument.History(sync: sync),
+      historyPresent: true
+    )
+  )
+}
+
+private func historyReadEntry(since: Date) -> QuotaHistoryReadCacheFile.Entry {
+  QuotaHistoryReadCacheFile.Entry(
+    accountID: "account_01",
+    provider: "codex",
+    fingerprint: "account_test",
+    since: since,
+    etag: "\"history-1\"",
+    body: QuotaHistoryReadResponse(
+      sync: true,
+      windows: [
+        "five_hour": QuotaHistoryReadResponse.Window(
+          durationSeconds: 18_000,
+          points: [
+            QuotaHistoryUploadRequest.Point(
+              resetsAt: Fixtures.date("2026-09-21T15:00:00Z"),
+              bucketStart: Fixtures.date("2026-09-21T10:00:00Z"),
+              usedPercent: 40
+            )
+          ]
+        )
+      ]
+    )
+  )
+}
+
+private func historyPutBodies(_ transport: HistoryTransport) -> [String] {
+  transport.bodies(path: "/api/v6/device/quota-history", method: "PUT").map {
+    String(decoding: $0, as: UTF8.self)
+  }
+}
+
+private func deviceSyncCount(_ transport: HistoryTransport) -> Int {
+  transport.requests.filter { $0.method == "GET" && $0.path == "/api/v2/device/sync" }.count
+}
+
+private final class MutableDate: @unchecked Sendable {
+  private let lock = NSLock()
+  private var value: Date
+
+  init(_ date: Date) {
+    value = date
+  }
+
+  var date: Date {
+    get {
+      lock.lock()
+      defer { lock.unlock() }
+      return value
+    }
+    set {
+      lock.lock()
+      value = newValue
+      lock.unlock()
+    }
+  }
 }
 
 private func historySnapshot() -> QuotaSnapshot {
@@ -528,11 +915,15 @@ private final class HistoryTransport: HTTPTransport, @unchecked Sendable {
   var historyCode: String
   var readStatus: Int
   var gateHistory: Bool
+  var settingsStatus: Int
+  var settingsPUTStatus: Int
+  var holdFirstHistoryPut: Bool
 
   private struct MutableState {
     var recorded: [Recorded] = []
     var historyContinuation: CheckedContinuation<Void, Never>?
     var historyGets = 0
+    var historyPuts = 0
   }
 
   private let state = OSAllocatedUnfairLock(initialState: MutableState())
@@ -541,12 +932,18 @@ private final class HistoryTransport: HTTPTransport, @unchecked Sendable {
     historyStatus: Int = 200,
     historyCode: String = "",
     readStatus: Int = 200,
-    gateHistory: Bool = false
+    gateHistory: Bool = false,
+    settingsStatus: Int = 200,
+    settingsPUTStatus: Int = 200,
+    holdFirstHistoryPut: Bool = false
   ) {
     self.historyStatus = historyStatus
     self.historyCode = historyCode
     self.readStatus = readStatus
     self.gateHistory = gateHistory
+    self.settingsStatus = settingsStatus
+    self.settingsPUTStatus = settingsPUTStatus
+    self.holdFirstHistoryPut = holdFirstHistoryPut
   }
 
   var isWaitingForHistory: Bool {
@@ -575,9 +972,16 @@ private final class HistoryTransport: HTTPTransport, @unchecked Sendable {
   func perform(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
     let path = request.url?.path ?? ""
     let method = request.httpMethod ?? "GET"
-    if gateHistory, method == "PUT", path == "/api/v6/device/quota-history" {
-      await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-        state.withLock { $0.historyContinuation = continuation }
+    if method == "PUT", path == "/api/v6/device/quota-history" {
+      let ordinal = state.withLock { state -> Int in
+        state.historyPuts += 1
+        return state.historyPuts
+      }
+      let hold = (holdFirstHistoryPut && ordinal == 1) || gateHistory
+      if hold {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+          state.withLock { $0.historyContinuation = continuation }
+        }
       }
     }
     let exchange = response(for: path, method: method)
@@ -611,6 +1015,12 @@ private final class HistoryTransport: HTTPTransport, @unchecked Sendable {
     case ("GET", "/api/v6/account/summary"):
       return (200, (try? Fixtures.accountSummaryJSON()) ?? Data(), [:])
     case (_, "/api/v2/account/settings"):
+      if method == "PUT", settingsPUTStatus != 200 {
+        return (settingsPUTStatus, errorBody("unavailable"), [:])
+      }
+      if method == "GET", settingsStatus != 200 {
+        return (settingsStatus, errorBody("unavailable"), [:])
+      }
       return (200, historySettingsBody(), ["ETag": "\"1\""])
     case ("GET", "/api/v2/device/sync"):
       return (200, deviceSyncBody(), [:])

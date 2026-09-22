@@ -244,7 +244,10 @@ final class AppModel {
       now: now
     )
     self.quotaHistory = quotaHistory
-    quotaHistory.historySync = { [weak accountSettings] in accountSettings?.historySync ?? false }
+    quotaHistory.historySync = { [weak accountSettings] in
+      guard let accountSettings else { return nil }
+      return accountSettings.historySync
+    }
     quotaHistory.noteSyncOff = { [weak accountSettings] in accountSettings?.noteHistorySyncOff() }
     quotaHistory.localSamples = { [weak self] in self?.localSamples ?? LocalQuotaSamples() }
     quotaHistory.snapshots = { [weak self] in self?.localCollection?.snapshots ?? [] }
@@ -347,6 +350,9 @@ final class AppModel {
   /// Whether a session for the managed Account exists on this device, whatever state it is in.
   var hasAccountSession: Bool { sessionActivation != nil }
 
+  /// About shows the history switch only for an active session. Pending still hides it.
+  var showsShareQuotaHistory: Bool { sessionActivation == .active }
+
   /// Whether the Account already lists this phone as one of its Devices. It does once the
   /// session that named it has been read back in a summary, and Devices then shows that row
   /// rather than the one this phone would draw for itself.
@@ -417,6 +423,7 @@ final class AppModel {
     }
     sessionActivation = restored.session?.activation
     sessionDeviceID = restored.session?.deviceID
+    await accountSettings.seedHistorySyncFromCache()
     summary = restored.summary?.summary
     fetchedAt = restored.summary?.fetchedAt
     summaryETag = restored.summary?.etag
@@ -634,6 +641,7 @@ final class AppModel {
   private func forgetSession() {
     sessionActivation = nil
     sessionDeviceID = nil
+    accountSettings.noteSignedOut()
   }
 
   private func presentConnectFailure(_ message: String) {
@@ -823,6 +831,7 @@ final class AppModel {
       }
     }
     // Same task the background refresh awaits for the snapshot upload (ADR 0041).
+    await accountSettings.seedHistorySyncFromCache()
     await quotaHistory.sync()
   }
 

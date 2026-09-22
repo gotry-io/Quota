@@ -116,7 +116,7 @@ struct AccountSettingsSyncTests {
 
     await sync.apply(.setHistorySync(true))
 
-    #expect(sync.historySync)
+    #expect(sync.historySync == true)
     #expect(sync.pending.isEmpty)
     let puts = transport.requests.filter { $0.httpMethod == "PUT" }
     #expect(puts.count == 1)
@@ -163,8 +163,52 @@ struct AccountSettingsSyncTests {
     #expect(budget["alerts"] as? Bool == true)
     let alerts = try #require(retry["alerts"] as? [String: Any])
     #expect(alerts["reset_reminders"] as? Bool == true)
-    #expect(sync.historySync)
+    #expect(sync.historySync == true)
     #expect(sync.pending.isEmpty)
+  }
+
+  @Test func historySyncOffLeavesAPendingOnEditAlone() async throws {
+    let harness = SettingsSyncHarness()
+    let transport = ScriptedHTTPTransport(
+      [
+        .init(
+          status: 200,
+          body: accountSettingsGETBody(revision: 1, history: false),
+          headers: ["ETag": "\"1\""]
+        ),
+        .init(status: 500, body: Data()),
+      ],
+      autoAnswerAccountSettings: false
+    )
+    let sync = harness.makeSync(transport: transport)
+    await sync.refresh()
+
+    await sync.apply(.setHistorySync(true))
+    sync.noteHistorySyncOff()
+
+    #expect(sync.historySync == true)
+    #expect(sync.pending.map(\.edit) == [.setHistorySync(true)])
+  }
+
+  @Test func historySyncOffDropsTheFlagWhenNoEditNamesIt() async throws {
+    let harness = SettingsSyncHarness()
+    let transport = ScriptedHTTPTransport(
+      [
+        .init(
+          status: 200,
+          body: accountSettingsGETBody(revision: 1, history: true),
+          headers: ["ETag": "\"1\""]
+        ),
+      ],
+      autoAnswerAccountSettings: false
+    )
+    let sync = harness.makeSync(transport: transport)
+    await sync.refresh()
+
+    #expect(sync.historySync == true)
+    #expect(sync.pending.isEmpty)
+    sync.noteHistorySyncOff()
+    #expect(sync.historySync == false)
   }
 
   @Test func aLocalEditWritesTheDocument() async throws {
