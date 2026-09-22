@@ -85,6 +85,25 @@ if [ -n "${QUOTA_IOS_APPEARANCE:-}" ] || [ -n "${QUOTA_IOS_TEXT_SIZE:-}" ]; then
   fi
 fi
 
+# The runner's SwiftPM caches can be left corrupt by an earlier job ("disk I/O error" reading
+# the cached manifest database), and then every xcodebuild on the machine fails before a test
+# runs. Resolving first, and once more from clean caches when that fails, makes that a one-line
+# note in the log instead of a red merge-group run.
+resolve_packages() {
+  xcodebuild \
+    -project apps/ios/Quota.xcodeproj \
+    -scheme Quota \
+    -destination "$destination" \
+    -resolvePackageDependencies
+}
+if ! resolve_packages; then
+  echo "test-ios: package resolution failed; clearing SwiftPM caches and resolving once more" >&2
+  rm -rf "$HOME/Library/Caches/org.swift.swiftpm" \
+    "$HOME/Library/org.swift.swiftpm" \
+    "$HOME"/Library/Developer/Xcode/DerivedData/Quota-*/SourcePackages
+  resolve_packages
+fi
+
 run_xcodebuild() {
   # The toolchain and the simulator are part of the result: a layout or an audit that differs
   # between two machines is usually these lines differing. They are printed here, inside whatever
