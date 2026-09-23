@@ -279,9 +279,13 @@ class QuotaUITestCase: XCTestCase {
         state.hittable = element.isHittable
         state.frame = element.frame
         let now = Date()
-        state.stable = !state.frame.isEmpty && state.frame == lastFrame
+        // Frames are compared within half a point: a settled SwiftUI layout can answer
+        // 116.0 one sample and 116.00000000000006 the next, and exact equality never held on
+        // the CI runner.
+        let same = Self.about(state.frame, equals: lastFrame)
+        state.stable = !state.frame.isEmpty && same
           && now.timeIntervalSince(lastSampled) >= 0.15
-        if state.frame != lastFrame {
+        if !same {
           lastFrame = state.frame
           lastSampled = now
         }
@@ -303,6 +307,12 @@ class QuotaUITestCase: XCTestCase {
     }
     XCTFail("\(what) was not ready to tap after \(Int(timeout))s: \(state)", file: file, line: line)
     return false
+  }
+
+  static func about(_ left: CGRect, equals right: CGRect) -> Bool {
+    guard !left.isNull, !right.isNull else { return left.isNull && right.isNull }
+    return abs(left.minX - right.minX) < 0.5 && abs(left.minY - right.minY) < 0.5
+      && abs(left.width - right.width) < 0.5 && abs(left.height - right.height) < 0.5
   }
 
   /// Inside, allowing a point for rounding; a control taller than the viewport needs only its
