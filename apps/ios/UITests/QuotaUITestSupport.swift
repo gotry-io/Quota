@@ -262,7 +262,7 @@ class QuotaUITestCase: XCTestCase {
     _ what: String,
     enabled: Bool = true,
     chrome: Bool = false,
-    timeout: TimeInterval = 10,
+    timeout: TimeInterval = 20,
     file: StaticString = #filePath,
     line: UInt = #line
   ) -> Bool {
@@ -271,6 +271,8 @@ class QuotaUITestCase: XCTestCase {
     var lastFrame = CGRect.null
     var lastSampled = Date.distantPast
     var nudges = 0
+    var moved = true
+    var extraSamples = 0
     while true {
       state = Readiness()
       state.exists = element.exists
@@ -283,6 +285,7 @@ class QuotaUITestCase: XCTestCase {
         // 116.0 one sample and 116.00000000000006 the next, and exact equality never held on
         // the CI runner.
         let same = Self.about(state.frame, equals: lastFrame)
+        moved = !same
         state.stable = !state.frame.isEmpty && same
           && now.timeIntervalSince(lastSampled) >= 0.15
         if !same {
@@ -302,7 +305,13 @@ class QuotaUITestCase: XCTestCase {
           continue
         }
       }
-      if Date() >= deadline { break }
+      // Stability is two samples that agree. On a slow runner one round of queries takes
+      // seconds, so a frame that was still settling when the deadline passed gets a few more
+      // looks rather than being called unstable on the strength of one changed sample.
+      if Date() >= deadline {
+        if !moved || extraSamples >= 3 { break }
+        extraSamples += 1
+      }
       RunLoop.current.run(until: Date().addingTimeInterval(0.1))
     }
     XCTFail("\(what) was not ready to tap after \(Int(timeout))s: \(state)", file: file, line: line)
