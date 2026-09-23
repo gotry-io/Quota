@@ -65,8 +65,27 @@ impl AccountManager {
                     &std::sync::atomic::AtomicBool::new(false),
                 );
             });
-        if spawned.is_err() {
-            eprintln!("quota-history: could not start the backfill thread");
+        match spawned {
+            Ok(handle) => {
+                // An earlier handle is dropped, not joined: its thread finishes on its own,
+                // and the IPC lane must not wait behind it.
+                if let Ok(mut slot) = self.history_backfill.lock() {
+                    *slot = Some(handle);
+                }
+            }
+            Err(_) => eprintln!("quota-history: could not start the backfill thread"),
+        }
+    }
+
+    /// Blocks until the detached backfill, if one is running, has finished.
+    pub(crate) fn wait_for_history_backfill(&self) {
+        let handle = self
+            .history_backfill
+            .lock()
+            .ok()
+            .and_then(|mut slot| slot.take());
+        if let Some(handle) = handle {
+            let _ = handle.join();
         }
     }
 

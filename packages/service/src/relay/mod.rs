@@ -1682,6 +1682,8 @@ pub struct AccountManager {
     history_lock: Mutex<()>,
     /// Set when Relay answers `413 quota_history_full`. The next collection clears it and may try again.
     history_full: AtomicBool,
+    /// The detached backfill in flight, if any, so a caller that must see its outcome can wait.
+    history_backfill: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
 impl AccountManager {
@@ -1696,6 +1698,7 @@ impl AccountManager {
             period_cache: Mutex::new(HashMap::new()),
             history_lock: Mutex::new(()),
             history_full: AtomicBool::new(false),
+            history_backfill: Mutex::new(None),
         }
     }
 
@@ -4956,6 +4959,7 @@ mod tests {
         manager
             .put_account_settings(&named, "\"1\"", &cancel)
             .expect("put");
+        manager.wait_for_history_backfill();
         let sent = server.join().expect("server");
         assert_eq!(sent.len(), 1, "{sent:?}");
         assert!(
