@@ -878,7 +878,14 @@ provider and support, and no custom card chrome beyond the system widget contain
   check. A confirmed finding there is a defect to fix, but it does not block a merge, and the
   reachability of these layouts at large type is therefore no longer checked on every merge. What
   the required check still proves is in `QuotaSmokeUITests`: the journeys, the state controls, and
-  the seven essential values at the standard and `accessibilityExtraLarge` sizes.
+  the seven essential values at the standard and `accessibilityExtraLarge` sizes. Each census test
+  opens its one screen directly (`--route`), so a finding on one screen never hides the next; what
+  a screen says — About's copy and links, the full Providers matrix, the local-only and merged
+  details' history and sources — is asserted there, at every profile's size.
+- UI test launches are deterministic about presentation: every launch names its text size (the
+  profile's, else the standard `large`) and starts with the in-app Appearance preference at System,
+  so the device appearance the test set is the one drawn. `scripts/test-ios.sh` records the Xcode,
+  runtime and device it chose with the text size and appearance.
 - Contrast is guaranteed by `ContrastTokenTests`, which compute the WCAG 2.x contrast ratio of
   every text and fill pairing the tokens allow in light and dark. The XCTest accessibility audit
   still runs on every fixture screen in `ios-screens` and gates every type there except
@@ -937,15 +944,9 @@ no-data states. Check iPhone, light and dark, standard and accessibility text si
 labels, Reduce Motion, and Reduce Transparency. Synthetic fixtures may contain display labels
 only; they must never contain access tokens, refresh tokens, or production data.
 
-`scripts/ios-ui-screenshots.sh` exports the `sign-in`, `connect-connecting`,
-`connect-error`, `connect-expired`, `connect-refresh-failed`, `root-loading`, `confirm-account`,
-`overview-content`, `overview-cached-error`, `overview-empty`, `overview-no-devices`,
-`overview-scrolled`, `subscription-detail`, `devices-content`, `devices-empty`,
-`usage-content`, `usage-activity`, `usage-activity-loading`, `usage-activity-failed`,
-`usage-empty`, `usage-day`, `usage-day-empty`, `usage-day-failed`, `settings-main`,
-`settings-notifications`, `settings-appearance`, `settings-about`, and `settings-providers`
-fixture screenshots to
-`dist/ios-ui-screenshots/`. `QUOTA_IOS_TEXT_SIZE` (for example `accessibilityExtraLarge`) and
+`scripts/ios-ui-screenshots.sh` exports every census capture — the `attachScreenshot` names in
+`apps/ios/UITests/QuotaScreenUITests.swift`, which the script reads, among them `usage-today` and
+`usage-custom` for the Today and fixed custom-range periods — to `dist/ios-ui-screenshots/`. `QUOTA_IOS_TEXT_SIZE` (for example `accessibilityExtraLarge`) and
 `QUOTA_IOS_APPEARANCE` (`light` or `dark`) select Dynamic Type and appearance for that run; variant
 PNGs land in a subdirectory. Re-run Connect, Confirm, Overview, Usage, Devices, subscription
 detail, and each Settings destination at one accessibility text size.
