@@ -571,7 +571,8 @@ final class QuotaHistoryCoordinator {
   }
 
   /// Remembers what each answered chunk stored. With `judge`, a series whose rows Relay no
-  /// longer holds (``QuotaHistorySync/rowsLost(recordedOldest:answer:durationSeconds:now:)``)
+  /// longer holds
+  /// (``QuotaHistorySync/rowsLost(recordedOldest:watermark:chunkOldest:answer:durationSeconds:now:)``)
   /// is forgotten instead, for this and every later chunk, so the next pass backfills it.
   private func apply(
     chunks: [[QuotaHistoryUploadRequest.Series]],
@@ -592,9 +593,12 @@ final class QuotaHistoryCoordinator {
         let stored = state.series.first {
           Self.seriesKey($0.provider, $0.fingerprint, $0.windowID) == key
         }
-        if judge,
+        // The record and the watermark from before this chunk is remembered.
+        if judge, let chunkOldest = series.points.map(\.bucketStart).min(),
           QuotaHistorySync.rowsLost(
             recordedOldest: stored?.oldestBucketStart,
+            watermark: stored?.newestBucketStart,
+            chunkOldest: chunkOldest,
             answer: answered.map { .oldest($0.oldestBucketStart) } ?? .absent,
             durationSeconds: series.durationSeconds,
             now: now
@@ -641,13 +645,13 @@ final class QuotaHistoryCoordinator {
         stored.newestBucketStart = latest
       }
     }
-    if let current = stored.oldestBucketStart,
-      !QuotaHistorySync.oldestIsLive(current, durationSeconds: series.durationSeconds, now: now)
-    {
-      stored.oldestBucketStart = nil
-    }
     if let earliest = series.points.map(\.bucketStart).min() {
-      stored.oldestBucketStart = min(stored.oldestBucketStart ?? earliest, earliest)
+      stored.oldestBucketStart = QuotaHistorySync.reseedOldest(
+        stored.oldestBucketStart,
+        chunkOldest: earliest,
+        durationSeconds: series.durationSeconds,
+        now: now
+      )
     }
     for point in series.points {
       let bucket = QuotaHistorySync.Bucket(

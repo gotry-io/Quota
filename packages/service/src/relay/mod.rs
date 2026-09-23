@@ -5187,18 +5187,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    #[test]
-    fn quota_history_backfills_a_series_again_when_relay_answers_a_newer_oldest() {
-        let now = chrono::Utc::now();
-        let earlier = now - chrono::Duration::hours(2);
+    /// A signed-in state with `history.sync` on, one global five-hour subscription, and these
+    /// local samples (all with the same reset two hours after `now`).
+    fn history_gap_state(
+        now: chrono::DateTime<chrono::Utc>,
+        samples: &[(chrono::DateTime<chrono::Utc>, f64)],
+    ) -> (std::path::PathBuf, Arc<crate::state::StateStore>, String) {
         let stamp = |instant: chrono::DateTime<chrono::Utc>| {
             instant.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         };
-        let bucket = |instant: chrono::DateTime<chrono::Utc>| {
-            crate::history::quota_history_bucket_start_utc(&stamp(instant), 18_000).expect("bucket")
-        };
         let resets = stamp(now + chrono::Duration::hours(2));
-        let series_key = "codex\u{0}account_test\u{0}five_hour";
         let root = std::env::temp_dir().join(format!("quota-history-gap-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).expect("root");
         let state = Arc::new(crate::state::StateStore::open(&root).expect("state"));
@@ -5211,19 +5209,19 @@ mod tests {
             "global",
             None,
         );
-        for (instant, used) in [(earlier, 30.0), (now, 42.5)] {
+        for (instant, used) in samples {
             state
                 .record_quota_samples(
                     &key,
                     "codex",
-                    &stamp(instant),
+                    &stamp(*instant),
                     &[serde_json::json!({
                         "id": "five_hour",
                         "used_percent": used,
                         "resets_at": resets,
                         "duration_seconds": 18000
                     })],
-                    instant,
+                    *instant,
                 )
                 .expect("sample");
         }
@@ -5264,6 +5262,37 @@ mod tests {
         state
             .set_account_settings_cache("account_1", Some("\"3\""), &document)
             .expect("settings");
+        (root, state, resets)
+    }
+
+    fn history_gap_answer(newest: &str, oldest: &str) -> Value {
+        serde_json::json!({
+            "protocol_version": MANAGED_DATA_PROTOCOL,
+            "series": [{
+                "provider": "codex",
+                "fingerprint": "account_test",
+                "window_id": "five_hour",
+                "bucket_start": newest,
+                "oldest_bucket_start": oldest
+            }]
+        })
+    }
+
+    fn history_bucket(instant: chrono::DateTime<chrono::Utc>) -> String {
+        crate::history::quota_history_bucket_start_utc(
+            &instant.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            18_000,
+        )
+        .expect("bucket")
+    }
+
+    #[test]
+    fn quota_history_backfills_a_series_again_when_relay_answers_a_newer_oldest() {
+        let now = chrono::Utc::now();
+        let earlier = now - chrono::Duration::hours(2);
+        let bucket = history_bucket;
+        let series_key = "codex\u{0}account_test\u{0}five_hour";
+        let (root, state, resets) = history_gap_state(now, &[(earlier, 30.0), (now, 42.5)]);
         // This on-period already uploaded the earlier bucket. The switch then went off and on
         // on the website, so Relay holds nothing older than what this collection sends.
         let mut record = crate::state::QuotaHistorySyncRecord {
@@ -5282,21 +5311,13 @@ mod tests {
         state
             .set_quota_history_sync("account_1", &record)
             .expect("record");
-        let answer = |oldest: &str| {
-            serde_json::json!({
-                "protocol_version": MANAGED_DATA_PROTOCOL,
-                "series": [{
-                    "provider": "codex",
-                    "fingerprint": "account_test",
-                    "window_id": "five_hour",
-                    "bucket_start": bucket(now),
-                    "oldest_bucket_start": oldest
-                }]
-            })
-        };
         let (origin, server) = spawn_bounded_mock_server(vec![
-            http_json(200, None, &answer(&bucket(now))),
-            http_json(200, None, &answer(&bucket(earlier))),
+            http_json(200, None, &history_gap_answer(&bucket(now), &bucket(now))),
+            http_json(
+                200,
+                None,
+                &history_gap_answer(&bucket(now), &bucket(earlier)),
+            ),
         ]);
         let manager = AccountManager::new(
             Arc::new(RelayClient::for_test(&origin).expect("client")),
@@ -5320,9 +5341,15 @@ mod tests {
         // upload is all that is sent.
         state
             .record_quota_samples(
-                &key,
+                &crate::protocol::QuotaOverviewIdentity::selector_for(
+                    "codex",
+                    "account_test",
+                    "global",
+                    None,
+                ),
                 "codex",
-                &stamp(now + chrono::Duration::seconds(1)),
+                &(now + chrono::Duration::seconds(1))
+                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                 &[serde_json::json!({
                     "id": "five_hour",
                     "used_percent": 50,
@@ -5332,8 +5359,11 @@ mod tests {
                 now + chrono::Duration::seconds(1),
             )
             .expect("sample");
-        let (origin, server) =
-            spawn_bounded_mock_server(vec![http_json(200, None, &answer(&bucket(earlier)))]);
+        let (origin, server) = spawn_bounded_mock_server(vec![http_json(
+            200,
+            None,
+            &history_gap_answer(&bucket(now), &bucket(earlier)),
+        )]);
         let manager = AccountManager::new(
             Arc::new(RelayClient::for_test(&origin).expect("client")),
             state.clone(),
@@ -5343,6 +5373,60 @@ mod tests {
         let sent = server.join().expect("server");
         assert_eq!(sent.len(), 1, "{sent:?}");
         assert!(!sent[0].contains(&bucket(earlier)), "{}", sent[0]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn quota_history_falls_back_to_the_watermark_when_the_recorded_oldest_is_not_live() {
+        let now = chrono::Utc::now();
+        let first = now - chrono::Duration::hours(3);
+        let confirmed = now - chrono::Duration::hours(2);
+        let bucket = history_bucket;
+        let series_key = "codex\u{0}account_test\u{0}five_hour";
+        let (root, state, resets) =
+            history_gap_state(now, &[(first, 30.0), (confirmed, 35.0), (now, 42.5)]);
+        // The recorded oldest is past its span (a backfill seeds it near now − span), so only
+        // the watermark Relay confirmed can say the rows went. The confirmed bucket's value is
+        // already uploaded, so this collection sends only the newer one.
+        let mut record = crate::state::QuotaHistorySyncRecord {
+            sync: true,
+            backfill_done: true,
+            ..Default::default()
+        };
+        record.series.insert(
+            series_key.to_owned(),
+            crate::state::QuotaHistorySeriesRecord {
+                watermark: Some(bucket(confirmed)),
+                oldest: Some(history_bucket(now - chrono::Duration::hours(48))),
+                previous: vec![crate::history::QuotaHistorySyncedPoint {
+                    resets_at: resets.clone(),
+                    bucket_start: bucket(confirmed),
+                    used_percent: 35.0,
+                }],
+            },
+        );
+        state
+            .set_quota_history_sync("account_1", &record)
+            .expect("record");
+        let (origin, server) = spawn_bounded_mock_server(vec![
+            http_json(200, None, &history_gap_answer(&bucket(now), &bucket(now))),
+            http_json(200, None, &history_gap_answer(&bucket(now), &bucket(first))),
+        ]);
+        let manager = AccountManager::new(
+            Arc::new(RelayClient::for_test(&origin).expect("client")),
+            state.clone(),
+            "Test Mac".to_owned(),
+        );
+        let cancel = AtomicBool::new(false);
+        manager.sync_quota_history_after_collection(&cancel);
+        let sent = server.join().expect("server");
+        assert_eq!(sent.len(), 2, "{sent:?}");
+        assert!(!sent[0].contains(&bucket(confirmed)), "{}", sent[0]);
+        assert!(sent[1].contains(&bucket(first)), "{}", sent[1]);
+        assert!(sent[1].contains(&bucket(confirmed)), "{}", sent[1]);
+        let record = state.quota_history_sync("account_1").expect("record");
+        let series = record.series.get(series_key).expect("series");
+        assert_eq!(series.oldest.as_deref(), Some(bucket(first).as_str()));
         let _ = std::fs::remove_dir_all(&root);
     }
 

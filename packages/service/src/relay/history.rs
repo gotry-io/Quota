@@ -15,9 +15,9 @@ use crate::catalog::ProviderId;
 use crate::history::{
     MAXIMUM_QUOTA_HISTORY_POINTS_PER_UPLOAD, MAXIMUM_QUOTA_HISTORY_UPLOAD_BYTES,
     QuotaHistoryLocalSample, QuotaHistorySeriesInput, QuotaHistorySyncedPoint,
-    chunk_quota_history_upload, history_sync_enabled, plan_quota_history_upload,
-    quota_history_oldest_is_live, quota_history_rows_lost, quota_history_series_key,
-    whole_second_utc,
+    QuotaHistoryUploadAnswer, chunk_quota_history_upload, history_sync_enabled,
+    plan_quota_history_upload, quota_history_reseed_oldest, quota_history_rows_lost,
+    quota_history_series_key, whole_second_utc,
 };
 use crate::protocol::{ComponentName, ErrorCode, QuotaOverviewIdentity, RecoveryAction};
 use crate::service::BackendError;
@@ -566,12 +566,13 @@ fn remember_chunk(record: &mut QuotaHistorySyncRecord, chunk: &Value, now: &str)
             .get("duration_seconds")
             .and_then(Value::as_i64)
             .unwrap_or(0);
-        if slot
-            .oldest
-            .as_deref()
-            .is_some_and(|oldest| !quota_history_oldest_is_live(oldest, duration_seconds, now))
-        {
-            slot.oldest = None;
+        if let Some(chunk_oldest) = chunk_series_oldest(series) {
+            slot.oldest = Some(quota_history_reseed_oldest(
+                slot.oldest.as_deref(),
+                &chunk_oldest,
+                duration_seconds,
+                now,
+            ));
         }
         for point in series
             .get("points")
@@ -586,13 +587,6 @@ fn remember_chunk(record: &mut QuotaHistorySyncRecord, chunk: &Value, now: &str)
             ) else {
                 continue;
             };
-            if slot
-                .oldest
-                .as_deref()
-                .is_none_or(|oldest| whole_second_utc(bucket_start) < whole_second_utc(oldest))
-            {
-                slot.oldest = Some(bucket_start.to_owned());
-            }
             remember_point(
                 slot,
                 QuotaHistorySyncedPoint {
@@ -603,6 +597,19 @@ fn remember_chunk(record: &mut QuotaHistorySyncRecord, chunk: &Value, now: &str)
             );
         }
     }
+}
+
+/// The oldest `bucket_start` one series of a chunk sent.
+fn chunk_series_oldest(series: &Value) -> Option<String> {
+    series
+        .get("points")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|point| point.get("bucket_start").and_then(Value::as_str))
+        .filter_map(|bucket_start| Some((whole_second_utc(bucket_start)?, bucket_start)))
+        .min_by_key(|(instant, _)| *instant)
+        .map(|(_, bucket_start)| bucket_start.to_owned())
 }
 
 fn remember_point(slot: &mut QuotaHistorySeriesRecord, point: QuotaHistorySyncedPoint) {
@@ -656,10 +663,13 @@ fn lost_series(
             continue;
         };
         let key = quota_history_series_key(provider, fingerprint, window_id);
-        let recorded = record
-            .series
-            .get(&key)
-            .and_then(|slot| slot.oldest.as_deref());
+        let Some(chunk_oldest) = chunk_series_oldest(series) else {
+            continue;
+        };
+        // Both from before this chunk is remembered.
+        let slot = record.series.get(&key);
+        let recorded = slot.and_then(|slot| slot.oldest.as_deref());
+        let watermark = slot.and_then(|slot| slot.watermark.as_deref());
         let answer = answered
             .iter()
             .find(|candidate| {
@@ -667,12 +677,23 @@ fn lost_series(
                     && candidate.get("fingerprint").and_then(Value::as_str) == Some(fingerprint)
                     && candidate.get("window_id").and_then(Value::as_str) == Some(window_id)
             })
-            .map(|candidate| candidate.get("oldest_bucket_start").and_then(Value::as_str));
+            .map_or(QuotaHistoryUploadAnswer::Absent, |candidate| {
+                QuotaHistoryUploadAnswer::Oldest(
+                    candidate.get("oldest_bucket_start").and_then(Value::as_str),
+                )
+            });
         let duration_seconds = series
             .get("duration_seconds")
             .and_then(Value::as_i64)
             .unwrap_or(0);
-        if quota_history_rows_lost(recorded, answer, duration_seconds, now) {
+        if quota_history_rows_lost(
+            recorded,
+            watermark,
+            &chunk_oldest,
+            answer,
+            duration_seconds,
+            now,
+        ) {
             lost.push(key);
         }
     }

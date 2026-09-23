@@ -487,6 +487,54 @@ struct QuotaHistoryTests {
     #expect(historyPutBodies(transport).count == 2)
   }
 
+  @Test func aRecordPastItsSpanFallsBackToTheWatermarkBeforeThisChunk() async throws {
+    let watermarks = MemoryQuotaHistoryWatermarkStore()
+    let resets = Fixtures.date("2026-09-21T15:00:00Z")
+    let confirmed = Fixtures.date("2026-09-21T10:00:00Z")
+    // The recorded oldest is 48 h old, so it is no longer evidence. Relay confirmed the 10:00
+    // bucket, which is already uploaded, so this pass sends only 10:15; an answer that names
+    // 10:15 as the oldest says the 10:00 row went.
+    try watermarks.save(
+      QuotaHistoryWatermarkFile(
+        accounts: [
+          "account_01": QuotaHistoryWatermarkFile.Account(
+            observedSync: true,
+            series: [
+              QuotaHistoryWatermarkFile.Series(
+                provider: "codex",
+                fingerprint: "account_test",
+                windowID: "five_hour",
+                newestBucketStart: confirmed,
+                lastUploaded: [
+                  QuotaHistorySync.Bucket(
+                    resetsAt: resets,
+                    bucketStart: confirmed,
+                    usedPercent: 14.5
+                  )
+                ],
+                oldestBucketStart: Fixtures.date("2026-09-19T10:00:00Z")
+              )
+            ]
+          )
+        ]
+      )
+    )
+    let transport = HistoryTransport(
+      historyOldest: ["2026-09-21T10:15:00Z", "2026-09-21T10:00:00Z"]
+    )
+    let model = historyModel(transport: transport, watermarks: watermarks)
+
+    await model.restore()
+    await model.waitForDetachedLaunchWork()
+
+    let bodies = historyPutBodies(transport)
+    #expect(bodies.count == 2)
+    #expect(bodies.first.map { !$0.contains("2026-09-21T10:00:00Z") } == true)
+    #expect(bodies.last.map { $0.contains("2026-09-21T10:00:00Z") } == true)
+    let stored = try #require(watermarks.load().accounts["account_01"]?.series.first)
+    #expect(stored.oldestBucketStart == confirmed)
+  }
+
   @Test func cachedSyncOnOfflineKeepsTheToggleAndTheAccountSeries() async throws {
     let reads = MemoryQuotaHistoryReadStore()
     try reads.save(

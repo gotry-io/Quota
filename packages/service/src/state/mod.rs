@@ -185,7 +185,8 @@ pub struct QuotaHistorySeriesRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub watermark: Option<String>,
     /// The oldest bucket this device uploaded in the current on-period that Relay must still
-    /// hold. Re-seeded from the next accepted upload once its span is nearly over. A record
+    /// hold. Once it stops being live the watermark is the evidence, and the next accepted
+    /// chunk re-seeds it (`reseed_oldest` in the history sync fixture). A record
     /// written before this field has none, and starts from its next upload.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oldest: Option<String>,

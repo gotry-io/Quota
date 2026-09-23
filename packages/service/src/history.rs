@@ -684,44 +684,80 @@ fn quota_history_upload_body(generation: u64, points: &[&QuotaHistoryUploadPoint
     })
 }
 
-/// How long before its expiry a recorded oldest bucket stops being evidence. Relay sweeps
-/// expired rows hourly on its own clock, so a bucket this close to the end of its span may
-/// already be gone without anything having been lost.
+/// How long before its expiry a bucket stops counting as one Relay must still hold. Relay never
+/// sweeps a row before its `expires_at`, but a device clock behind Relay's, or an `expires_at`
+/// another device shortened by declaring a shorter duration, can make a row go earlier than
+/// this device expects.
 pub const QUOTA_HISTORY_OLDEST_SLACK_SECONDS: i64 = 3_600;
 
-/// Whether Relay must still hold a bucket this device uploaded: its span has more than
-/// [`QUOTA_HISTORY_OLDEST_SLACK_SECONDS`] left at `now`.
-pub fn quota_history_oldest_is_live(oldest: &str, duration_seconds: i64, now: &str) -> bool {
-    let (Some(oldest), Some(now)) = (instant_millis(oldest), instant_millis(now)) else {
+/// Relay must still hold this bucket: `bucket + span > now + 1 h`.
+pub fn quota_history_oldest_is_live(bucket_start: &str, duration_seconds: i64, now: &str) -> bool {
+    let (Some(bucket), Some(now)) = (instant_millis(bucket_start), instant_millis(now)) else {
         return false;
     };
     let span_ms = quota_history_span_seconds(duration_seconds).saturating_mul(1_000);
-    oldest.saturating_add(span_ms) > now.saturating_add(QUOTA_HISTORY_OLDEST_SLACK_SECONDS * 1_000)
+    bucket.saturating_add(span_ms) > now.saturating_add(QUOTA_HISTORY_OLDEST_SLACK_SECONDS * 1_000)
 }
 
-/// Relay lost rows of a series this device uploaded (ADR 0062, amendment 2026-09-23): the
-/// oldest bucket the device uploaded in this on-period is still live, and the answer to an
-/// upload that named the series either leaves the series out or answers a later
-/// `oldest_bucket_start`. An answer without `oldest_bucket_start` (an older Relay) says nothing.
+/// What an upload answer says about one series the upload sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuotaHistoryUploadAnswer<'a> {
+    /// The answer leaves the series out.
+    Absent,
+    /// Its `oldest_bucket_start`, or `None` from a Relay that does not send one.
+    Oldest(Option<&'a str>),
+}
+
+/// Relay lost rows of a series this device uploaded (ADR 0062, amendment 2026-09-23).
+///
+/// The evidence is the oldest bucket uploaded in this on-period while it is live, otherwise the
+/// watermark from before this chunk while it is live and every point of the chunk is later than
+/// it. A series the answer leaves out is always a loss: the answer names every series sent. An
+/// answer without `oldest_bucket_start` (an older Relay) judges nothing. The fixture's
+/// `rows_lost` section is the contract.
 pub fn quota_history_rows_lost(
     recorded_oldest: Option<&str>,
-    answered: Option<Option<&str>>,
+    watermark: Option<&str>,
+    chunk_oldest: &str,
+    answer: QuotaHistoryUploadAnswer<'_>,
     duration_seconds: i64,
     now: &str,
 ) -> bool {
-    let Some(recorded) = recorded_oldest else {
-        return false;
+    let answered = match answer {
+        QuotaHistoryUploadAnswer::Absent => return true,
+        QuotaHistoryUploadAnswer::Oldest(None) => return false,
+        QuotaHistoryUploadAnswer::Oldest(Some(answered)) => answered,
     };
-    if !quota_history_oldest_is_live(recorded, duration_seconds, now) {
-        return false;
+    let evidence = recorded_oldest
+        .filter(|recorded| quota_history_oldest_is_live(recorded, duration_seconds, now))
+        .or_else(|| {
+            watermark.filter(|watermark| {
+                quota_history_oldest_is_live(watermark, duration_seconds, now)
+                    && instant_millis(chunk_oldest) > instant_millis(watermark)
+            })
+        });
+    match (evidence.and_then(instant_millis), instant_millis(answered)) {
+        (Some(evidence), Some(answered)) => answered > evidence,
+        _ => false,
     }
-    match answered {
-        None => true,
-        Some(None) => false,
-        Some(Some(answered)) => match (instant_millis(answered), instant_millis(recorded)) {
-            (Some(answered), Some(recorded)) => answered > recorded,
-            _ => false,
-        },
+}
+
+/// The recorded oldest after an accepted chunk: the older of a live record and the chunk's
+/// oldest point, else the chunk's oldest point. The fixture's `reseed_oldest` section.
+pub fn quota_history_reseed_oldest(
+    recorded_oldest: Option<&str>,
+    chunk_oldest: &str,
+    duration_seconds: i64,
+    now: &str,
+) -> String {
+    match recorded_oldest {
+        Some(recorded)
+            if quota_history_oldest_is_live(recorded, duration_seconds, now)
+                && instant_millis(recorded) <= instant_millis(chunk_oldest) =>
+        {
+            recorded.to_owned()
+        }
+        _ => chunk_oldest.to_owned(),
     }
 }
 
@@ -733,60 +769,6 @@ pub fn quota_history_series_key(provider: &str, fingerprint: &str, window_id: &s
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn relay_lost_rows_only_while_the_recorded_oldest_is_live() {
-        let now = "2026-09-23T12:00:00Z";
-        let recorded = Some("2026-09-23T08:00:00Z");
-        // Relay answers a later oldest than this device uploaded: rows were lost.
-        assert!(quota_history_rows_lost(
-            recorded,
-            Some(Some("2026-09-23T11:45:00Z")),
-            18_000,
-            now
-        ));
-        // The same, or an older one: nothing lost.
-        assert!(!quota_history_rows_lost(
-            recorded,
-            Some(Some("2026-09-23T08:00:00Z")),
-            18_000,
-            now
-        ));
-        assert!(!quota_history_rows_lost(
-            recorded,
-            Some(Some("2026-09-22T08:00:00Z")),
-            18_000,
-            now
-        ));
-        // The series this upload named is missing from the answer.
-        assert!(quota_history_rows_lost(recorded, None, 18_000, now));
-        // An older Relay sends no oldest_bucket_start: nothing is judged.
-        assert!(!quota_history_rows_lost(recorded, Some(None), 18_000, now));
-        // Nothing recorded yet.
-        assert!(!quota_history_rows_lost(
-            None,
-            Some(Some("2026-09-23T11:45:00Z")),
-            18_000,
-            now
-        ));
-        // Within an hour of the end of its 48 h span Relay may already have swept it.
-        assert!(!quota_history_rows_lost(
-            Some("2026-09-21T12:30:00Z"),
-            Some(Some("2026-09-23T11:45:00Z")),
-            18_000,
-            now
-        ));
-        assert!(quota_history_oldest_is_live(
-            "2026-09-21T13:15:00Z",
-            18_000,
-            now
-        ));
-        assert!(!quota_history_oldest_is_live(
-            "2026-09-21T12:45:00Z",
-            18_000,
-            now
-        ));
-    }
 
     const FIXTURE: &str = include_str!("../../protocol/fixtures/quota-history-conformance.json");
 
@@ -1092,6 +1074,52 @@ mod tests {
                 })
                 .collect(),
         )
+    }
+
+    #[test]
+    fn quota_history_rows_lost_and_reseed_match_the_shared_fixture() {
+        let fixture: Value = serde_json::from_str(SYNC_FIXTURE).expect("fixture");
+        let cases = fixture["rows_lost"].as_array().expect("rows_lost");
+        assert!(cases.len() >= 15, "rows_lost cases");
+        for case in cases {
+            let name = case["name"].as_str().expect("name");
+            let answer = if case["answer"].as_str() == Some("absent") {
+                QuotaHistoryUploadAnswer::Absent
+            } else {
+                QuotaHistoryUploadAnswer::Oldest(
+                    case["answer"]
+                        .get("oldest_bucket_start")
+                        .and_then(Value::as_str),
+                )
+            };
+            assert_eq!(
+                quota_history_rows_lost(
+                    case["recorded_oldest"].as_str(),
+                    case["watermark"].as_str(),
+                    case["chunk_oldest"].as_str().expect("chunk_oldest"),
+                    answer,
+                    case["duration_seconds"].as_i64().expect("duration"),
+                    case["now"].as_str().expect("now"),
+                ),
+                case["expected"].as_bool().expect("expected"),
+                "{name}"
+            );
+        }
+        let cases = fixture["reseed_oldest"].as_array().expect("reseed_oldest");
+        assert!(cases.len() >= 4, "reseed_oldest cases");
+        for case in cases {
+            let name = case["name"].as_str().expect("name");
+            assert_eq!(
+                quota_history_reseed_oldest(
+                    case["recorded_oldest"].as_str(),
+                    case["chunk_oldest"].as_str().expect("chunk_oldest"),
+                    case["duration_seconds"].as_i64().expect("duration"),
+                    case["now"].as_str().expect("now"),
+                ),
+                case["expected"].as_str().expect("expected"),
+                "{name}"
+            );
+        }
     }
 
     #[test]

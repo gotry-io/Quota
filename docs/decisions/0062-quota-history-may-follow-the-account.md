@@ -61,8 +61,8 @@ bucket of clock slack, or more than one bucket ahead of now, is `400 invalid_req
 on `(device_id, provider, fingerprint, window_id, resets_at, bucket_start)` keeping the larger
 `used_percent` and writing `duration_seconds` / `expires_at` even when the percent is not
 larger (`updated_at` stays when nothing changed). The answer is the newest `bucket_start`
-Relay now holds per series, and (amendment 2026-09-23) the oldest, `oldest_bucket_start`. An Account that already holds 50 000 rows is `413
-quota_history_full`.
+Relay now holds per series, and (amendment 2026-09-23) the oldest, `oldest_bucket_start`.
+An Account that already holds 50 000 rows is `413 quota_history_full`.
 
 The span of a window is computed from the `duration_seconds` the uploading device declares.
 Relay does not know a provider's windows. The latest declaration for
@@ -116,17 +116,30 @@ upload only newer points, and the Account would miss the span for good. So:
 - The upload answer names, per series the upload sent, `oldest_bucket_start` beside
   `bucket_start`: the oldest bucket Relay holds **from this device** (`MIN(bucket_start)` in
   the same query as the newest, a search of the primary key on `device_id`). A client reads
-  it as optional (ADR 0023): an older Relay does not send it, and then nothing below applies.
+  it as optional (ADR 0023): an older Relay does not send it.
 - A device records, per series, the oldest bucket it has uploaded in the current on-period.
-  Off, sign-out, and `409 history_sync_off` clear it with the watermark.
-- **Relay lost rows** when that record is still live and the answer to an upload that sent
-  the series names a later `oldest_bucket_start`, or leaves the series out. The device then
-  clears that series' watermark and its last uploaded buckets, backfills its span once in the
-  same pass, and continues. The rest of the pass is planned again from the cleared record.
-- *Live* is: the recorded bucket plus its window's span is more than one hour after now. Relay
-  sweeps expired rows hourly on its own clock, so a bucket in its last hour may be gone
-  without anything having been lost. A record that is no longer live is re-seeded from the
-  next accepted upload's oldest bucket; detection resumes from that point.
+  After an accepted chunk the record is the older of itself (while live) and the chunk's
+  oldest point, else the chunk's oldest point. Off, sign-out, and `409 history_sync_off` clear
+  it with the watermark.
+- A bucket is **live** while `bucket_start + span > now + 1 h`. Relay never sweeps a row
+  before its `expires_at`; the hour covers a device clock behind Relay's and an `expires_at`
+  that another device shortened by declaring a shorter `duration_seconds` for the window.
+- The **evidence** for a series is the recorded oldest while it is live; otherwise the
+  watermark from before this chunk (the newest bucket Relay confirmed) while it is live and
+  every point of the chunk is later than it. The fallback matters: a backfill seeds the record
+  near `now − span`, so without it most of the record's life would judge nothing.
+- **Relay lost rows** when the answer leaves out a series the upload sent — on any Relay
+  version, since the answer is always filtered to the series sent — or names an
+  `oldest_bucket_start` later than the evidence. An answer without `oldest_bucket_start`
+  judges nothing else. The device then clears that series' watermark and its last uploaded
+  buckets, backfills its span once in the same pass, and continues. The rest of the pass is
+  planned again from the cleared record; the second pass does not judge.
+- What is still not seen: a loss once both the record and the last confirmed watermark have
+  stopped being live, and before the next upload — a device that has not uploaded a series
+  for most of its span. The Account misses that span until the rows age out anyway.
 
-`quota_history_rows_lost` in `packages/service` and `QuotaHistorySync.rowsLost` in
-`packages/apple-shared` state the rule; QuotaBar's helper and the iOS coordinator apply it.
+The contract is the `rows_lost` and `reseed_oldest` sections of
+`packages/protocol/fixtures/quota-history-sync-conformance.json`, answered by
+`quotaHistoryRowsLost` in `packages/quota-model`, `quota_history_rows_lost` in
+`packages/service`, and `QuotaHistorySync.rowsLost` in `packages/apple-shared`. QuotaBar's
+helper and the iOS coordinator apply it.

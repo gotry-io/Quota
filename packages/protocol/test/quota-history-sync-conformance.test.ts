@@ -37,6 +37,23 @@ const fixture = conformanceJson as unknown as {
   retention_days: number;
   bucket: BucketCase[];
   merge: MergeCase[];
+  rows_lost: {
+    name: string;
+    now: string;
+    duration_seconds: number;
+    recorded_oldest: string | null;
+    watermark: string | null;
+    chunk_oldest: string;
+    answer: "absent" | { oldest_bucket_start?: string };
+  }[];
+  reseed_oldest: {
+    name: string;
+    now: string;
+    duration_seconds: number;
+    recorded_oldest: string | null;
+    chunk_oldest: string;
+    expected: string;
+  }[];
 };
 
 describe("quota history sync fixture", () => {
@@ -89,6 +106,28 @@ describe("quota history sync fixture", () => {
           true,
         );
         expect(point.window_id.length, testCase.name).toBeGreaterThan(0);
+      }
+    }
+    for (const testCase of fixture.rows_lost) {
+      const answered =
+        testCase.answer === "absent" ? undefined : testCase.answer.oldest_bucket_start;
+      const instants = [testCase.now, testCase.chunk_oldest, testCase.recorded_oldest];
+      instants.push(testCase.watermark, answered ?? null);
+      for (const instant of instants) {
+        if (instant === null) continue;
+        expect(Rfc3339InstantSchema.safeParse(instant).success, testCase.name).toBe(true);
+      }
+      for (const bucket of [testCase.chunk_oldest, testCase.recorded_oldest, testCase.watermark]) {
+        if (bucket === null) continue;
+        expect(
+          isAlignedQuotaHistoryBucketStart(bucket, testCase.duration_seconds),
+          testCase.name,
+        ).toBe(true);
+      }
+    }
+    for (const testCase of fixture.reseed_oldest) {
+      for (const instant of [testCase.now, testCase.chunk_oldest, testCase.expected]) {
+        expect(Rfc3339InstantSchema.safeParse(instant).success, testCase.name).toBe(true);
       }
     }
   });

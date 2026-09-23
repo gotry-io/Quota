@@ -76,9 +76,11 @@ shape of a released contract still moves its version.
   ([ADR 0061](../../docs/decisions/0061-alert-policy-and-the-budget-follow-the-account.md),
   [ADR 0062](../../docs/decisions/0062-quota-history-may-follow-the-account.md)).
 - `fixtures/quota-history-sync-conformance.json` states how local samples downsample into upload
-  buckets and how several devices' buckets merge. The span of a window is
+  buckets, how several devices' buckets merge, and how a device reads an upload answer to learn
+  Relay lost its rows (`rows_lost`, `reseed_oldest`). The span of a window is
   `min(30 d, max(48 h, 4 × duration_seconds))`. `packages/quota-model` (`bucketQuotaSamples`,
-  `mergeQuotaHistory`, `quotaHistorySpanSeconds`) answers it; Swift and Rust answer the same file
+  `mergeQuotaHistory`, `quotaHistorySpanSeconds`, `quotaHistoryRowsLost`,
+  `quotaHistoryReseedOldest`) answers it; Swift and Rust answer the same file
   ([ADR 0062](../../docs/decisions/0062-quota-history-may-follow-the-account.md)).
 - A Usage upload names whole UTC hours. `UsageRow` carries what it measures and no instant: the hour
   that carries it says when, and its `scan_version` says whether this reading of that hour is newer
