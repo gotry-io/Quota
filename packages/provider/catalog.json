@@ -139,7 +139,7 @@
       },
       "capabilities": {
         "tier": "first_class",
-        "known_gaps": ["pricing.api_equivalent"],
+        "known_gaps": [],
         "validated": {
           "quota.five_hour": {
             "kind": "fixture",
@@ -189,8 +189,10 @@
             "note": "the dated status-page table in provider-collection.md"
           },
           "pricing.api_equivalent": {
-            "kind": "unverified",
-            "note": "no pricing-conformance row and no test prices an anthropic_direct Claude row"
+            "kind": "fixture",
+            "fixture": "packages/protocol/fixtures/pricing-conformance.json",
+            "pointer": "/rows/claude_opus_5",
+            "note": "a verbatim slice of the Relay's claude-opus-5 entries; claude_code_log_prices_anthropic_direct_rows_at_the_list_rate prices a parsed log end to end"
           },
           "pricing.source_reported": {
             "kind": "test",

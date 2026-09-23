@@ -31,7 +31,7 @@ carry its human page.
 | Provider | Tier | Quota windows | Usage | Collection | Account sync | Status page | Cost |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | [Codex](codex.md) | First-class | 5-hour F · weekly F · monthly T · balance T | local logs F | CLI credentials T · browser session (macOS) F · web session (iOS) F | uploads to the Account F | Statuspage v2 L | API-equivalent F |
-| [Claude Code](claude.md) | First-class | 5-hour F · weekly F · balance T | local logs F | CLI credentials T · browser session (macOS) F · web session (iOS) F | uploads to the Account F | Statuspage v2 L | API-equivalent U · source-reported T |
+| [Claude Code](claude.md) | First-class | 5-hour F · weekly F · balance T | local logs F | CLI credentials T · browser session (macOS) F · web session (iOS) F | uploads to the Account F | Statuspage v2 L | API-equivalent F · source-reported T |
 | [Grok](grok.md) | Best-effort | weekly T · monthly F · plan cycle F · balance T | local logs F | CLI credentials T · browser session (macOS) F · web session (iOS) F | uploads to the Account F | — | API-equivalent F · source-reported T |
 | [OpenRouter](openrouter.md) | Best-effort | daily F · weekly U · monthly U · balance F | — | API key T | uploads to the Account F | — | — |
 | [DeepSeek](deepseek.md) | Best-effort | balance T | — | API key T | uploads to the Account F | — | — |
@@ -48,7 +48,7 @@ Validated cells per provider:
 | Provider | Tier | F | T | L | U |
 | --- | --- | --- | --- | --- | --- |
 | `codex` | First-class | 7 | 3 | 1 | 0 |
-| `claude` | First-class | 6 | 3 | 1 | 1 |
+| `claude` | First-class | 7 | 3 | 1 | 0 |
 | `grok` | Best-effort | 7 | 4 | 0 | 0 |
 | `openrouter` | Best-effort | 3 | 1 | 0 | 2 |
 | `deepseek` | Best-effort | 1 | 2 | 0 | 0 |
@@ -88,6 +88,7 @@ a test, so evidence that is moved or rewritten cannot leave a stale claim behind
 | `claude` | `channel.web_session_ios` | F | [`packages/protocol/fixtures/provider-web-conformance.json`](../../packages/protocol/fixtures/provider-web-conformance.json) `/sources/claude` — QuotaProviderWeb answers the same fixture on the device |
 | `claude` | `account.sync` | F | [`packages/protocol/fixtures/wire-conformance.json`](../../packages/protocol/fixtures/wire-conformance.json) `/contracts/quota_snapshot_envelope/0` — one envelope contract for every id; the fixture case uses codex |
 | `claude` | `status.statuspage_v2` | L | 2026-09-06 — the dated status-page table in provider-collection.md |
+| `claude` | `pricing.api_equivalent` | F | [`packages/protocol/fixtures/pricing-conformance.json`](../../packages/protocol/fixtures/pricing-conformance.json) `/rows/claude_opus_5` — a verbatim slice of the Relay's claude-opus-5 entries; claude_code_log_prices_anthropic_direct_rows_at_the_list_rate prices a parsed log end to end |
 | `claude` | `pricing.source_reported` | T | [`packages/service/src/usage/tests.rs`](../../packages/service/src/usage/tests.rs) `parser_fixtures_preserve_normalized_fields_and_coverage` |
 | `grok` | `quota.weekly` | T | [`packages/service/src/providers/grok/mod.rs`](../../packages/service/src/providers/grok/mod.rs) `maps_weekly_billing_cycle` |
 | `grok` | `quota.monthly` | F | [`packages/protocol/fixtures/provider-web-conformance.json`](../../packages/protocol/fixtures/provider-web-conformance.json) `/cases/10/expect/snapshot/windows/0` |
@@ -153,7 +154,6 @@ list of defects.
 
 | Provider | Capability | What does cover it |
 | --- | --- | --- |
-| `claude` | `pricing.api_equivalent` | no pricing-conformance row and no test prices an anthropic_direct Claude row |
 | `openrouter` | `quota.weekly` | key_weekly comes from limit_reset; no fixture or test names that period |
 | `openrouter` | `quota.monthly` | key_monthly comes from limit_reset; no fixture or test names that period |
 | `kimi` | `channel.api_key` | no test resolves a Kimi API key; config.rs covers OpenRouter, DeepSeek and LiteLLM only |
@@ -174,7 +174,7 @@ only shrink: `--check` refuses an unverified cell the list does not name, and re
 that is no longer unverified.
 
 - `codex` — no gap. Every capability it has is F, T, or L.
-- `claude` — `pricing.api_equivalent`.
+- `claude` — no gap. Every capability it has is F, T, or L.
 
 ## Anchored keys
 

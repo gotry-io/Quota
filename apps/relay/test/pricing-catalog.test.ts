@@ -1,6 +1,9 @@
 import { calculateUsageCost, validatePricingCatalog } from "@gotry-io/quota-model";
 import type { DatedUsageRow } from "@gotry-io/quota-protocol";
 import { describe, expect, it } from "vitest";
+import pricingConformance from "../../../packages/protocol/fixtures/pricing-conformance.json" with {
+  type: "json",
+};
 import { PRICING_CATALOG, PRICING_CATALOG_ETAG } from "../src/pricing-catalog.ts";
 
 describe("managed pricing catalog", () => {
@@ -37,6 +40,18 @@ describe("managed pricing catalog", () => {
     // Pins the dimension expansion so a refactor cannot silently drop entries.
     expect(PRICING_CATALOG.entries).toHaveLength(236);
     expect(new Set(PRICING_CATALOG.entries.map((entry) => entry.entry_id)).size).toBe(236);
+  });
+
+  it("is the source of the pricing-conformance Claude catalog, entry for entry", () => {
+    // Every runtime that answers the shared fixture prices Claude with rates this catalog ships.
+    const slice = pricingConformance.catalogs.anthropic_claude.entries;
+    expect(slice.length).toBeGreaterThan(0);
+    for (const entry of slice) {
+      expect(
+        PRICING_CATALOG.entries.find((shipped) => shipped.entry_id === entry.entry_id),
+        entry.entry_id,
+      ).toEqual(entry);
+    }
   });
 
   it("prices Grok 4.5 short and long context rows", () => {

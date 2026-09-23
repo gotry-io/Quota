@@ -1,4 +1,5 @@
 {
+  "$comment": "Pricing outcomes every runtime answers: `packages/quota-model` (TypeScript) and `packages/service` `pricing.rs` (Rust). The `anthropic_claude` catalog is a verbatim slice of the Relay's shipped catalog (`apps/relay/src/pricing-catalog.ts`, revision official-2026-09-06-1; `apps/relay/test/pricing-catalog.test.ts` keeps it verbatim): claude-opus-5 at $5 input, $0.50 cache read, $6.25 5-minute cache write, $10 1-hour cache write, $25 output per million tokens and $0.01 per web search, from https://platform.claude.com/docs/en/about-claude/pricing (verified 2026-08-23); the inferred cache-write rate is the 5-minute rate, and the `us` entry is those rates × 1.1. Its rows are what the Claude Code parser emits: `input_tokens` counts uncached, cache-read and cache-write tokens together, so the priced row's $13.7075 is 200k uncached × $5 + 3M read × $0.50 + 100k 5m × $6.25 + 50k 1h × $10 + 10k inferred × $6.25 + 400k output × $25 + 2 searches × $0.01. Every other catalog is synthetic.",
   "version": 1,
   "catalogs": {
     "exact": {
@@ -292,6 +293,88 @@
           "verified_at": "2026-08-02T00:00:00Z"
         }
       ]
+    },
+    "anthropic_claude": {
+      "protocol_version": 2,
+      "revision": "conformance-v1",
+      "published_at": "2026-08-02T00:00:00Z",
+      "entries": [
+        {
+          "entry_id": "anthropic-claude-opus-5-standard-2026-07-24-any-standard-any-any",
+          "billing_channel": "anthropic_direct",
+          "model": "claude-opus-5",
+          "aliases": [],
+          "effective_from": "2026-07-24",
+          "effective_to": null,
+          "service_tier": "*",
+          "speed": "standard",
+          "inference_geo": "*",
+          "context_bucket": "*",
+          "currency": "USD",
+          "rates": {
+            "uncached_input_per_million": "5",
+            "cache_read_per_million": "0.5",
+            "cache_write_5m_per_million": "6.25",
+            "cache_write_1h_per_million": "10",
+            "cache_write_inferred_per_million": "6.25",
+            "output_per_million": "25",
+            "web_search_per_request": "0.01",
+            "web_fetch_per_request": "0"
+          },
+          "source_url": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "verified_at": "2026-08-23T00:00:00.000Z"
+        },
+        {
+          "entry_id": "anthropic-claude-opus-5-standard-2026-07-24-any-unknown-any-any",
+          "billing_channel": "anthropic_direct",
+          "model": "claude-opus-5",
+          "aliases": [],
+          "effective_from": "2026-07-24",
+          "effective_to": null,
+          "service_tier": "*",
+          "speed": "unknown",
+          "inference_geo": "*",
+          "context_bucket": "*",
+          "currency": "USD",
+          "rates": {
+            "uncached_input_per_million": "5",
+            "cache_read_per_million": "0.5",
+            "cache_write_5m_per_million": "6.25",
+            "cache_write_1h_per_million": "10",
+            "cache_write_inferred_per_million": "6.25",
+            "output_per_million": "25",
+            "web_search_per_request": "0.01",
+            "web_fetch_per_request": "0"
+          },
+          "source_url": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "verified_at": "2026-08-23T00:00:00.000Z"
+        },
+        {
+          "entry_id": "anthropic-claude-opus-5-standard-us-2026-07-24-standard-standard-us-any",
+          "billing_channel": "anthropic_direct",
+          "model": "claude-opus-5",
+          "aliases": [],
+          "effective_from": "2026-07-24",
+          "effective_to": null,
+          "service_tier": "standard",
+          "speed": "standard",
+          "inference_geo": "us",
+          "context_bucket": "*",
+          "currency": "USD",
+          "rates": {
+            "uncached_input_per_million": "5.5",
+            "cache_read_per_million": "0.55",
+            "cache_write_5m_per_million": "6.875",
+            "cache_write_1h_per_million": "11",
+            "cache_write_inferred_per_million": "6.875",
+            "output_per_million": "27.5",
+            "web_search_per_request": "0.01",
+            "web_fetch_per_request": "0"
+          },
+          "source_url": "https://platform.claude.com/docs/en/about-claude/pricing",
+          "verified_at": "2026-08-23T00:00:00.000Z"
+        }
+      ]
     }
   },
   "rows": {
@@ -493,6 +576,72 @@
       "web_search_requests": 0,
       "web_fetch_requests": 0,
       "source_cost_covered_requests": 0
+    },
+    "claude_opus_5": {
+      "date": "2026-08-02",
+      "agent": "claude_code",
+      "billing_channel": "anthropic_direct",
+      "channel_source": "agent_default",
+      "model": "claude-opus-5",
+      "context_bucket": "le_128k",
+      "service_tier": "standard",
+      "speed": "standard",
+      "inference_geo": "not_available",
+      "input_tokens": 3360000,
+      "cache_read_tokens": 3000000,
+      "cache_write_5m_tokens": 100000,
+      "cache_write_1h_tokens": 50000,
+      "cache_write_inferred_tokens": 10000,
+      "output_tokens": 400000,
+      "reasoning_tokens": 100000,
+      "requests": 120,
+      "web_search_requests": 2,
+      "web_fetch_requests": 1,
+      "source_cost_covered_requests": 0
+    },
+    "claude_opus_5_us": {
+      "date": "2026-08-02",
+      "agent": "claude_code",
+      "billing_channel": "anthropic_direct",
+      "channel_source": "agent_default",
+      "model": "claude-opus-5",
+      "context_bucket": "le_128k",
+      "service_tier": "standard",
+      "speed": "standard",
+      "inference_geo": "us",
+      "input_tokens": 1000000,
+      "cache_read_tokens": 0,
+      "cache_write_5m_tokens": 0,
+      "cache_write_1h_tokens": 0,
+      "cache_write_inferred_tokens": 0,
+      "output_tokens": 100000,
+      "reasoning_tokens": 0,
+      "requests": 1,
+      "web_search_requests": 0,
+      "web_fetch_requests": 0,
+      "source_cost_covered_requests": 0
+    },
+    "claude_unknown_model": {
+      "date": "2026-08-02",
+      "agent": "claude_code",
+      "billing_channel": "anthropic_direct",
+      "channel_source": "agent_default",
+      "model": "claude-not-cataloged",
+      "context_bucket": "le_128k",
+      "service_tier": "standard",
+      "speed": "standard",
+      "inference_geo": "not_available",
+      "input_tokens": 1000,
+      "cache_read_tokens": 0,
+      "cache_write_5m_tokens": 0,
+      "cache_write_1h_tokens": 0,
+      "cache_write_inferred_tokens": 0,
+      "output_tokens": 100,
+      "reasoning_tokens": 0,
+      "requests": 1,
+      "web_search_requests": 0,
+      "web_fetch_requests": 0,
+      "source_cost_covered_requests": 0
     }
   },
   "validation": [
@@ -518,6 +667,14 @@
       "expected": {
         "valid": false,
         "issue_codes": ["ambiguous_entries"]
+      }
+    },
+    {
+      "name": "shipped Claude catalog slice",
+      "catalog": "anthropic_claude",
+      "expected": {
+        "valid": true,
+        "issue_codes": []
       }
     }
   ],
@@ -582,6 +739,39 @@
       "name": "unnamed channel with no vendor-direct match is unknown_model",
       "catalog": "exact",
       "row": "unknown_channel_unknown_model",
+      "expected": {
+        "status": "unpriced",
+        "reason": "unknown_model"
+      }
+    },
+    {
+      "name": "Claude Code row prices at the Anthropic list rate",
+      "catalog": "anthropic_claude",
+      "row": "claude_opus_5",
+      "expected": {
+        "status": "priced",
+        "entry_id": "anthropic-claude-opus-5-standard-2026-07-24-any-standard-any-any",
+        "assumptions": [
+          "wildcard_service_tier",
+          "wildcard_inference_geo",
+          "wildcard_context_bucket"
+        ]
+      }
+    },
+    {
+      "name": "Claude Code row run in the US takes the US entry",
+      "catalog": "anthropic_claude",
+      "row": "claude_opus_5_us",
+      "expected": {
+        "status": "priced",
+        "entry_id": "anthropic-claude-opus-5-standard-us-2026-07-24-standard-standard-us-any",
+        "assumptions": ["wildcard_context_bucket"]
+      }
+    },
+    {
+      "name": "Claude model the catalog does not name is unpriced",
+      "catalog": "anthropic_claude",
+      "row": "claude_unknown_model",
       "expected": {
         "status": "unpriced",
         "reason": "unknown_model"
@@ -673,6 +863,79 @@
         "unpriced_rows": 0,
         "assumptions": ["vendor_official_price"],
         "unpriced": []
+      }
+    },
+    {
+      "name": "Claude Code row at the Anthropic list price",
+      "catalog": "anthropic_claude",
+      "mode": "calculate",
+      "rows": ["claude_opus_5"],
+      "expected": {
+        "mode": "calculate",
+        "basis": "calculated",
+        "status": "complete",
+        "amount_microusd": "13707500",
+        "catalog_revision": "conformance-v1",
+        "calculated_rows": 1,
+        "reported_rows": 0,
+        "unpriced_rows": 0,
+        "assumptions": [
+          "agent_default_channel",
+          "cache_write_inferred_rate",
+          "wildcard_context_bucket",
+          "wildcard_inference_geo",
+          "wildcard_service_tier"
+        ],
+        "unpriced": []
+      }
+    },
+    {
+      "name": "Claude Code row in the US at 1.1 times the list price",
+      "catalog": "anthropic_claude",
+      "mode": "calculate",
+      "rows": ["claude_opus_5_us"],
+      "expected": {
+        "mode": "calculate",
+        "basis": "calculated",
+        "status": "complete",
+        "amount_microusd": "8250000",
+        "catalog_revision": "conformance-v1",
+        "calculated_rows": 1,
+        "reported_rows": 0,
+        "unpriced_rows": 0,
+        "assumptions": ["agent_default_channel", "wildcard_context_bucket"],
+        "unpriced": []
+      }
+    },
+    {
+      "name": "a Claude model the catalog does not name leaves the period partial",
+      "catalog": "anthropic_claude",
+      "mode": "calculate",
+      "rows": ["claude_opus_5", "claude_unknown_model"],
+      "expected": {
+        "mode": "calculate",
+        "basis": "calculated",
+        "status": "partial",
+        "amount_microusd": "13707500",
+        "catalog_revision": "conformance-v1",
+        "calculated_rows": 1,
+        "reported_rows": 0,
+        "unpriced_rows": 1,
+        "assumptions": [
+          "agent_default_channel",
+          "cache_write_inferred_rate",
+          "wildcard_context_bucket",
+          "wildcard_inference_geo",
+          "wildcard_service_tier"
+        ],
+        "unpriced": [
+          {
+            "billing_channel": "anthropic_direct",
+            "model": "claude-not-cataloged",
+            "reason": "unknown_model",
+            "rows": 1
+          }
+        ]
       }
     }
   ]
