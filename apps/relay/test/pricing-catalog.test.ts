@@ -28,6 +28,8 @@ describe("managed pricing catalog", () => {
         "claude-opus-5",
         "claude-sonnet-5",
         "claude-fable-5",
+        "claude-fable-5-1",
+        "claude-opus-5-5",
         "gemini-2.5-flash",
         "gemini-2.5-flash-lite",
         "gemini-2.5-pro",
@@ -36,10 +38,10 @@ describe("managed pricing catalog", () => {
         "gemini-3.1-pro-preview",
       ]),
     );
-    expect(PRICING_CATALOG_ETAG).toBe('"official-2026-09-06-1"');
+    expect(PRICING_CATALOG_ETAG).toBe('"official-2026-09-23-1"');
     // Pins the dimension expansion so a refactor cannot silently drop entries.
-    expect(PRICING_CATALOG.entries).toHaveLength(236);
-    expect(new Set(PRICING_CATALOG.entries.map((entry) => entry.entry_id)).size).toBe(236);
+    expect(PRICING_CATALOG.entries).toHaveLength(252);
+    expect(new Set(PRICING_CATALOG.entries.map((entry) => entry.entry_id)).size).toBe(252);
   });
 
   it("is the source of the pricing-conformance Claude catalog, entry for entry", () => {
@@ -108,6 +110,9 @@ describe("managed pricing catalog", () => {
   it("prices the Claude 5 generation, including fast mode and US inference geo", () => {
     for (const [model, overrides, amount_microusd] of [
       ["claude-fable-5", {}, "60000000"],
+      ["claude-fable-5-1", {}, "60000000"],
+      ["claude-opus-5-5", {}, "24000000"],
+      ["claude-opus-5-5", { inference_geo: "us" }, "26400000"],
       ["claude-sonnet-5", {}, "12000000"],
       ["claude-opus-5", {}, "30000000"],
       ["claude-opus-5", { speed: "fast" }, "60000000"],
