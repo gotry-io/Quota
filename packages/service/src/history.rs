@@ -560,36 +560,90 @@ pub fn chunk_quota_history_upload(
             .then(left.provider.cmp(&right.provider))
             .then(left.fingerprint.cmp(&right.fingerprint))
     });
+    // Each point is measured once; a running estimate (its bytes, plus a series header the first
+    // time a series appears in the chunk, plus separators) decides where a chunk ends, and the
+    // real body is measured once per chunk. Encoding the growing chunk after every point was
+    // quadratic — a month's backfill of a few subscriptions cost seconds on the IPC thread.
+    let point_bytes: Vec<usize> = ordered
+        .iter()
+        .map(|point| {
+            serde_json::to_vec(&point_value(point))
+                .map(|bytes| bytes.len())
+                .unwrap_or(usize::MAX / 4)
+        })
+        .collect();
+    let shell = serde_json::to_vec(&quota_history_upload_body(generation, &[]))
+        .map(|bytes| bytes.len())
+        .unwrap_or(0);
     let mut chunks = Vec::new();
-    let mut current: Vec<&QuotaHistoryUploadPoint> = Vec::new();
-    for point in &ordered {
-        if current.len() >= max_points {
-            chunks.push(quota_history_upload_body(generation, &current));
-            current.clear();
-        }
-        current.push(point);
-        let size = serde_json::to_vec(&quota_history_upload_body(generation, &current))
-            .map(|bytes| bytes.len())
-            .unwrap_or(usize::MAX);
-        if size > max_bytes {
-            current.pop();
-            if !current.is_empty() {
-                chunks.push(quota_history_upload_body(generation, &current));
+    let mut start = 0;
+    while start < ordered.len() {
+        let mut end = start;
+        let mut estimate = shell;
+        let mut seen_series: Vec<(&str, &str, &str)> = Vec::new();
+        while end < ordered.len() && end - start < max_points {
+            let point = &ordered[end];
+            let key = (
+                point.provider.as_str(),
+                point.fingerprint.as_str(),
+                point.window_id.as_str(),
+            );
+            let header = if seen_series.contains(&key) {
+                0
+            } else {
+                series_header_bytes(point)
+            };
+            let addition = header + point_bytes[end] + 2;
+            if end > start && estimate + addition > max_bytes {
+                break;
             }
-            current.clear();
-            current.push(point);
-            let alone = serde_json::to_vec(&quota_history_upload_body(generation, &current))
+            if header > 0 {
+                seen_series.push(key);
+            }
+            estimate += addition;
+            end += 1;
+        }
+        let mut slice: Vec<&QuotaHistoryUploadPoint> = ordered[start..end].iter().collect();
+        // The estimate over-counts separators, never under-counts a field, but the real size is
+        // what Relay measures: shrink from the back until it fits.
+        loop {
+            let body = quota_history_upload_body(generation, &slice);
+            let size = serde_json::to_vec(&body)
                 .map(|bytes| bytes.len())
                 .unwrap_or(usize::MAX);
-            if alone > max_bytes {
-                current.clear();
+            if size <= max_bytes {
+                chunks.push(body);
+                break;
             }
+            if slice.len() <= 1 {
+                // One point alone is over the cap: it cannot be sent.
+                break;
+            }
+            slice.truncate(slice.len().div_ceil(2));
         }
-    }
-    if !current.is_empty() {
-        chunks.push(quota_history_upload_body(generation, &current));
+        start += slice.len().max(1);
     }
     chunks
+}
+
+fn point_value(point: &QuotaHistoryUploadPoint) -> Value {
+    serde_json::json!({
+        "resets_at": point.point.resets_at,
+        "bucket_start": point.point.bucket_start,
+        "used_percent": point.point.used_percent,
+    })
+}
+
+fn series_header_bytes(point: &QuotaHistoryUploadPoint) -> usize {
+    serde_json::to_vec(&serde_json::json!({
+        "provider": point.provider,
+        "fingerprint": point.fingerprint,
+        "window_id": point.window_id,
+        "duration_seconds": point.duration_seconds,
+        "points": [],
+    }))
+    .map(|bytes| bytes.len())
+    .unwrap_or(0)
 }
 
 fn quota_history_upload_body(generation: u64, points: &[&QuotaHistoryUploadPoint]) -> Value {
@@ -1067,5 +1121,51 @@ mod tests {
         let one_len = serde_json::to_vec(&one[0]).expect("bytes").len();
         let wide = chunk_quota_history_upload(&points, 3, 10, one_len);
         assert_eq!(wide.len(), 3, "{wide:?}");
+    }
+
+    #[test]
+    fn a_month_of_points_chunks_in_linear_time_and_under_the_byte_cap() {
+        let mut points = Vec::new();
+        for subscription in 0..4 {
+            for index in 0..2_700u64 {
+                let seconds = 1_758_000_000 + index * 900;
+                let instant = chrono::DateTime::from_timestamp(seconds as i64, 0)
+                    .expect("instant")
+                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+                points.push(QuotaHistoryUploadPoint {
+                    provider: "codex".to_owned(),
+                    fingerprint: format!("account_{subscription}"),
+                    window_id: "five_hour".to_owned(),
+                    duration_seconds: 18_000,
+                    point: QuotaHistorySyncedPoint {
+                        resets_at: instant.clone(),
+                        bucket_start: instant,
+                        used_percent: (index % 100) as f64,
+                    },
+                });
+            }
+        }
+        let started = std::time::Instant::now();
+        let chunks = chunk_quota_history_upload(
+            &points,
+            3,
+            MAXIMUM_QUOTA_HISTORY_POINTS_PER_UPLOAD,
+            MAXIMUM_QUOTA_HISTORY_UPLOAD_BYTES,
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        let mut total = 0;
+        for chunk in &chunks {
+            let size = serde_json::to_vec(chunk).expect("bytes").len();
+            assert!(size <= MAXIMUM_QUOTA_HISTORY_UPLOAD_BYTES, "{size}");
+            let count: usize = chunk["series"]
+                .as_array()
+                .expect("series")
+                .iter()
+                .map(|series| series["points"].as_array().expect("points").len())
+                .sum();
+            assert!(count <= MAXIMUM_QUOTA_HISTORY_POINTS_PER_UPLOAD);
+            total += count;
+        }
+        assert_eq!(total, points.len());
     }
 }

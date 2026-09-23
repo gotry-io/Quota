@@ -187,6 +187,17 @@ final class MenuBarViewModel {
   /// The Diagnostics sentence about the desktop widgets, republished with the snapshot.
   private(set) var widgetPublishingStatus: DesktopWidgetPublishingStatus
 
+  /// Whether a status item's window is on screen, as AppKit last reported it. `nil` until the
+  /// bar has placed one. macOS keeps an item off the bar when the app is switched off in
+  /// System Settings › Menu Bar, or when the bar has no room; the app cannot tell which.
+  private(set) var menuBarItemOnScreen: Bool?
+
+  func noteMenuBarItemPresence(onScreen: Bool) {
+    if menuBarItemOnScreen != onScreen {
+      menuBarItemOnScreen = onScreen
+    }
+  }
+
   @ObservationIgnored
   private let userNotificationSink: UserNotificationAlertSink?
 

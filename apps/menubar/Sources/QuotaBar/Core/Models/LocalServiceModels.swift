@@ -731,7 +731,9 @@ struct LocalServiceHistorySync: Decodable, Equatable, Sendable {
     case "invalid_response": return "Your Account gave an unexpected answer."
     case "history_sync_off": return "Sharing is off for this Account."
     case "quota_history_full": return "Your Account holds as much history as it can."
-    case "unauthorized", "session_expired": return "Sign in again to keep sharing."
+    case "rejected": return "Your Account refused the readings. Check this Mac's clock."
+    case "unauthorized", "session_expired", "authentication_required":
+      return "Sign in again to keep sharing."
     default: return "Sharing paused: \(code)."
     }
   }

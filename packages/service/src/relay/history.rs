@@ -5,6 +5,7 @@
 //! whole span, once.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use chrono::{SecondsFormat, Utc};
@@ -31,11 +32,51 @@ impl AccountManager {
         document: &Value,
         cancel: &std::sync::atomic::AtomicBool,
     ) {
-        let Ok(_guard) = self.history_lock.lock() else {
+        if self.note_history_switch(account_id, document) {
+            let Ok(_guard) = self.history_lock.lock() else {
+                return;
+            };
+            self.upload_locked(account_id, true, cancel);
+        }
+    }
+
+    /// The same, for the IPC lane: the record is written now and the backfill — several PUTs of
+    /// up to 20 s each — runs on its own thread, so `set_account_settings` and
+    /// `refresh_account_settings` answer at once and no other IPC request waits behind it.
+    pub(crate) fn note_history_settings_detached(
+        self: &Arc<Self>,
+        account_id: &str,
+        document: &Value,
+    ) {
+        if !self.note_history_switch(account_id, document) {
             return;
+        }
+        let manager = Arc::clone(self);
+        let account_id = account_id.to_owned();
+        let spawned = std::thread::Builder::new()
+            .name("quota-history-backfill".to_owned())
+            .spawn(move || {
+                let Ok(_guard) = manager.history_lock.lock() else {
+                    return;
+                };
+                manager.upload_locked(
+                    &account_id,
+                    true,
+                    &std::sync::atomic::AtomicBool::new(false),
+                );
+            });
+        if spawned.is_err() {
+            eprintln!("quota-history: could not start the backfill thread");
+        }
+    }
+
+    /// Records what the document says about the switch. `true` when a backfill is owed.
+    fn note_history_switch(&self, account_id: &str, document: &Value) -> bool {
+        let Ok(_guard) = self.history_lock.lock() else {
+            return false;
         };
         let Ok(mut record) = self.state.quota_history_sync(account_id) else {
-            return;
+            return false;
         };
         let enabled = history_sync_enabled(document);
         // Off is honoured even while Relay says the Account is full: the switch turning off is
@@ -55,14 +96,14 @@ impl AccountManager {
                 record.last_error = None;
                 let _ = self.state.set_quota_history_sync(account_id, &record);
             }
-            return;
+            return false;
         }
         if self.history_full.load(Ordering::Acquire) {
-            return;
+            return false;
         }
         let revision = document.get("revision").and_then(Value::as_u64);
         if record.refused_revision.is_some() && record.refused_revision == revision {
-            return;
+            return false;
         }
         let needs_backfill = !record.sync || !record.backfill_done;
         record.sync = true;
@@ -72,11 +113,9 @@ impl AccountManager {
             .set_quota_history_sync(account_id, &record)
             .is_err()
         {
-            return;
+            return false;
         }
-        if needs_backfill {
-            self.upload_locked(account_id, true, cancel);
-        }
+        needs_backfill
     }
 
     /// After samples from this collection are in `cache.sqlite`. Incremental when this on-period
@@ -296,7 +335,13 @@ impl AccountManager {
                     return;
                 }
                 Err(error) => {
-                    record.last_error = Some(history_error_code(&error).to_owned());
+                    let code = history_error_code(&error);
+                    if code == "rejected" && record.last_error.as_deref() != Some(code) {
+                        eprintln!(
+                            "quota-history: Relay refused the upload body (400); a clock more than one bucket ahead of Relay does this on every upload"
+                        );
+                    }
+                    record.last_error = Some(code.to_owned());
                     let _ = self.state.set_quota_history_sync(account_id, &record);
                     let backend = relay_backend_error(error, session_epoch);
                     if let Some(epoch) = backend.sign_out_epoch() {
@@ -320,6 +365,10 @@ fn history_error_code(error: &RelayError) -> &'static str {
         RelayError::InvalidResponse | RelayError::ResponseTooLarge => "invalid_response",
         RelayError::Rejected { code, .. } if code == "history_sync_off" => "history_sync_off",
         RelayError::Rejected { code, .. } if code == "quota_history_full" => "quota_history_full",
+        // Relay refused the body itself: a point it will not take, which a clock more than one
+        // bucket ahead of Relay's produces on every upload. Named apart from a network failure so
+        // the Settings caption can say what to check.
+        RelayError::Rejected { status: 400, .. } => "rejected",
         _ => "network",
     }
 }
