@@ -67,9 +67,11 @@ struct SubscriptionDetailContent: Equatable {
       drawsAccountHistory
       ? seriesThroughNow(accountSamples ?? [:], snapshot: snapshot, now: now)
       : [:]
+    // A window the Account has no points for yet — new, or a five-hour window whose rows
+    // expired — still draws what this iPhone read, as it did before the switch.
     let historySamples: (QuotaWindow) -> [QuotaSample] = { window in
-      if drawsAccountHistory {
-        return drawnAccountSamples[window.id] ?? []
+      if drawsAccountHistory, let account = drawnAccountSamples[window.id], !account.isEmpty {
+        return account
       }
       guard local else { return [] }
       return samples.samples(for: subscription, windowID: window.id)

@@ -1682,6 +1682,8 @@ pub struct AccountManager {
     history_lock: Mutex<()>,
     /// Set when Relay answers `413 quota_history_full`. The next collection clears it and may try again.
     history_full: AtomicBool,
+    /// The detached backfill in flight, if any, so a caller that must see its outcome can wait.
+    history_backfill: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
 impl AccountManager {
@@ -1696,6 +1698,7 @@ impl AccountManager {
             period_cache: Mutex::new(HashMap::new()),
             history_lock: Mutex::new(()),
             history_full: AtomicBool::new(false),
+            history_backfill: Mutex::new(None),
         }
     }
 
@@ -1817,10 +1820,13 @@ impl AccountManager {
             .and_then(Value::as_str)
             .map(str::to_owned);
         let device_generation = session.get("device_generation").and_then(Value::as_u64);
-        if let Err(error) = self.fetch_account_settings(cancel, false)
-            && error.error.code.requires_login()
-        {
-            return Err(error);
+        match self.fetch_account_settings(cancel, false) {
+            Ok(Some((settings_account_id, document))) => {
+                self.note_history_settings(&settings_account_id, &document, cancel);
+            }
+            Ok(None) => {}
+            Err(error) if error.error.code.requires_login() => return Err(error),
+            Err(_) => {}
         }
         Ok(serde_json::to_value(AccountComponentValue {
             auth_status: AuthStatus::SignedIn,
@@ -1967,16 +1973,18 @@ impl AccountManager {
 
     /// Force a GET of the Account settings document and store it.
     pub fn refresh_account_settings(
-        &self,
+        self: &Arc<Self>,
         cancel: &AtomicBool,
     ) -> Result<crate::protocol::AccountSettingsState, BackendError> {
-        self.fetch_account_settings(cancel, true)?;
+        if let Some((account_id, document)) = self.fetch_account_settings(cancel, true)? {
+            self.note_history_settings_detached(&account_id, &document);
+        }
         self.cached_account_settings()
     }
 
     /// Compare-and-set write. A 412 is a successful round trip that returns `conflict`.
     pub fn put_account_settings(
-        &self,
+        self: &Arc<Self>,
         document: &AccountSettingsWriteDocument,
         if_match: &str,
         cancel: &AtomicBool,
@@ -2023,7 +2031,7 @@ impl AccountManager {
             )
             .is_ok()
         {
-            self.note_history_settings(&account_id, &document, cancel);
+            self.note_history_settings_detached(&account_id, &document);
         }
         Ok(AccountSettingsMutationResult {
             outcome,
@@ -2032,7 +2040,14 @@ impl AccountManager {
         })
     }
 
-    fn fetch_account_settings(&self, cancel: &AtomicBool, force: bool) -> Result<(), BackendError> {
+    /// Answers the document Relay just sent, or `None` on a 304, so the caller can hand the
+    /// history switch to the lane it is on: the collection thread backfills inline, the IPC
+    /// thread detaches it.
+    fn fetch_account_settings(
+        &self,
+        cancel: &AtomicBool,
+        force: bool,
+    ) -> Result<Option<(String, Value)>, BackendError> {
         let (mut session, mut session_epoch) = self.active_session_pair()?;
         if cancel.load(Ordering::Acquire) {
             return Err(BackendError::cancelled());
@@ -2070,13 +2085,13 @@ impl AccountManager {
                     )
                     .is_ok()
                 {
-                    self.note_history_settings(&account_id, &document, cancel);
+                    return Ok(Some((account_id, document)));
                 }
-                Ok(())
+                Ok(None)
             }
             None => {
                 if cached.is_some() {
-                    Ok(())
+                    Ok(None)
                 } else {
                     Err(BackendError::new(crate::protocol::IpcError::new(
                         crate::protocol::ErrorCode::InvalidResponse,
@@ -4672,17 +4687,17 @@ mod tests {
         })
     }
 
-    fn signed_in_manager(origin: &str, root: &std::path::Path) -> AccountManager {
+    fn signed_in_manager(origin: &str, root: &std::path::Path) -> Arc<AccountManager> {
         std::fs::create_dir_all(root).expect("root");
         let state = Arc::new(crate::state::StateStore::open(root).expect("state"));
         state
             .write_session_json(&fresh_session_json())
             .expect("session");
-        AccountManager::new(
+        Arc::new(AccountManager::new(
             Arc::new(RelayClient::for_test(origin).expect("test client")),
             state,
             "Test Mac".to_owned(),
-        )
+        ))
     }
 
     #[test]
@@ -4889,6 +4904,7 @@ mod tests {
             state,
             "Test Mac".to_owned(),
         );
+        let manager = Arc::new(manager);
         let cancel = AtomicBool::new(false);
         let error = manager
             .refresh_account_settings(&cancel)
@@ -4943,6 +4959,7 @@ mod tests {
         manager
             .put_account_settings(&named, "\"1\"", &cancel)
             .expect("put");
+        manager.wait_for_history_backfill();
         let sent = server.join().expect("server");
         assert_eq!(sent.len(), 1, "{sent:?}");
         assert!(

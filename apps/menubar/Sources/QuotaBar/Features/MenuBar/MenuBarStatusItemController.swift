@@ -20,6 +20,7 @@ final class MenuBarStatusItemController: NSObject {
   private var slots: [Slot] = []
   private var lastSpecs: [MenuBarStatusItemSpec] = []
   private var defaultsObserver: (any NSObjectProtocol)?
+  private var occlusionObserver: (any NSObjectProtocol)?
   private var tracking = false
 
   init(model: MenuBarViewModel, defaults: UserDefaults = .standard) {
@@ -39,13 +40,45 @@ final class MenuBarStatusItemController: NSObject {
         self?.reconcile()
       }
     }
+    occlusionObserver = NotificationCenter.default.addObserver(
+      forName: NSWindow.didChangeOcclusionStateNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] notification in
+      // Only the identity of the window matters, and every status item window is one of ours
+      // or not; the check itself runs on the main actor with the slots.
+      let window = ObjectIdentifier(notification.object as AnyObject)
+      Task { @MainActor in
+        guard let self,
+          self.slots.contains(where: {
+            $0.item.button?.window.map(ObjectIdentifier.init) == window
+          })
+        else { return }
+        self.reportPresence()
+      }
+    }
     startTracking()
+  }
+
+  /// Whether any status item is on screen. The bar places an item a beat after it is created,
+  /// so this is asked again shortly after every reconcile, not only when AppKit says so.
+  var isAnyItemOnScreen: Bool {
+    slots.contains { $0.item.button?.window?.occlusionState.contains(.visible) == true }
+  }
+
+  private func reportPresence() {
+    guard tracking, slots.contains(where: { $0.item.button?.window != nil }) else { return }
+    model.noteMenuBarItemPresence(onScreen: isAnyItemOnScreen)
   }
 
   func invalidate() {
     if let defaultsObserver {
       NotificationCenter.default.removeObserver(defaultsObserver)
       self.defaultsObserver = nil
+    }
+    if let occlusionObserver {
+      NotificationCenter.default.removeObserver(occlusionObserver)
+      self.occlusionObserver = nil
     }
     tracking = false
     panel.invalidate()
@@ -131,6 +164,9 @@ final class MenuBarStatusItemController: NSObject {
     }
     for slot in available {
       statusBar.removeStatusItem(slot.item)
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+      self?.reportPresence()
     }
   }
 

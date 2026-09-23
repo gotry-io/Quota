@@ -29,6 +29,13 @@ struct SettingsSupportView: View {
         Button("Updates", action: QuotaBarUpdater.checkForUpdates)
           .accessibilityLabel("Updates")
           .accessibilityHint("Checks for a new QuotaBar version")
+        if let sentence = MenuBarPresenceCopy.sentence(onScreen: model.menuBarItemOnScreen) {
+          LabeledContent("Menu bar") {
+            Text(sentence)
+              .multilineTextAlignment(.trailing)
+          }
+          .accessibilityLabel("Menu bar. \(sentence)")
+        }
       } header: {
         Text("About")
       }
@@ -64,5 +71,18 @@ struct SettingsSupportView: View {
 
   private func runDiagnosticsCheck() async {
     await diagnostics.runCheck { try await model.diagnose() }
+  }
+}
+
+/// What Support says about the status item. The app knows only whether AppKit put the item's
+/// window on screen; the two reasons it would not are the person's to check.
+enum MenuBarPresenceCopy {
+  static func sentence(onScreen: Bool?) -> String? {
+    switch onScreen {
+    case nil: nil
+    case true?: "Shown."
+    case false?:
+      "Not shown. Allow QuotaBar in System Settings › Menu Bar, or make room on the bar."
+    }
   }
 }

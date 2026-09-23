@@ -237,6 +237,28 @@ struct QuotaHistoryTests {
     #expect(already["five_hour"]?.first?.usedPercent == 40)
   }
 
+  @Test func aWindowTheAccountHasNoPointsForStillDrawsThisIPhone() throws {
+    let lastChange = Fixtures.date("2026-09-21T10:15:00Z")
+    let subscription = historyDetailSubscription(usedPercent: 80)
+    let content = SubscriptionDetailContent.make(
+      subscription: subscription,
+      deviceNames: [:],
+      samples: localSeries(usedAt: lastChange, usedPercent: 40),
+      now: historyNow,
+      historySync: true,
+      accountSamples: ["weekly": [
+        QuotaSample(
+          resetsAt: Fixtures.date("2026-09-28T00:00:00Z"),
+          observedAt: lastChange,
+          usedPercent: 12
+        )
+      ]]
+    )
+    #expect(content.drawsAccountHistory)
+    let history = try #require(content.remainingHistories["five_hour"])
+    #expect(history.observedPoints.contains { $0.date == lastChange })
+  }
+
   @Test func aLocalSeriesIsLeftOnItsOwnSamples() throws {
     let lastChange = Fixtures.date("2026-09-21T10:15:00Z")
     let subscription = historyDetailSubscription(usedPercent: 80)

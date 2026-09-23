@@ -275,7 +275,7 @@ fn enter_lane_attempt_trigger(trigger: DiagnosticAttemptTrigger) -> LaneAttemptT
 pub struct NativeBackend {
     state: Arc<StateStore>,
     relay: Arc<RelayClient>,
-    account: AccountManager,
+    account: Arc<AccountManager>,
     home: PathBuf,
     environment: HashMap<String, String>,
     client_name: String,
@@ -366,7 +366,11 @@ impl NativeBackend {
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("/"));
         let device_name = crate::relay::local_device_display_name(client_name);
-        let account = AccountManager::new(relay.clone(), state.clone(), device_name);
+        let account = Arc::new(AccountManager::new(
+            relay.clone(),
+            state.clone(),
+            device_name,
+        ));
         Self {
             state,
             relay,

@@ -86,7 +86,7 @@ menu-bar panel after the status items exist; **Open window at launch** (General,
 always shows the window on a manual launch. Closing the main window never quits; a Dock click
 reopens it. A plain Quit (⌘Q) while the main window is open closes that window and keeps the
 menu bar; **Quit QuotaBar Completely** ⌥⌘Q, the panel overflow **Quit QuotaBar**, a system log
-out, and an update relaunch terminate. Browser Access and Sparkle windows are not registered.
+out, and an update relaunch terminate. Browser Access and Sparkle windows are not registered. Settings → Support → About shows a **Menu bar** line once the bar has placed an item — "Shown.", or what to check when macOS keeps it off the bar (System Settings › Menu Bar, or room on the bar).
 
 The process has a regular-app menu bar:
 
