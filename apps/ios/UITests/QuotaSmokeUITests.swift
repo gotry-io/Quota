@@ -18,7 +18,7 @@ final class QuotaSmokeUITests: QuotaUITestCase {
       app.descendants(matching: .any)["devices.row"].firstMatch.exists,
       "devices.row"
     )
-    popBack(app, to: "settings.root", backTitle: "Settings")
+    popBack(app, from: "devices.root", to: "settings.root", backTitle: "Settings")
     XCTAssertTrue(
       app.descendants(matching: .any)["settings.devices"].waitForExistence(timeout: 5),
       "settings.devices after back"
@@ -56,19 +56,39 @@ final class QuotaSmokeUITests: QuotaUITestCase {
     XCTAssertFalse(app.tabBars.buttons["Devices"].exists, "Devices is not a tab")
   }
 
-  /// The one page that offers every way in, over the tabs it was asked from.
-  func testSignInFixtureOffersEveryWayIn() throws {
-    let app = launch(fixture: "sign-in")
-    XCTAssertTrue(
-      app.descendants(matching: .any)["connect.root"].waitForExistence(timeout: 10),
-      "connect.root"
-    )
+  /// The invitation opens the one page that offers every way in, over the tabs it was asked from,
+  /// and dismissing that page returns to the Overview it was opened from, invitations intact.
+  func testSignInInvitationOpensEveryWayInAndDismisses() throws {
+    let app = launch(fixture: "signed-out")
+    let overview = app.descendants(matching: .any)["overview.root"]
+    XCTAssertTrue(overview.waitForExistence(timeout: 10), "overview.root")
+    let invitation = app.buttons["Sign in to Quota"].firstMatch
+    XCTAssertTrue(invitation.waitForExistence(timeout: 5), "Sign in to Quota")
+    tapToOpen(invitation, in: app, "Sign in to Quota", destination: "connect.root")
+
+    let sheet = app.descendants(matching: .any)["connect.root"].firstMatch
     XCTAssertTrue(app.descendants(matching: .any)["connect.apple"].exists, "Continue with Apple")
     XCTAssertTrue(app.buttons["Continue with GitHub"].exists, "Continue with GitHub")
     XCTAssertTrue(app.buttons["Continue with Email"].exists, "Continue with Email")
     XCTAssertFalse(
       app.descendants(matching: .any)["connect.connecting"].exists,
       "nothing is in flight until a way in is chosen"
+    )
+
+    // The sheet has no close button: it is dismissed the way a person does, by pulling it down.
+    settle(app, anchor: sheet)
+    let top = sheet.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.02))
+    top.press(
+      forDuration: 0.05, thenDragTo: top.withOffset(CGVector(dx: 0, dy: 600)),
+      withVelocity: .fast, thenHoldForDuration: 0)
+    assertGone(sheet, "the sign-in sheet after it was pulled down")
+    XCTAssertTrue(overview.exists, "back on the Overview it was opened from")
+    XCTAssertTrue(
+      app.staticTexts["Already use QuotaBar?"].exists, "the invitation is still offered")
+    XCTAssertTrue(invitation.exists, "Sign in to Quota is still offered")
+    XCTAssertFalse(
+      app.descendants(matching: .any)["connect.connecting"].exists,
+      "dismissing started no sign-in"
     )
   }
 
@@ -102,6 +122,8 @@ final class QuotaSmokeUITests: QuotaUITestCase {
     XCTAssertTrue(app.staticTexts["Couldn't reach quota.gotry.io."].exists, "network copy")
   }
 
+  /// The period menu really changes the period: Today is what the menu then says, a custom range
+  /// picked in the sheet is applied, the sheet goes, and the headline and title are that range's.
   func testUsagePeriodSelectsTodayThenAppliesCustomRange() throws {
     let app = launch(fixture: "content", route: "usage")
     XCTAssertTrue(
@@ -109,45 +131,94 @@ final class QuotaSmokeUITests: QuotaUITestCase {
       "usage.root"
     )
     selectLast30DaysIfNeeded(app)
-    XCTAssertTrue(
-      app.descendants(matching: .any)["usage.headline"].waitForExistence(timeout: 5),
-      "usage.headline"
-    )
+    let tokens = app.descendants(matching: .any)["usage.headline.tokens"].firstMatch
+    let title = app.descendants(matching: .any)["usage.period.title"].firstMatch
+    XCTAssertTrue(tokens.waitForExistence(timeout: 5), "usage.headline.tokens")
+    let last30Tokens = tokens.label
 
-    let period = app.descendants(matching: .any)["usage.period"].firstMatch
-    period.tap()
-    let todayItem = app.buttons["Today"].firstMatch
-    XCTAssertTrue(todayItem.waitForExistence(timeout: 5), "Today in the period menu")
-    todayItem.tap()
-    XCTAssertTrue(
-      app.descendants(matching: .any)["usage.headline"].waitForExistence(timeout: 5),
-      "usage.headline on Today"
-    )
+    choosePeriod(app, "Today")
+    let todayTokens = waitForChange(of: tokens, from: last30Tokens, "headline on Today")
+    XCTAssertEqual(todayTokens, "1,704,620 tokens", "the headline is Today's")
+    let todayTitle = title.label
 
+    // A fixed range: August 8 to August 12, 2026. The fixture clock is August 14, 2026 (UTC), so
+    // both days are inside the year the picker allows in any time zone, the range is not one a
+    // named period covers, and its totals are the fixture's activity days August 9 and 12.
     let custom = app.descendants(matching: .any)["usage.period.custom"].firstMatch
     XCTAssertTrue(custom.waitForExistence(timeout: 5), "Custom range")
-    custom.tap()
-    XCTAssertTrue(
-      app.navigationBars["Custom range"].waitForExistence(timeout: 5),
-      "Custom range sheet"
-    )
-    let apply = app.buttons["Apply"].firstMatch
+    tapToOpen(custom, in: app, "Custom range", destination: "usage.range.from")
+    let sheetBar = app.navigationBars["Custom range"].firstMatch
+    XCTAssertTrue(sheetBar.waitForExistence(timeout: 5), "Custom range sheet")
+    chooseDay(app, picker: "usage.range.from", day: "August 8")
+    chooseDay(app, picker: "usage.range.to", day: "August 12")
+    let apply = app.buttons["usage.range.apply"].firstMatch
     XCTAssertTrue(apply.waitForExistence(timeout: 5), "Apply")
+    guard waitUntilReady(apply, in: app, "Apply", chrome: true) else { return }
     apply.tap()
+    assertGone(sheetBar, "the Custom range sheet after Apply")
+
+    let deadline = Date().addingTimeInterval(5)
+    while !selectedPeriod(app).contains("Custom"), Date() < deadline {
+      RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+    }
     XCTAssertTrue(
-      app.descendants(matching: .any)["usage.root"].waitForExistence(timeout: 5),
-      "usage.root after custom apply"
+      selectedPeriod(app).contains("Custom"),
+      "the period menu says Custom range, got \(selectedPeriod(app))"
     )
+    XCTAssertNotEqual(title.label, todayTitle, "the title names the custom range")
+    XCTAssertTrue(
+      title.label.hasPrefix("Aug 8 – Aug 12, 2026"),
+      "the title is the chosen range, got \(title.label)"
+    )
+    // August 9 (200,000 in + 40,000 out) and August 12 (10,000 + 2,000) are the fixture's only
+    // activity days in the range.
+    let customTokens = waitForChange(of: tokens, from: todayTokens, "headline on the custom range")
+    XCTAssertEqual(customTokens, "252,000 tokens", "the headline is the custom range's total")
+    XCTAssertNotEqual(customTokens, last30Tokens, "the custom range is not Last 30 days")
+  }
+
+  /// Waits for an element's label to differ from `old`, and returns the new label.
+  @discardableResult
+  private func waitForChange(of element: XCUIElement, from old: String, _ what: String) -> String {
+    let deadline = Date().addingTimeInterval(8)
+    while Date() < deadline {
+      if element.exists, element.label != old, !element.label.isEmpty { return element.label }
+      RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+    }
+    XCTFail("\(what) did not change from \(old)")
+    return element.label
+  }
+
+  /// Opens a compact date picker, taps the day whose label ends with `day` (the calendar labels
+  /// each day "Saturday, August 8"), and closes the calendar.
+  private func chooseDay(_ app: XCUIApplication, picker identifier: String, day: String) {
+    let picker = app.datePickers[identifier].firstMatch
+    XCTAssertTrue(picker.waitForExistence(timeout: 5), identifier)
+    let field = picker.buttons.firstMatch
+    XCTAssertTrue(field.waitForExistence(timeout: 5), "\(identifier) field")
+    guard waitUntilReady(field, in: app, "\(identifier) field", chrome: true) else { return }
+    field.tap()
+    let button = app.datePickers.collectionViews.buttons
+      .matching(NSPredicate(format: "label ENDSWITH %@", ", \(day)")).firstMatch
+    XCTAssertTrue(button.waitForExistence(timeout: 5), "\(day) in the \(identifier) calendar")
+    guard waitUntilReady(button, in: app, day, chrome: true) else { return }
+    button.tap()
+    // The calendar is a popover; a tap on the empty form below it closes it, as it does for a
+    // person. Nothing under that point is a control.
+    app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)).tap()
+    assertGone(button, "the \(identifier) calendar")
+    let shown = (field.value as? String) ?? ""
+    let short = day.replacingOccurrences(of: "August", with: "Aug")
+    XCTAssertTrue(shown.contains(short), "\(identifier) shows \(short), got \(shown)")
   }
 
   func testUsageOpensActivityPatternsAndReturns() throws {
     let app = launch(fixture: "content")
-    try restoreTabBar(app)
-    app.tabBars.buttons["Usage"].tap()
     XCTAssertTrue(
-      app.descendants(matching: .any)["usage.root"].waitForExistence(timeout: 10),
-      "usage.root"
+      app.descendants(matching: .any)["overview.root"].waitForExistence(timeout: 10),
+      "overview.root"
     )
+    try selectTab(app, "Usage", root: "usage.root")
     selectLast30DaysIfNeeded(app)
     XCTAssertTrue(
       app.descendants(matching: .any)["usage.headline"].waitForExistence(timeout: 5),
@@ -165,7 +236,7 @@ final class QuotaSmokeUITests: QuotaUITestCase {
         || app.staticTexts["Cache hit"].exists,
       "Cache hit on breakdown"
     )
-    popUsageDestination(app)
+    popUsageDestination(app, from: "usage.breakdown")
 
     openUsageDestination(app, link: "usage.open-patterns", root: "usage.patterns")
     XCTAssertTrue(
@@ -174,25 +245,23 @@ final class QuotaSmokeUITests: QuotaUITestCase {
         || app.descendants(matching: .any)["usage.patterns"].exists,
       "Activity patterns title"
     )
-    let viewDay = app.descendants(matching: .any)["usage.activity.view-day"]
-    if !viewDay.exists || !viewDay.isHittable {
-      revealIdentifier(app, "usage.activity.view-day", attempts: 24)
+    let viewDay = app.descendants(matching: .any)["usage.activity.view-day"].firstMatch
+    if !viewDay.exists {
+      scrollToIdentifier(app, "usage.activity.view-day", attempts: 24)
     }
     XCTAssertTrue(viewDay.waitForExistence(timeout: 5), "View day")
-    if !viewDay.isHittable {
-      revealIdentifier(app, "usage.activity.view-day", attempts: 8)
-    }
-    viewDay.tap()
-    XCTAssertTrue(
-      app.descendants(matching: .any)["usage.day"].waitForExistence(timeout: 8),
-      "usage.day"
-    )
+    tapToOpen(viewDay, in: app, "View day", destination: "usage.day")
+    let day = app.descendants(matching: .any)["usage.day"].firstMatch
     XCTAssertTrue(
       app.descendants(matching: .any)["usage.day.model"].waitForExistence(timeout: 5),
       "usage.day.model"
     )
-    app.buttons["Done"].tap()
-    popUsageDestination(app)
+    // The sheet is gone before the navigation bar underneath it is asked to go back.
+    let done = app.buttons["Done"].firstMatch
+    guard waitUntilReady(done, in: app, "Done", chrome: true) else { return }
+    done.tap()
+    assertGone(day, "the day sheet after Done")
+    popUsageDestination(app, from: "usage.patterns")
     XCTAssertTrue(
       app.descendants(matching: .any)["usage.root"].waitForExistence(timeout: 5),
       "usage.root after back"
@@ -254,7 +323,11 @@ final class QuotaSmokeUITests: QuotaUITestCase {
       app.navigationBars.buttons["Log Out"].exists,
       "Log Out belongs on Settings, not the Overview toolbar"
     )
-    revealIdentifier(app, "overview.today")
+    let today = app.descendants(matching: .any)["overview.today"].firstMatch
+    if !today.exists {
+      scrollToIdentifier(app, "overview.today")
+    }
+    XCTAssertTrue(today.waitForExistence(timeout: 5), "overview.today")
     XCTAssertTrue(
       app.descendants(matching: .any)["overview.today.tokens"].exists,
       "overview.today.tokens"
@@ -263,11 +336,7 @@ final class QuotaSmokeUITests: QuotaUITestCase {
       app.descendants(matching: .any)["overview.today.cost"].exists,
       "overview.today.cost"
     )
-    app.descendants(matching: .any)["overview.today"].firstMatch.tap()
-    XCTAssertTrue(
-      app.descendants(matching: .any)["usage.root"].waitForExistence(timeout: 10),
-      "usage.root"
-    )
+    tapToOpen(today, in: app, "overview.today", destination: "usage.root")
     let period = app.descendants(matching: .any)["usage.period"].firstMatch
     XCTAssertTrue(period.waitForExistence(timeout: 5), "usage period menu")
     XCTAssertTrue(
@@ -275,13 +344,11 @@ final class QuotaSmokeUITests: QuotaUITestCase {
       "Overview Today opens the Today period, got \(period.label) / \(String(describing: period.value))"
     )
 
-    try restoreTabBar(app)
-    app.tabBars.buttons["Quota"].tap()
+    try selectTab(app, "Quota", root: "overview.root")
     let card = app.descendants(matching: .any)["overview.subscription"].firstMatch
     XCTAssertTrue(card.waitForExistence(timeout: 5), "overview.subscription")
-    card.tap()
+    tapToOpen(card, in: app, "overview.subscription", destination: "subscription.detail")
     let detail = app.descendants(matching: .any)["subscription.detail"]
-    XCTAssertTrue(detail.waitForExistence(timeout: 5), "subscription.detail")
     // The detail is two groups: what the quota is, and what read it.
     if !app.staticTexts["Quota"].exists {
       scrollToIdentifier(app, "section.header.quota", attempts: 8)
@@ -303,12 +370,14 @@ final class QuotaSmokeUITests: QuotaUITestCase {
         || app.descendants(matching: .any)["subscription.sources"].exists,
       "Readings"
     )
-    popBack(app, to: "overview.root", backTitle: "Quota")
+    popBack(app, from: "subscription.detail", to: "overview.root", backTitle: "Quota")
     XCTAssertFalse(detail.exists, "subscription detail is dismissed after back")
   }
 
   /// The Settings hub reaches each pushed destination and comes back to the hub, and Log Out stays
-  /// on the hub. The destinations' copy and pictures are advisory.
+  /// on the hub. What each destination says — About's copy and links included — is the census's
+  /// (`QuotaScreenUITests.testSettings…Screen`); this holds the controls a destination exists
+  /// for.
   func testSettingsDestinationsOpenAndReturn() throws {
     let app = launch(fixture: "content", route: "settings")
     XCTAssertTrue(
@@ -323,7 +392,7 @@ final class QuotaSmokeUITests: QuotaUITestCase {
       openSettingsDestination(app, link: link, root: root)
       XCTAssertTrue(app.descendants(matching: .any)[root].exists, root)
       assertDestinationControls(app, root: root)
-      popSettingsDestination(app)
+      popSettingsDestination(app, from: root)
       XCTAssertFalse(
         app.descendants(matching: .any)[root].exists,
         "\(root) is dismissed after back"
@@ -357,7 +426,6 @@ final class QuotaSmokeUITests: QuotaUITestCase {
         "Enable Notifications"
       )
       XCTAssertTrue(app.switches["Reset Reminders"].exists, "Reset Reminders")
-      XCTAssertTrue(app.staticTexts["Alert at"].exists, "Alert at")
     case "settings.appearance.root":
       XCTAssertTrue(
         app.descendants(matching: .any)["settings.appearance.system"].waitForExistence(timeout: 5),
@@ -366,118 +434,39 @@ final class QuotaSmokeUITests: QuotaUITestCase {
       XCTAssertTrue(app.descendants(matching: .any)["settings.appearance.light"].exists, "Light")
       XCTAssertTrue(app.descendants(matching: .any)["settings.appearance.dark"].exists, "Dark")
     case "settings.about.root":
-      // Longer than the 128 characters a string-identifier query accepts, so it is matched by
-      // predicate rather than trimmed to fit the test.
-      let productSentence =
-        "Quota shows remaining quota this iPhone reads from the providers you connect, and the "
-        + "quota and usage QuotaBar reports from your Macs."
-      XCTAssertTrue(
-        app.staticTexts.matching(NSPredicate(format: "label == %@", productSentence))
-          .firstMatch.exists,
-        "product sentence"
-      )
-      XCTAssertTrue(
-        app.staticTexts[
-          "This iPhone never uploads its sign-ins. Only the readings it takes reach your Account."
-        ].exists,
-        "privacy sentence"
-      )
-      if !app.descendants(matching: .any)["settings.about.version"].waitForExistence(timeout: 2) {
-        scrollToIdentifier(app, "settings.about.version", attempts: 8)
-      }
-      XCTAssertTrue(
-        app.staticTexts["Version"].exists
-          || app.descendants(matching: .any)["settings.about.version"].exists,
-        "Version"
-      )
-      XCTAssertTrue(app.descendants(matching: .any)["Website"].exists, "Website")
-      XCTAssertTrue(app.descendants(matching: .any)["GitHub"].exists, "GitHub")
-      if !app.descendants(matching: .any)["settings.about.license"].waitForExistence(timeout: 2) {
-        scrollToIdentifier(app, "settings.about.license", attempts: 6)
-      }
-      XCTAssertTrue(
-        app.descendants(matching: .any)["settings.about.license"].exists
-          || app.staticTexts["License"].exists,
-        "License MIT"
-      )
+      // About is words and links; the census reads them. Reaching it and coming back is the
+      // journey.
+      break
     default:
       XCTFail("no controls named for \(root)")
     }
   }
 
-  /// The Providers group in its three states: two accounts on one provider, one on another, and a
-  /// third with nothing connected. Each state offers a different action, and which action a row
-  /// offers is the contract — the pictures are the census's job.
-  func testProvidersMatrixOffersConnectRemoveAndSignInAgain() throws {
+  /// A stored provider session the provider refused offers the one action that fixes it, and says
+  /// so. This asserts the affordance, not a provider login: the sign-in it starts leaves the
+  /// fixture. The rest of the Providers matrix — Remove, Connect, Add Account — is the census's
+  /// (`QuotaScreenUITests.testProvidersMatrixScreen`).
+  func testRefusedProviderSessionOffersSignInAgain() throws {
     let app = launch(fixture: "providers", route: "settings")
     XCTAssertTrue(
       app.descendants(matching: .any)["settings.root"].waitForExistence(timeout: 10),
       "settings.root"
     )
-    let header = app.descendants(matching: .any)["section.header.providers"]
-    if !header.waitForExistence(timeout: 2) {
-      scrollToIdentifierOnce(app, "section.header.providers")
+    let refused = app.descendants(matching: .any)["providers.session.codex:codex_personal"]
+    if !refused.waitForExistence(timeout: 2) {
+      scrollToIdentifier(app, "providers.session.codex:codex_personal", attempts: 12)
     }
-    XCTAssertTrue(header.waitForExistence(timeout: 5), "Providers header")
-    // The header can be on screen while the first connected row is still below the fold and not
-    // yet built by the lazy List, so each row is scrolled to rather than merely asserted.
-    for identifier in [
-      "providers.session.codex:codex_work",
-      "providers.session.claude:claude_team",
-    ] {
-      if !app.descendants(matching: .any)[identifier].waitForExistence(timeout: 2) {
-        scrollToIdentifier(app, identifier, attempts: 12)
-      }
-      XCTAssertTrue(
-        app.descendants(matching: .any)[identifier].waitForExistence(timeout: 5),
-        identifier
-      )
-    }
-    // Remove and Sign in again sit on the session rows; assert them before scrolling to Grok,
-    // which drops those rows from a lazy List.
-    if !app.descendants(matching: .any)["providers.remove.codex:codex_work"].exists {
-      scrollToIdentifier(app, "providers.remove.codex:codex_work", attempts: 8)
-    }
-    XCTAssertTrue(
-      app.descendants(matching: .any)["providers.remove.codex:codex_work"].exists,
-      "Remove"
-    )
-    // The refused session in this fixture is the second Codex account.
-    scrollToIdentifier(app, "providers.session.codex:codex_personal", attempts: 12)
-    XCTAssertTrue(
-      app.descendants(matching: .any)["providers.session.codex:codex_personal"]
-        .waitForExistence(timeout: 5),
-      "refused Codex session"
-    )
-    if !app.descendants(matching: .any)["providers.signin-again.codex:codex_personal"].exists {
+    XCTAssertTrue(refused.waitForExistence(timeout: 5), "refused Codex session")
+    let again = app.descendants(matching: .any)["providers.signin-again.codex:codex_personal"]
+      .firstMatch
+    if !again.exists {
       scrollToIdentifier(app, "providers.signin-again.codex:codex_personal", attempts: 8)
     }
-    XCTAssertTrue(
-      app.descendants(matching: .any)["providers.signin-again.codex:codex_personal"].exists,
-      "Sign in again affordance"
-    )
+    XCTAssertTrue(again.waitForExistence(timeout: 5), "Sign in again affordance")
+    waitUntilReady(again, in: app, "Sign in again")
     XCTAssertTrue(
       app.staticTexts["Sign in again to keep reading this account."].exists,
       "refused session says what to do"
-    )
-    // The last Providers row starts off screen. A provider with nothing connected offers Connect;
-    // one that already has an account offers another.
-    let grokConnect = app.descendants(matching: .any)["providers.connect.grok"]
-    if !grokConnect.waitForExistence(timeout: 2) {
-      scrollToIdentifier(app, "providers.connect.grok", attempts: 12)
-    }
-    XCTAssertTrue(grokConnect.waitForExistence(timeout: 5), "Grok Connect row")
-    XCTAssertTrue(
-      grokConnect.label.contains("Connect"),
-      "a provider with nothing connected offers Connect, got \(grokConnect.label)"
-    )
-    let codexConnect = app.descendants(matching: .any)["providers.connect.codex"]
-    if !codexConnect.waitForExistence(timeout: 2) {
-      scrollToIdentifier(app, "providers.connect.codex", attempts: 8)
-    }
-    XCTAssertTrue(
-      codexConnect.label.contains("Add Account"),
-      "a provider already connected offers another account, got \(codexConnect.label)"
     )
   }
 
@@ -507,22 +496,12 @@ final class QuotaSmokeUITests: QuotaUITestCase {
     )
     XCTAssertFalse(app.staticTexts["No quota yet"].exists, "not the empty state")
 
-    // What this phone read for itself has samples behind it, so remaining history plots them.
-    app.descendants(matching: .any)["overview.subscription"].firstMatch.tap()
-    XCTAssertTrue(
-      app.descendants(matching: .any)["subscription.detail"].waitForExistence(timeout: 5),
-      "subscription.detail"
-    )
-    let localHistory = app.descendants(matching: .any)["subscription.history"].firstMatch
-    if !localHistory.waitForExistence(timeout: 2) {
-      scrollToIdentifier(app, "subscription.history", attempts: 12)
-    }
-    XCTAssertTrue(localHistory.waitForExistence(timeout: 5), "subscription.history")
-    XCTAssertTrue(
-      app.staticTexts["Remaining history"].waitForExistence(timeout: 5),
-      "history title"
-    )
-    XCTAssertTrue(app.staticTexts["This iPhone"].exists, "This iPhone beside remaining history")
+    // Its own reading opens its detail and comes back. What the detail says — remaining history,
+    // the sources that read it — is the census's (`testLocalOnlySubscriptionDetailScreen`).
+    let card = app.descendants(matching: .any)["overview.subscription"].firstMatch
+    tapToOpen(card, in: app, "overview.subscription", destination: "subscription.detail")
+    popBack(app, from: "subscription.detail", to: "overview.root", backTitle: "Quota")
+    XCTAssertTrue(card.waitForExistence(timeout: 5), "this iPhone's own reading after back")
   }
 
   /// The seven essential values at the standard text size: they exist, are hittable, carry their
@@ -546,7 +525,7 @@ final class QuotaSmokeUITests: QuotaUITestCase {
       "settings.root"
     )
     openSettingsDestination(app, link: "settings.about", root: "settings.about.root")
-    popSettingsDestination(app)
+    popSettingsDestination(app, from: "settings.about.root")
     XCTAssertFalse(
       app.descendants(matching: .any)["settings.about.root"].exists,
       "About is dismissed after back"

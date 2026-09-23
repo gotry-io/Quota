@@ -58,7 +58,16 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.ios == 'true' }}
     runs-on: macos-26
+    permissions:
+      contents: read
+      # Reads this job's own queued and started times, so allocation wait is measured.
+      actions: read
     steps:
+      # Waiting for a macOS runner and running on one are different costs, and only the second is
+      # this workflow's own. The first step marks when execution began; the last reports both.
+      - name: Mark the start of execution
+        run: echo "SCREENS_EXECUTION_STARTED=$(date -u +%s)" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v6
 
       - uses: actions/setup-node@v6
@@ -131,7 +140,9 @@ jobs:
             {
               echo "### $profile"
               node scripts/ios-ui-run-summary.mjs "$bundle" --title "Screen census" \
-                --expect-class QuotaScreenUITests --min-tests 30 || echo "EVIDENCE FAILED"
+                --expect-class QuotaScreenUITests \
+                --expect-methods apps/ios/UITests/QuotaScreenUITests.swift --min-tests 30 \
+                || echo "EVIDENCE FAILED"
               echo ""
               echo "Interactions recovered on retry: ${recovered:-0}"
               node scripts/ios-ui-audit-summary.mjs "$bundle" \
@@ -175,6 +186,35 @@ jobs:
             dist/ios-screens-status
           if-no-files-found: warn
           retention-days: 14
+
+      # Allocation wait is from the job being queued to a runner starting it (GitHub's own
+      # timestamps for this job); execution is from the first step to this one.
+      - name: Record allocation wait and execution time
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -uo pipefail
+          now=$(date -u +%s)
+          execution=$((now - SCREENS_EXECUTION_STARTED))
+          times=$(gh api "repos/$REPO/actions/runs/$RUN_ID/attempts/$ATTEMPT/jobs" \
+            --jq '.jobs[] | select(.name == "screens") | "\(.created_at) \(.started_at)"' \
+            | head -n 1)
+          wait="unknown (the jobs API did not answer)"
+          if [ -n "$times" ]; then
+            queued=$(date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "${times% *}" +%s)
+            started=$(date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "${times#* }" +%s)
+            wait="$((started - queued))s"
+          fi
+          {
+            echo "### Runner time"
+            echo ""
+            echo "- Allocation wait (queued → runner started): $wait"
+            echo "- Execution (first step → this step): ${execution}s"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       # The captures and audits are the point; a profile that failed — or that produced no evidence
       # that it ran at all — keeps this job red without blocking the queue, because this workflow

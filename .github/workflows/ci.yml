@@ -378,8 +378,11 @@ jobs:
               | tee -a "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
+          # Every test method the class declares must have executed, by name; the floor is only
+          # a sanity bound on the source read.
           node scripts/ios-ui-run-summary.mjs "$BUNDLE" \
-            --title "iOS journey run" --expect-class QuotaSmokeUITests --min-tests 10 \
+            --title "iOS journey run" --expect-class QuotaSmokeUITests \
+            --expect-methods apps/ios/UITests/QuotaSmokeUITests.swift --min-tests 10 \
             | tee -a "$GITHUB_STEP_SUMMARY"
           # A journey that needed a second tap passed, but not on its first attempt. The count is
           # printed whether or not it is zero, so "no retries" and "nobody counted" look different.

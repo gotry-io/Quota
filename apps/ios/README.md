@@ -183,7 +183,11 @@ App icon assets live in `Resources/Assets.xcassets`. App Store upload is the own
 workflow below. Delete Account starts on the website.
 
 `pnpm test:ios` runs `swift test` for `packages/apple-client` and the Quota scheme tests (`QuotaTests`
-and `QuotaUITests`) on an available iPhone simulator (`QUOTA_IOS_SIMULATOR` overrides the name).
+and `QuotaUITests`). It selects an explicit Xcode / runtime / device tuple through
+`scripts/ios-simulator.py` — `QUOTA_IOS_XCODE`, `QUOTA_IOS_RUNTIME` and `QUOTA_IOS_SIMULATOR` pin
+each, otherwise the newest `/Applications/Xcode*.app`, the newest available iOS runtime, and the first
+preferred model on it — and prints that tuple, the text size and the appearance at the top of the
+run's log and, in CI, in the job's step summary.
 `pnpm build:ios` builds for the generic iOS Simulator. These commands are not part of root
 `pnpm test` or `pnpm build`.
 
@@ -198,20 +202,40 @@ classes with two jobs:
 **`QuotaSmokeUITests` — the required gate** (`verify-ios-ui`, `QuotaUITests/QuotaSmokeUITests`).
 Journeys and interaction contracts, **no accessibility audit and no screen census**: Overview's
 Today row opens Usage already on Today and a quota row opens subscription detail and comes back;
-Usage opens breakdown and Activity patterns and returns, and the period menu selects Today and
-applies a custom range; Settings opens Notifications, Appearance and About and returns, with Log Out
-still on the hub; Settings › Devices is its own journey; the signed-out, connecting,
-pending-refresh, confirm-account, refused-session and local-only states assert the controls they
-offer. It also asserts the seven essential values — Overview remaining, Today tokens, cost and the
-combined Today label, Usage headline tokens and cost, subscription remaining — at the standard size
-and at `accessibilityExtraLarge`: each exists, is hittable, carries its whole accessibility label
-and sits on screen. `scripts/ios-ui-run-summary.mjs` reports what ran and fails the job when the
-selection matched nothing, so an empty selection cannot read as green.
+Usage opens breakdown and Activity patterns, a day sheet from View day, and returns; the period menu
+says Today with Today's headline once Today is chosen, and a fixed custom range (August 8 – 12, 2026,
+picked day by day in the sheet's calendars) is applied, the sheet goes, and the title and headline are
+that range's; Settings opens Notifications, Appearance and About and returns, with Log Out still on
+the hub; Settings › Devices is its own journey; the Overview's **Sign in to Quota** opens the sign-in
+sheet with every way in, and pulling the sheet down returns to the same Overview; the connecting,
+pending-refresh, confirm-account and local-only states assert the controls they offer, the local-only
+reading opens its detail and comes back, and a refused provider session offers **Sign in again**
+(the affordance — the provider login it starts leaves the fixture). It also asserts the seven
+essential values — Overview remaining, Today tokens, cost and the combined Today label, Usage
+headline tokens and cost, subscription remaining — at the standard size and at
+`accessibilityExtraLarge`: each exists, is hittable, carries its whole accessibility label and sits
+on screen.
+
+A journey taps a control only when it is ready, the way a person could: it exists, is enabled, is
+hittable, has held the same frame across two samples, and lies inside the viewport the navigation
+and tab bars leave uncovered (`waitUntilReady` in `QuotaUITestSupport.swift`, which nudges a row
+into view by the distance it is out, and fails naming what it saw). A back tap waits for the screen
+it left to disappear before the next assertion, and a sheet or menu is waited out the same way; no
+step of that sleeps for a fixed time. One second tap is made only when the destination did not appear
+and the control is still ready — a dropped tap — and is reported as `recovered-on-retry`, which the
+job summary counts. `scripts/ios-ui-run-summary.mjs` then checks the selection by identity: every
+`test…()` method `QuotaSmokeUITests.swift` declares must have executed (passed or failed, not
+skipped or result-less), and no other method or class may have run, so a missing, renamed or skipped
+journey fails the job even when the count still looks right.
 
 **`QuotaScreenUITests` — the advisory census** (`.github/workflows/ios-screens.yml`, not a required
-check, nightly on main and on iOS-touching pull requests). Mostly one screen or state per test (a few fixtures whose second
-screen is only reachable through the first still walk both), opened
-with `--route` where the fixture allows it, captured light/large, dark/large and
+check, nightly on main and on iOS-touching pull requests). One screen or state per test, launched
+straight onto it with `--route` or a fixture whose first screen it is — no census test taps through
+one screen to reach another, so a finding on one cannot hide the next one's evidence. It also owns
+what each screen says: About's copy and links, the Notifications and Appearance options, the full
+Providers matrix (Remove, Sign in again, Connect, Add Account) at every profile's size, and the
+local-only and merged details' history and sources. The same identity check runs on its
+`QuotaScreenUITests.swift` methods. Screens are captured light/large, dark/large and
 light/`accessibilityExtraLarge` (nightly adds dark/large-type), and audited with the app-owned
 auditor including contrast. Each screen audit attaches `audit-outcome.<screen>` JSON with one
 outcome per type — `passed`, `confirmed` (same finding on two passes), `unconfirmed` (first pass
@@ -237,7 +261,8 @@ nothing, opens or updates one issue — `iOS screens: audits not completing` —
 trend clears. It runs on the nightly and manual runs on main, never on a pull request, and never
 blocks a merge.
 
-**What that trades.** Copy of the error and empty variants, dark-mode rendering, the broad Dynamic
+**What that trades.** Copy of the error and empty variants, About's words and links, the Providers
+matrix beyond the refused session, dark-mode rendering, the broad Dynamic
 Type and contrast audits and most large-type reachability no longer block a merge; they are reported
 by `ios-screens`, and a confirmed finding there is a defect to fix. Log Out and Delete Account sit
 on the Settings hub; Delete Account starts on the website.
@@ -250,14 +275,19 @@ QUOTA_IOS_TEXT_SIZE=accessibilityExtraLarge ./scripts/ios-ui-screenshots.sh
 
 That script runs only `QuotaUITests/QuotaScreenUITests` (the census class), writes
 `dist/ios-ui.xcresult`, and exports PNG attachments to
-`dist/ios-ui-screenshots/`. Which simulator it uses is `scripts/ios-simulator.py`, the one
-selection `test-ios.sh` and the store screenshots share: `QUOTA_IOS_SIMULATOR` pins a model,
-otherwise the newest available iOS runtime and, on it, the first model in that script's preference
-list (iPhone 17 Pro downwards). The model and the runtime change what the auditor reports, so the
-choice is declared rather than whatever `simctl` listed first, and every run prints the simulator,
-its runtime and the Xcode version it used. `QUOTA_IOS_TEXT_SIZE` (SwiftUI `DynamicTypeSize`
-name or a `UICTContentSizeCategory*` value) and `QUOTA_IOS_APPEARANCE` (`light` or `dark`) are
-forwarded to the UI tests; variant runs write a subdirectory. Screenshot artifacts are for local
+`dist/ios-ui-screenshots/`; the names it exports are the `attachScreenshot` names in
+`QuotaScreenUITests.swift`. Which simulator it uses is `scripts/ios-simulator.py`, the one
+selection `test-ios.sh` and the store screenshots share: `QUOTA_IOS_RUNTIME` and
+`QUOTA_IOS_SIMULATOR` pin a runtime and a model, otherwise the newest available iOS runtime and, on
+it, the first model in that script's preference list (iPhone 17 Pro downwards). The model and the
+runtime change what the auditor reports, so the choice is declared rather than whatever `simctl`
+listed first. `QUOTA_IOS_TEXT_SIZE` (SwiftUI `DynamicTypeSize` name or a
+`UICTContentSizeCategory*` value) and `QUOTA_IOS_APPEARANCE` (`light` or `dark`) are forwarded to
+the UI tests; variant runs write a subdirectory. Every UI test launch names its text size — the
+profile's, else the standard `large` — and launches with the in-app Appearance preference at System,
+so neither the simulator's last setting nor a saved preference changes what a run draws. The
+`ios-screens` job reports its runner allocation wait (queued → started) separately from its
+execution time. Screenshot artifacts are for local
 visual QA; `ios-screens` captures the same class in CI, advisory.
 
 ### DEBUG visual fixtures
@@ -275,16 +305,17 @@ content builders in `VisualFixtureContent`, and blocked network / memory stores 
 # Values: signed-out | connecting | connect-error | expired | confirm-account | connect-refresh-failed | loading | content | cached-error | empty | no-devices | local-only | merged | providers | activity-loading | activity-failed | activity-day-empty | activity-day-failed | sign-in | sign-in-methods
 ```
 
-`--route` opens a destination on that scenario without tapping through: `usage`, `usage.breakdown`,
-`usage.patterns`, `usage.day`, `subscription.detail/<key>`, `settings`, `settings.devices`,
-`settings.notifications`, `settings.appearance`, `settings.about`. The default display clock is
-`VisualFixture.referenceDate` so period titles and activity days agree; `--visual-clock wall` keeps
-today's clock for marketing captures.
+`--route` opens a destination on that scenario without tapping through: `usage`, `usage.today`,
+`usage.custom` (the fixed range August 8 – 12, 2026: six through two UTC days before the fixture
+clock), `usage.breakdown`, `usage.patterns`, `usage.day`, `subscription.detail/<key>`, `settings`,
+`settings.devices`, `settings.notifications`, `settings.appearance`, `settings.about`. The default
+display clock is `VisualFixture.referenceDate` so period titles and activity days agree;
+`--visual-clock wall` keeps today's clock for marketing captures.
 
 To add a scenario: add a `VisualFixture` case, a `VisualScenario.make` branch (phase, session,
 summary, usage, local readings), content in `VisualFixtureContent` if the data is new, a parser
 test, and a state test that the combination is valid and stays offline. A census test for a single screen goes in
-`QuotaScreenUITests` and passes `--route`; a journey or an interaction contract goes in
+`QuotaScreenUITests` and passes `--route` (add a route rather than tap through to a second screen); a journey or an interaction contract goes in
 `QuotaSmokeUITests`, which is the required check, so add there only what a merge must not break.
 
 See [`DESIGN.md`](DESIGN.md) for fixture contents and the full visual QA checklist.

@@ -1398,6 +1398,16 @@ final class AppModel {
       case .usageRoot:
         selectedTab = .usage
         usagePath = []
+      case .usageToday:
+        selectedTab = .usage
+        usagePath = []
+        usage.selectUsagePeriod(.today)
+      case .usageCustom:
+        selectedTab = .usage
+        usagePath = []
+        if let range = FixtureRoute.customRange(today: displayNow) {
+          usage.selectUsagePeriod(range)
+        }
       case .usageBreakdown:
         selectedTab = .usage
         usagePath = [.breakdown]
