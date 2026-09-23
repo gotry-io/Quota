@@ -57,6 +57,7 @@ const XAI_GROK_46_SOURCE = "https://docs.x.ai/developers/models/grok-4.6";
 const MOONSHOT_PRICING_SOURCE = "https://platform.moonshot.ai/docs/pricing/chat";
 const GOOGLE_PRICING_SOURCE = "https://ai.google.dev/gemini-api/docs/pricing";
 const VERIFIED_AT_2026_09_06 = "2026-09-06T00:00:00.000Z";
+const VERIFIED_AT_2026_09_23 = "2026-09-23T00:00:00.000Z";
 const ANTHROPIC_PRICING_SOURCE = "https://platform.claude.com/docs/en/about-claude/pricing";
 const ANTHROPIC_OPUS_46_SOURCE = "https://www.anthropic.com/news/claude-opus-4-6";
 const ANTHROPIC_RELEASE_NOTES_SOURCE = "https://platform.claude.com/docs/en/release-notes/overview";
@@ -547,12 +548,32 @@ function anthropicEntries(): PricingCatalogEntry[] {
   // Opus 5 fast mode is billed at $10/$50 across the full context window, with
   // the prompt-caching multipliers applied on top of the fast input rate.
   // Fable 5 and Sonnet 5 do not offer fast mode, so they get no fast rates.
+  // Fable 5.1 keeps Fable 5's $10/$50 with cache reads at $0.25; Opus 5.5 is the
+  // next Opus at $4/$20 with cache reads at $0.20. Both cache-write rates are the
+  // published multipliers on input (1.25x for five minutes, 2x for an hour). Opus
+  // 5.5 fast mode is $8/$40, but its cache multipliers are not published, so it
+  // carries no fast rates until they are. Both were on the published price list
+  // by 2026-06-24, the earliest date this catalog can vouch for.
   for (const model of [
     {
       model: "claude-fable-5",
       effectiveFrom: "2026-06-09",
       rates: anthropicRates("10", "1", "12.5", "20", "50"),
       fastRates: null,
+    },
+    {
+      model: "claude-fable-5-1",
+      effectiveFrom: "2026-06-24",
+      rates: anthropicRates("10", "0.25", "12.5", "20", "50"),
+      fastRates: null,
+      verifiedAt: VERIFIED_AT_2026_09_23,
+    },
+    {
+      model: "claude-opus-5-5",
+      effectiveFrom: "2026-06-24",
+      rates: anthropicRates("4", "0.2", "5", "8", "20"),
+      fastRates: null,
+      verifiedAt: VERIFIED_AT_2026_09_23,
     },
     {
       model: "claude-sonnet-5",
@@ -574,7 +595,7 @@ function anthropicEntries(): PricingCatalogEntry[] {
       serviceTiers: ["*"],
       contexts: ["*"],
       sourceUrl: ANTHROPIC_PRICING_SOURCE,
-      verifiedAt: VERIFIED_AT_2026_08_23,
+      verifiedAt: "verifiedAt" in model ? model.verifiedAt : VERIFIED_AT_2026_08_23,
     } as const;
     entries.push(
       ...expandAnthropicWithUs({
@@ -777,8 +798,8 @@ function moonshotEntries(): PricingCatalogEntry[] {
 
 export const PRICING_CATALOG: PricingCatalog = PricingCatalogSchema.parse({
   protocol_version: 2,
-  revision: "official-2026-09-06-1",
-  published_at: VERIFIED_AT_2026_09_06,
+  revision: "official-2026-09-23-1",
+  published_at: VERIFIED_AT_2026_09_23,
   entries: [
     ...openAIEntries(),
     ...anthropicEntries(),

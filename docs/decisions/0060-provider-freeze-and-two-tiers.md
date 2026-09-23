@@ -2,6 +2,9 @@
 
 - Status: Accepted
 - Date: 2026-09-21
+- Amended: 2026-09-23: Claude Code's one gap is closed. `pricing-conformance.json` prices
+  `anthropic_direct` `claude_code` rows against a verbatim slice of the Relay's Anthropic entries,
+  and `known_gaps` is empty for both first-class providers.
 
 ## Context
 

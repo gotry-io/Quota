@@ -73,6 +73,8 @@ make an otherwise unpriced fact priced.
 3. Resolve `anthropic_direct` only for a Claude model. Third-party models use the explicit unknown
    channel instead of being misclassified as Anthropic. Source-reported cost is retained only with its
    request-coverage count so an incomplete amount cannot be treated as a complete total.
+   `packages/protocol/fixtures/pricing-conformance.json` states what such a row costs at the
+   Relay's Anthropic list rates and that a Claude model the catalog does not name stays unpriced.
 4. Unknown usage-shaped records, malformed timestamps/dimensions, unreadable sources, oversized
    lines, and truncated tails make coverage partial.
 
