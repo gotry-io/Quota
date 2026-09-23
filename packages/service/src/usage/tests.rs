@@ -707,6 +707,134 @@ fn opencode_legacy_and_pricing_are_protocol_safe() {
     let _ = fs::remove_dir_all(path);
 }
 
+/// A Claude Code log is read, folded into hour rows and priced as `anthropic_direct` at the
+/// Anthropic list rate the Relay ships — the same catalog slice and dollar figure the shared
+/// pricing fixture states — while a Claude model the catalog does not name stays unpriced.
+#[test]
+fn claude_code_log_prices_anthropic_direct_rows_at_the_list_rate() {
+    let path = root("claude-pricing");
+    let usage = |uncached: u64, read: u64, write_5m: u64, write_1h: u64, write_total: u64| {
+        json!({
+            "input_tokens": uncached,
+            "cache_read_input_tokens": read,
+            "cache_creation_input_tokens": write_total,
+            "cache_creation": {
+                "ephemeral_5m_input_tokens": write_5m,
+                "ephemeral_1h_input_tokens": write_1h
+            },
+            "service_tier": "standard",
+            "speed": "standard",
+            "inference_geo": "not_available"
+        })
+    };
+    let mut first = usage(150_000, 2_000_000, 60_000, 50_000, 110_000);
+    first["output_tokens"] = json!(300_000);
+    first["output_tokens_details"] = json!({"thinking_tokens": 80_000});
+    first["server_tool_use"] = json!({"web_search_requests": 2, "web_fetch_requests": 1});
+    // 50k written, 40k of it classified as 5-minute: the other 10k is priced at the inferred rate.
+    let mut second = usage(50_000, 1_000_000, 40_000, 0, 50_000);
+    second["output_tokens"] = json!(100_000);
+    second["output_tokens_details"] = json!({"thinking_tokens": 20_000});
+    let mut unknown = usage(1_000, 0, 0, 0, 0);
+    unknown["output_tokens"] = json!(100);
+    let lines = [
+        ("2026-08-02T12:00:00Z", "claude-opus-5", first),
+        ("2026-08-02T12:30:00Z", "claude-opus-5", second),
+        ("2026-08-02T12:45:00Z", "claude-not-cataloged", unknown),
+    ]
+    .map(|(timestamp, model, usage)| {
+        json!({
+            "timestamp": timestamp,
+            "type": "assistant",
+            "message": {"role": "assistant", "model": model, "usage": usage}
+        })
+        .to_string()
+    });
+    fs::write(path.join("session.jsonl"), lines.join("\n")).expect("write Claude pricing log");
+    let result = scan_claude_usage(&options(&path)).expect("scan Claude pricing log");
+    assert_eq!(result.coverage.status, CoverageStatus::Complete);
+    assert!(
+        result
+            .records
+            .iter()
+            .all(
+                |record| record.event.billing_channel == BillingChannel::AnthropicDirect
+                    && record.event.channel_source == ChannelSource::AgentDefault
+            )
+    );
+    let rows = dated(
+        &aggregate_hour_rows(
+            &result
+                .records
+                .iter()
+                .map(|record| record.event.clone())
+                .collect::<Vec<_>>(),
+        )
+        .expect("aggregate Claude Usage"),
+        "2026-08-02",
+    );
+    assert_eq!(rows.len(), 2);
+
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../protocol/fixtures/pricing-conformance.json"
+    ))
+    .expect("pricing conformance fixture");
+    let validation = validate_pricing_catalog(&fixture["catalogs"]["anthropic_claude"]);
+    assert!(validation.issues.is_empty(), "{:?}", validation.issues);
+    let catalog = validation.catalog.expect("Claude catalog slice");
+
+    let opus = rows
+        .iter()
+        .find(|row| row.model == "claude-opus-5")
+        .expect("claude-opus-5 row");
+    assert_eq!(opus.input_tokens, 3_360_000);
+    assert_eq!(opus.cache_write_inferred_tokens, 10_000);
+    match calculate_usage_row_cost(&catalog, opus).expect("price the Claude row") {
+        CalculatedUsageRowCost::Priced {
+            amount_microusd,
+            entry_id,
+            ..
+        } => {
+            assert_eq!(amount_microusd, BigUint::from(13_707_500u64));
+            assert_eq!(
+                entry_id,
+                "anthropic-claude-opus-5-standard-2026-07-24-any-standard-any-any"
+            );
+        }
+        other => panic!("expected a priced Claude row, got {other:?}"),
+    }
+
+    let outcome = calculate_usage_cost(&rows, Some(&catalog), UsageCostMode::Calculate)
+        .expect("price the Claude period");
+    assert_eq!(
+        serde_json::to_value(&outcome).expect("serialize cost outcome"),
+        json!({
+            "mode": "calculate",
+            "basis": "calculated",
+            "status": "partial",
+            "amount_microusd": "13707500",
+            "catalog_revision": "conformance-v1",
+            "calculated_rows": 1,
+            "reported_rows": 0,
+            "unpriced_rows": 1,
+            "assumptions": [
+                "agent_default_channel",
+                "cache_write_inferred_rate",
+                "wildcard_context_bucket",
+                "wildcard_inference_geo",
+                "wildcard_service_tier"
+            ],
+            "unpriced": [{
+                "billing_channel": "anthropic_direct",
+                "model": "claude-not-cataloged",
+                "reason": "unknown_model",
+                "rows": 1
+            }]
+        })
+    );
+    let _ = fs::remove_dir_all(path);
+}
+
 #[test]
 fn opencode_sqlite_reads_completed_or_created_and_ignores_empty_models() {
     let path = root("opencode-sqlite");

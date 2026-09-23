@@ -417,6 +417,8 @@ struct VisualFixtureParserTests {
       #expect(FixtureRoute.parse("usage.day") == .usageDay)
       #expect(FixtureRoute.parse("usage.breakdown") == .usageBreakdown)
       #expect(FixtureRoute.parse("usage") == .usageRoot)
+      #expect(FixtureRoute.parse("usage.today") == .usageToday)
+      #expect(FixtureRoute.parse("usage.custom") == .usageCustom)
       #expect(FixtureRoute.parse("settings.devices") == .settingsDevices)
       #expect(FixtureRoute.parse("settings.notifications") == .settingsNotifications)
       #expect(
@@ -424,6 +426,21 @@ struct VisualFixtureParserTests {
           == .subscriptionDetail("codex|visual_codex|global|"))
       #expect(FixtureRoute.parse(arguments: ["--route", "usage.patterns"]) == .usagePatterns)
       #expect(FixtureRoute.parse(arguments: ["Quota"]) == nil)
+    }
+
+    @Test @MainActor
+    func periodRoutesOpenUsageOnThatPeriod() {
+      let today = VisualFixture.referenceDate
+      #expect(
+        FixtureRoute.customRange(today: today) == .custom(from: "2026-08-08", to: "2026-08-12"))
+
+      let model = AppModel.visualFixture(.content, now: today)
+      model.applyFixtureRoute(.usageToday)
+      #expect(model.selectedTab == .usage)
+      #expect(model.usage.usagePeriod == .today)
+      model.applyFixtureRoute(.usageCustom)
+      #expect(model.usage.usagePeriod == FixtureRoute.customRange(today: today))
+      #expect(model.usage.usagePeriod.segment == .custom)
     }
 
     @Test

@@ -68,6 +68,81 @@ export function quotaHistoryExpiresAt(bucketStart: string, durationSeconds: numb
 }
 
 /**
+ * How long before its expiry a bucket stops counting as one Relay must still hold. Relay never
+ * sweeps a row before its `expires_at`, but a device clock behind Relay's, or an `expires_at`
+ * another device shortened by declaring a shorter duration, can make a row go earlier than
+ * this device expects.
+ */
+export const QUOTA_HISTORY_OLDEST_SLACK_SECONDS = 3_600;
+
+/** Relay must still hold this bucket: `bucket + span > now + 1 h`. */
+export function quotaHistoryOldestIsLive(
+  bucketStart: string,
+  durationSeconds: number,
+  now: string | number | Date,
+): boolean {
+  return (
+    Date.parse(bucketStart) + quotaHistorySpanSeconds(durationSeconds) * 1_000 >
+    instantMs(now) + QUOTA_HISTORY_OLDEST_SLACK_SECONDS * 1_000
+  );
+}
+
+/** What an upload answer says about one series the upload sent. */
+export type QuotaHistoryUploadAnswer = "absent" | { oldest_bucket_start?: string };
+
+/**
+ * Relay lost rows of a series this device uploaded (ADR 0062, amendment 2026-09-23).
+ *
+ * The evidence is the oldest bucket uploaded in this on-period while it is live, otherwise the
+ * watermark from before this chunk while it is live and every point of the chunk is later than
+ * it. A series the answer leaves out is always a loss: the answer names every series sent. An
+ * answer without `oldest_bucket_start` (an older Relay) judges nothing.
+ */
+export function quotaHistoryRowsLost(input: {
+  recordedOldest: string | null;
+  watermark: string | null;
+  chunkOldest: string;
+  answer: QuotaHistoryUploadAnswer;
+  durationSeconds: number;
+  now: string | number | Date;
+}): boolean {
+  if (input.answer === "absent") return true;
+  const answered = input.answer.oldest_bucket_start;
+  if (answered === undefined) return false;
+  let evidence: string | null = null;
+  if (
+    input.recordedOldest !== null &&
+    quotaHistoryOldestIsLive(input.recordedOldest, input.durationSeconds, input.now)
+  ) {
+    evidence = input.recordedOldest;
+  } else if (
+    input.watermark !== null &&
+    quotaHistoryOldestIsLive(input.watermark, input.durationSeconds, input.now) &&
+    Date.parse(input.chunkOldest) > Date.parse(input.watermark)
+  ) {
+    evidence = input.watermark;
+  }
+  return evidence !== null && Date.parse(answered) > Date.parse(evidence);
+}
+
+/** The recorded oldest after an accepted chunk: the older of a live record and the chunk. */
+export function quotaHistoryReseedOldest(
+  recordedOldest: string | null,
+  chunkOldest: string,
+  durationSeconds: number,
+  now: string | number | Date,
+): string {
+  if (
+    recordedOldest !== null &&
+    quotaHistoryOldestIsLive(recordedOldest, durationSeconds, now) &&
+    Date.parse(recordedOldest) <= Date.parse(chunkOldest)
+  ) {
+    return recordedOldest;
+  }
+  return chunkOldest;
+}
+
+/**
  * Upload refuses a point older than the span plus one bucket of slack, or whose `bucket_start`
  * is more than one bucket ahead of now. One bucket ahead is accepted; two are not.
  */

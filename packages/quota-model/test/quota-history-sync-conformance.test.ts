@@ -9,10 +9,16 @@ import {
   QUOTA_HISTORY_MIN_SPAN_SECONDS,
   QUOTA_HISTORY_SPAN_DURATION_MULTIPLE,
   quotaHistoryExpiresAt,
+  quotaHistoryReseedOldest,
+  quotaHistoryRowsLost,
   quotaHistorySpanSeconds,
   quotaHistoryUploadPointOutOfRange,
 } from "../src/index.ts";
-import type { QuotaHistoryLocalSample, QuotaHistoryMergePoint } from "../src/index.ts";
+import type {
+  QuotaHistoryLocalSample,
+  QuotaHistoryMergePoint,
+  QuotaHistoryUploadAnswer,
+} from "../src/index.ts";
 import type { QuotaHistoryPoint } from "@gotry-io/quota-protocol";
 
 type BucketCase = {
@@ -41,6 +47,28 @@ const fixture = conformanceJson as unknown as {
   retention_days: number;
   bucket: BucketCase[];
   merge: MergeCase[];
+  rows_lost: RowsLostCase[];
+  reseed_oldest: ReseedCase[];
+};
+
+type RowsLostCase = {
+  name: string;
+  now: string;
+  duration_seconds: number;
+  recorded_oldest: string | null;
+  watermark: string | null;
+  chunk_oldest: string;
+  answer: QuotaHistoryUploadAnswer;
+  expected: boolean;
+};
+
+type ReseedCase = {
+  name: string;
+  now: string;
+  duration_seconds: number;
+  recorded_oldest: string | null;
+  chunk_oldest: string;
+  expected: string;
 };
 
 describe("quota history sync conformance", () => {
@@ -79,6 +107,35 @@ describe("quota history sync conformance", () => {
     expect(fixture.merge.length).toBeGreaterThanOrEqual(2);
     for (const testCase of fixture.merge) {
       expect(mergeQuotaHistory(testCase.devices), testCase.name).toEqual(testCase.expected);
+    }
+  });
+
+  it("judges every rows_lost case and re-seeds every reseed_oldest case", () => {
+    expect(fixture.rows_lost.length).toBeGreaterThanOrEqual(15);
+    for (const testCase of fixture.rows_lost) {
+      expect(
+        quotaHistoryRowsLost({
+          recordedOldest: testCase.recorded_oldest,
+          watermark: testCase.watermark,
+          chunkOldest: testCase.chunk_oldest,
+          answer: testCase.answer,
+          durationSeconds: testCase.duration_seconds,
+          now: testCase.now,
+        }),
+        testCase.name,
+      ).toBe(testCase.expected);
+    }
+    expect(fixture.reseed_oldest.length).toBeGreaterThanOrEqual(4);
+    for (const testCase of fixture.reseed_oldest) {
+      expect(
+        quotaHistoryReseedOldest(
+          testCase.recorded_oldest,
+          testCase.chunk_oldest,
+          testCase.duration_seconds,
+          testCase.now,
+        ),
+        testCase.name,
+      ).toBe(testCase.expected);
     }
   });
 });

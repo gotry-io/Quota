@@ -1,12 +1,13 @@
 import XCTest
 
-/// The advisory screen census: one screen or state per test, reached with `--route` where the
-/// fixture allows it, captured light/dark/large-type by the `ios-screens` workflow, and audited
-/// with the accessibility auditor. CI runs this **outside** the merge queue: a finding here is a
-/// defect to fix, not a reason a merge cannot proceed. The journeys that must keep working are
-/// `QuotaSmokeUITests`.
+/// The advisory screen census: one screen or state per test, launched straight onto it with
+/// `--route` (or a fixture whose first screen it is), captured light/dark/large-type by the
+/// `ios-screens` workflow, and audited with the accessibility auditor. No test here taps through
+/// one screen to reach another, so a finding on one screen never hides the evidence of the next.
+/// CI runs this **outside** the merge queue: a finding here is a defect to fix, not a reason a
+/// merge cannot proceed. The journeys that must keep working are `QuotaSmokeUITests`.
 final class QuotaScreenUITests: QuotaUITestCase {
-  func testNoDevicesFixtureShowsMacSetup() throws {
+  func testNoDevicesOverviewShowsMacSetup() throws {
     let app = launch(fixture: "no-devices")
     XCTAssertTrue(
       app.descendants(matching: .any)["overview.root"].waitForExistence(timeout: 10),
@@ -70,7 +71,9 @@ final class QuotaScreenUITests: QuotaUITestCase {
     attachScreenshot(app, name: "overview-no-devices")
     settle(app)
     try audit(app)
+  }
 
+  func testNoDevicesDevicesScreen() throws {
     let devices = launch(fixture: "no-devices", route: "settings.devices")
     XCTAssertTrue(
       devices.descendants(matching: .any)["devices.root"].waitForExistence(timeout: 10),
@@ -88,6 +91,7 @@ final class QuotaScreenUITests: QuotaUITestCase {
       devices.descendants(matching: .any)["Manage Devices on Web"].exists,
       "Manage Devices on Web"
     )
+    settle(devices)
     attachScreenshot(devices, name: "devices-empty")
     try audit(devices)
   }
@@ -133,19 +137,23 @@ final class QuotaScreenUITests: QuotaUITestCase {
     try audit(app)
   }
 
-  /// One subscription two Macs and this phone all read stays one row, with every source listed.
-  func testMergedFixtureShowsOneRowWithThisIPhone() throws {
+  /// One subscription two Macs and this phone all read stays one row.
+  func testMergedOverviewScreen() throws {
     let app = launch(fixture: "merged")
     XCTAssertTrue(
       app.descendants(matching: .any)["overview.root"].waitForExistence(timeout: 10),
       "overview.root"
     )
+    settle(app)
     attachScreenshot(app, name: "overview-merged")
     try audit(app)
+  }
 
-    app.descendants(matching: .any)["overview.subscription"].firstMatch.tap()
+  /// That row's detail, opened directly: its history, and every source that read it.
+  func testMergedSubscriptionDetailScreen() throws {
+    let app = launch(fixture: "merged", route: "subscription.detail/codex|visual_codex|global|")
     XCTAssertTrue(
-      app.descendants(matching: .any)["subscription.detail"].waitForExistence(timeout: 5),
+      app.descendants(matching: .any)["subscription.detail"].waitForExistence(timeout: 10),
       "subscription.detail"
     )
     let mergedHistory = app.descendants(matching: .any)["subscription.history"].firstMatch
@@ -156,6 +164,7 @@ final class QuotaScreenUITests: QuotaUITestCase {
       mergedHistory.waitForExistence(timeout: 5),
       "subscription.history"
     )
+    settle(app, anchor: mergedHistory)
     attachScreenshot(app, name: "subscription-detail-merged")
     try audit(app)
 
@@ -215,7 +224,7 @@ final class QuotaScreenUITests: QuotaUITestCase {
     XCTAssertTrue(
       app.descendants(matching: .any)["settings.sign-in-methods.manage"].exists, "Manage on Web")
     attachScreenshot(app, name: "settings-sign-in-methods")
-    settleScroll(app, anchor: github)
+    settle(app, anchor: github)
     try audit(app)
   }
 
@@ -262,7 +271,7 @@ final class QuotaScreenUITests: QuotaUITestCase {
     try audit(app)
   }
 
-  func testUsageEmptyShowsUnavailableCopyAndEmptyActivity() throws {
+  func testUsageEmptyScreen() throws {
     let app = launch(fixture: "empty", route: "usage")
     XCTAssertTrue(
       app.descendants(matching: .any)["usage.root"].waitForExistence(timeout: 10),
@@ -278,7 +287,14 @@ final class QuotaScreenUITests: QuotaUITestCase {
     )
     attachScreenshot(app, name: "usage-empty")
     try audit(app)
+  }
+
+  func testUsagePatternsEmptyScreen() throws {
     let patterns = launch(fixture: "empty", route: "usage.patterns")
+    XCTAssertTrue(
+      patterns.descendants(matching: .any)["usage.patterns"].waitForExistence(timeout: 10),
+      "usage.patterns"
+    )
     let emptyActivity = patterns.staticTexts["No activity in the last year."]
     if !emptyActivity.waitForExistence(timeout: 2) {
       scrollToIdentifierOnce(patterns, "usage.activity.empty")
@@ -289,6 +305,7 @@ final class QuotaScreenUITests: QuotaUITestCase {
       "empty activity"
     )
     settle(patterns)
+    attachScreenshot(patterns, name: "usage-patterns-empty")
     try audit(patterns)
   }
 
@@ -480,48 +497,151 @@ final class QuotaScreenUITests: QuotaUITestCase {
     try audit(app)
   }
 
-  /// Notifications, Appearance and About, each opened directly.
+  /// Notifications, Appearance and About, each opened directly: the picture and audit first, at
+  /// the top of the destination, then what it says and offers.
   func testSettingsNotificationsScreen() throws {
-    try captureSettingsDestination(
+    let app = try captureSettingsDestination(
       route: "settings.notifications",
       root: "settings.notifications.root",
       name: "settings-notifications"
     )
+    XCTAssertTrue(app.switches["Enable Notifications"].exists, "Enable Notifications")
+    XCTAssertTrue(app.switches["Reset Reminders"].exists, "Reset Reminders")
+    // Below the fold at accessibility sizes.
+    let alertAt = app.staticTexts["Alert at"].firstMatch
+    for _ in 0..<8 where !alertAt.exists {
+      scrollContent(app, up: true)
+      _ = alertAt.waitForExistence(timeout: 1)
+    }
+    XCTAssertTrue(alertAt.exists, "Alert at")
   }
 
   func testSettingsAppearanceScreen() throws {
-    try captureSettingsDestination(
+    let app = try captureSettingsDestination(
       route: "settings.appearance",
       root: "settings.appearance.root",
       name: "settings-appearance"
     )
+    for option in ["system", "light", "dark"] {
+      XCTAssertTrue(
+        app.descendants(matching: .any)["settings.appearance.\(option)"].exists, option)
+    }
   }
 
+  /// About's words and links, all of them: the product and privacy sentences, the version, and
+  /// the three links.
   func testSettingsAboutScreen() throws {
-    try captureSettingsDestination(
+    let app = try captureSettingsDestination(
       route: "settings.about",
       root: "settings.about.root",
       name: "settings-about"
     )
+    // Longer than the 128 characters a string-identifier query accepts, so it is matched by
+    // predicate rather than trimmed to fit the test.
+    let productSentence =
+      "Quota shows remaining quota this iPhone reads from the providers you connect, and the "
+      + "quota and usage QuotaBar reports from your Macs."
+    XCTAssertTrue(
+      app.staticTexts.matching(NSPredicate(format: "label == %@", productSentence))
+        .firstMatch.exists,
+      "product sentence"
+    )
+    XCTAssertTrue(
+      app.staticTexts[
+        "This iPhone never uploads its sign-ins. Only the readings it takes reach your Account."
+      ].exists,
+      "privacy sentence"
+    )
+    if !app.descendants(matching: .any)["settings.about.version"].waitForExistence(timeout: 2) {
+      scrollToIdentifier(app, "settings.about.version", attempts: 8)
+    }
+    XCTAssertTrue(
+      app.staticTexts["Version"].exists
+        || app.descendants(matching: .any)["settings.about.version"].exists,
+      "Version"
+    )
+    for link in ["Website", "GitHub"] {
+      if !app.descendants(matching: .any)[link].waitForExistence(timeout: 2) {
+        scrollToIdentifier(app, link, attempts: 6)
+      }
+      XCTAssertTrue(app.descendants(matching: .any)[link].exists, link)
+    }
+    if !app.descendants(matching: .any)["settings.about.license"].waitForExistence(timeout: 2) {
+      scrollToIdentifier(app, "settings.about.license", attempts: 6)
+    }
+    XCTAssertTrue(
+      app.descendants(matching: .any)["settings.about.license"].exists
+        || app.staticTexts["License"].exists,
+      "License MIT"
+    )
   }
 
   /// Every provider connection state on one screen: two Codex accounts, a refused session, a
-  /// connected Claude Code, and the rows that add another.
+  /// connected Claude Code, and the rows that add another. The picture and audit are taken at the
+  /// first connected row; then every row is walked, at whatever size the profile runs.
   func testProvidersMatrixScreen() throws {
     let app = launch(fixture: "providers", route: "settings")
     XCTAssertTrue(
       app.descendants(matching: .any)["settings.root"].waitForExistence(timeout: 10),
       "settings.root"
     )
+    let first = app.descendants(matching: .any)["providers.session.codex:codex_work"].firstMatch
     scrollToIdentifier(app, "providers.session.codex:codex_work", attempts: 12)
-    XCTAssertTrue(
-      app.descendants(matching: .any)["providers.session.codex:codex_work"]
-        .waitForExistence(timeout: 5),
-      "first connected Codex account"
-    )
-    settle(app)
+    XCTAssertTrue(first.waitForExistence(timeout: 5), "first connected Codex account")
+    settle(app, anchor: first)
     attachScreenshot(app, name: "settings-providers")
     try audit(app)
+
+    // The header can be on screen while a connected row is still below the fold and not yet built
+    // by the lazy List, so each row is scrolled to rather than merely asserted.
+    for identifier in [
+      "providers.session.codex:codex_work",
+      "providers.remove.codex:codex_work",
+      "providers.session.claude:claude_team",
+    ] {
+      // The lazy List may have dropped a row above the one the audit left on screen, so a row
+      // that is not built yet is searched for from the top.
+      if !app.descendants(matching: .any)[identifier].waitForExistence(timeout: 2) {
+        scrollToTop(app)
+        scrollToIdentifier(app, identifier, attempts: 12)
+      }
+      XCTAssertTrue(
+        app.descendants(matching: .any)[identifier].waitForExistence(timeout: 5),
+        identifier
+      )
+    }
+    // The refused session in this fixture is the second Codex account.
+    let refused = app.descendants(matching: .any)["providers.signin-again.codex:codex_personal"]
+    if !refused.exists {
+      scrollToTop(app)
+      scrollToIdentifier(app, "providers.signin-again.codex:codex_personal", attempts: 12)
+    }
+    XCTAssertTrue(refused.waitForExistence(timeout: 5), "Sign in again affordance")
+    XCTAssertTrue(
+      app.staticTexts["Sign in again to keep reading this account."].exists,
+      "refused session says what to do"
+    )
+    // A provider with nothing connected offers Connect; one that already has an account offers
+    // another.
+    let grokConnect = app.descendants(matching: .any)["providers.connect.grok"]
+    if !grokConnect.waitForExistence(timeout: 2) {
+      scrollToIdentifier(app, "providers.connect.grok", attempts: 12)
+    }
+    XCTAssertTrue(grokConnect.waitForExistence(timeout: 5), "Grok Connect row")
+    XCTAssertTrue(
+      grokConnect.label.contains("Connect"),
+      "a provider with nothing connected offers Connect, got \(grokConnect.label)"
+    )
+    let codexConnect = app.descendants(matching: .any)["providers.connect.codex"]
+    if !codexConnect.waitForExistence(timeout: 2) {
+      scrollToTop(app)
+      scrollToIdentifier(app, "providers.connect.codex", attempts: 12)
+    }
+    XCTAssertTrue(codexConnect.waitForExistence(timeout: 5), "Codex Add Account row")
+    XCTAssertTrue(
+      codexConnect.label.contains("Add Account"),
+      "a provider already connected offers another account, got \(codexConnect.label)"
+    )
   }
 
   /// Usage with an Account: the period chooser, the two headline values and the daily chart.
@@ -534,6 +654,52 @@ final class QuotaScreenUITests: QuotaUITestCase {
     selectLast30DaysIfNeeded(app)
     settle(app)
     attachScreenshot(app, name: "usage-content")
+    try audit(app)
+  }
+
+  /// Usage on Today, opened directly on that period: the capture the period journey used to take.
+  func testUsageTodayScreen() throws {
+    let app = launch(fixture: "content", route: "usage.today")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["usage.root"].waitForExistence(timeout: 10),
+      "usage.root"
+    )
+    let period = app.descendants(matching: .any)["usage.period"].firstMatch
+    XCTAssertTrue(period.waitForExistence(timeout: 5), "usage period menu")
+    XCTAssertTrue(
+      selectedPeriod(app).contains("Today"), "opened on Today, got \(selectedPeriod(app))")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["usage.headline"].waitForExistence(timeout: 5),
+      "usage.headline"
+    )
+    settle(app)
+    attachScreenshot(app, name: "usage-today")
+    try audit(app)
+  }
+
+  /// Usage on a fixed custom range (`--route usage.custom`: August 8 – 12, 2026, the range the
+  /// period journey picks by hand).
+  func testUsageCustomRangeScreen() throws {
+    let app = launch(fixture: "content", route: "usage.custom")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["usage.root"].waitForExistence(timeout: 10),
+      "usage.root"
+    )
+    let period = app.descendants(matching: .any)["usage.period"].firstMatch
+    XCTAssertTrue(period.waitForExistence(timeout: 5), "usage period menu")
+    XCTAssertTrue(
+      selectedPeriod(app).contains("Custom"),
+      "opened on the custom range, got \(selectedPeriod(app))"
+    )
+    XCTAssertTrue(
+      app.descendants(matching: .any)["usage.headline"].waitForExistence(timeout: 5),
+      "usage.headline"
+    )
+    let title = app.descendants(matching: .any)["usage.period.title"].firstMatch
+    XCTAssertTrue(
+      title.label.hasPrefix("Aug 8 – Aug 12, 2026"), "the custom range's title, got \(title.label)")
+    settle(app)
+    attachScreenshot(app, name: "usage-custom")
     try audit(app)
   }
 
@@ -572,7 +738,6 @@ final class QuotaScreenUITests: QuotaUITestCase {
     try audit(app)
   }
 
-  /// Devices reached directly, so the journey does not have to carry its picture.
   /// The account states the smoke tests assert controls for: their copy and their audit.
   func testSignedOutScreen() throws {
     try captureRoot(fixture: "signed-out", root: "overview.root", name: "overview-signed-out")
@@ -603,16 +768,13 @@ final class QuotaScreenUITests: QuotaUITestCase {
     try captureRoot(fixture: "local-only", root: "overview.root", name: "overview-local-only")
   }
 
-  /// What this phone read for itself, in detail: its own remaining history and sources.
+  /// What this phone read for itself, in detail, opened directly: its own remaining history with
+  /// this iPhone named beside it, and the sources disclosure with this iPhone reporting.
   func testLocalOnlySubscriptionDetailScreen() throws {
-    let app = launch(fixture: "local-only")
+    let app = launch(
+      fixture: "local-only", route: "subscription.detail/codex|visual_codex_phone|global|")
     XCTAssertTrue(
-      app.descendants(matching: .any)["overview.root"].waitForExistence(timeout: 10),
-      "overview.root"
-    )
-    app.descendants(matching: .any)["overview.subscription"].firstMatch.tap()
-    XCTAssertTrue(
-      app.descendants(matching: .any)["subscription.detail"].waitForExistence(timeout: 5),
+      app.descendants(matching: .any)["subscription.detail"].waitForExistence(timeout: 10),
       "subscription.detail"
     )
     let history = app.descendants(matching: .any)["subscription.history"].firstMatch
@@ -620,8 +782,14 @@ final class QuotaScreenUITests: QuotaUITestCase {
       scrollToIdentifier(app, "subscription.history", attempts: 12)
     }
     XCTAssertTrue(history.waitForExistence(timeout: 5), "subscription.history")
+    // What this phone read for itself has samples behind it, so remaining history plots them.
+    XCTAssertTrue(
+      app.staticTexts["Remaining history"].waitForExistence(timeout: 5),
+      "history title"
+    )
+    XCTAssertTrue(app.staticTexts["This iPhone"].exists, "This iPhone beside remaining history")
+    settle(app, anchor: history)
     attachScreenshot(app, name: "subscription-detail-local")
-    settle(app)
     try audit(app)
 
     // What read it is the other half of a local-only detail: the disclosure lists the sources, and
@@ -632,6 +800,10 @@ final class QuotaScreenUITests: QuotaUITestCase {
       "subscription.sources"
     )
     scrollToIdentifier(app, "subscription.reporting")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["subscription.reporting"].waitForExistence(timeout: 5),
+      "subscription.reporting"
+    )
     XCTAssertTrue(app.staticTexts["This iPhone"].waitForExistence(timeout: 5), "This iPhone")
   }
 
@@ -650,12 +822,16 @@ final class QuotaScreenUITests: QuotaUITestCase {
     try audit(app)
   }
 
-  private func captureSettingsDestination(route: String, root: String, name: String) throws {
+  @discardableResult
+  private func captureSettingsDestination(route: String, root: String, name: String) throws
+    -> XCUIApplication
+  {
     let app = launch(fixture: "content", route: route)
     XCTAssertTrue(app.descendants(matching: .any)[root].waitForExistence(timeout: 10), root)
     settle(app)
     attachScreenshot(app, name: name)
     try audit(app)
+    return app
   }
 
   private func captureRoot(fixture: String, root: String, name: String) throws {

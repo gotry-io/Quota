@@ -783,15 +783,16 @@ impl LocalService {
             return;
         }
         if let Ok(refresh) = self.inner.refresh.lock() {
-            for lane in [
+            for active in [
                 &refresh.active,
                 &refresh.quota,
                 &refresh.usage,
                 &refresh.account,
-            ] {
-                if let Some(active) = lane {
-                    active.cancel.store(true, Ordering::Release);
-                }
+            ]
+            .into_iter()
+            .flatten()
+            {
+                active.cancel.store(true, Ordering::Release);
             }
         }
         if let Ok(login) = self.inner.login.lock()
@@ -891,15 +892,16 @@ impl LocalService {
             {
                 return true;
             }
-            for lane in [
+            for active in [
                 &refresh.active,
                 &refresh.quota,
                 &refresh.usage,
                 &refresh.account,
-            ] {
-                if let Some(active) = lane {
-                    active.cancel.store(true, Ordering::Release);
-                }
+            ]
+            .into_iter()
+            .flatten()
+            {
+                active.cancel.store(true, Ordering::Release);
             }
         }
         let deadline = Instant::now() + deadline;
@@ -1036,15 +1038,16 @@ impl LocalService {
         // this flag directly; account operations also re-check the epoch around every request, so
         // no later upload stage can start from the signed-out session.
         if let Ok(refresh) = self.inner.refresh.lock() {
-            for lane in [
+            for active in [
                 &refresh.active,
                 &refresh.quota,
                 &refresh.usage,
                 &refresh.account,
-            ] {
-                if let Some(active) = lane {
-                    active.cancel.store(true, Ordering::Release);
-                }
+            ]
+            .into_iter()
+            .flatten()
+            {
+                active.cancel.store(true, Ordering::Release);
             }
         }
         let Some(session) = self.inner.state.session_json().map_err(state_error)? else {
@@ -1986,7 +1989,7 @@ impl LocalService {
         self.apply_component_result(ComponentName::Usage, outcome.usage);
         self.apply_component_result(ComponentName::Pricing, outcome.pricing);
         let account_result = self.account_result_for_session(outcome.account);
-        let account_is_news = matches!(&account_result, Ok(_))
+        let account_is_news = account_result.is_ok()
             || account_result
                 .as_ref()
                 .err()
@@ -3663,9 +3666,11 @@ mod tests {
                 }
             }))
             .expect("session");
-        let mut record = crate::state::QuotaHistorySyncRecord::default();
-        record.last_upload_at = Some("2026-09-21T10:05:00Z".to_owned());
-        record.last_error = None;
+        let record = crate::state::QuotaHistorySyncRecord {
+            last_upload_at: Some("2026-09-21T10:05:00Z".to_owned()),
+            last_error: None,
+            ..Default::default()
+        };
         state
             .set_quota_history_sync("account_1", &record)
             .expect("record");
@@ -4428,7 +4433,7 @@ mod tests {
             &backend::LocalQuotaHistory::default(),
             now,
         );
-        assert!(kept.get("codex|fp|global|").is_none());
+        assert!(!kept.contains_key("codex|fp|global|"));
         assert_eq!(items[0].selected_source_id, "device:device_remote");
         assert!(items[0].source_pin.is_none());
         drop(state);

@@ -255,8 +255,7 @@ fn snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const FIXTURE: &str = include_str!("../../../provider/fixtures/quota-responses.json");
+    use crate::providers::common::quota_response_fixture;
 
     #[test]
     fn maps_key_budget_before_credits() {
@@ -287,10 +286,8 @@ mod tests {
 
     #[test]
     fn maps_provider_response_fixture() {
-        let root: Value = serde_json::from_str(FIXTURE).expect("provider quota fixture");
-        let openrouter = root.get("openrouter").expect("OpenRouter fixture");
-        let credits = map_credits(openrouter.get("credits").expect("credits response"));
-        let key = map_key(openrouter.get("key").expect("key response"));
+        let credits = map_credits(&quota_response_fixture("openrouter", "credits"));
+        let key = map_key(&quota_response_fixture("openrouter", "key"));
         let windows = map_windows(credits.as_ref(), key.as_ref());
         assert_eq!(windows.len(), 2);
         assert_eq!(windows[0].id, "key_daily");

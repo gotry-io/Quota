@@ -441,6 +441,100 @@ struct QuotaHistoryTests {
     #expect(try watermarks.load().accounts["account_01"]?.observedSync == true)
   }
 
+  @Test func aNewerOldestFromRelayBackfillsThatSeriesAgainOnce() async throws {
+    let watermarks = MemoryQuotaHistoryWatermarkStore()
+    let earlier = Fixtures.date("2026-09-21T10:00:00Z")
+    let newest = Fixtures.date("2026-09-21T10:15:00Z")
+    // This on-period already uploaded 10:00. The switch then went off and on on the website,
+    // so the first answer's oldest is the 10:15 bucket this upload sends.
+    try watermarks.save(
+      QuotaHistoryWatermarkFile(
+        accounts: [
+          "account_01": QuotaHistoryWatermarkFile.Account(
+            observedSync: true,
+            series: [
+              QuotaHistoryWatermarkFile.Series(
+                provider: "codex",
+                fingerprint: "account_test",
+                windowID: "five_hour",
+                newestBucketStart: newest,
+                lastUploaded: [],
+                oldestBucketStart: earlier
+              )
+            ]
+          )
+        ]
+      )
+    )
+    let transport = HistoryTransport(
+      historyOldest: ["2026-09-21T10:15:00Z", "2026-09-21T10:00:00Z"]
+    )
+    let model = historyModel(transport: transport, watermarks: watermarks)
+
+    await model.restore()
+    await model.waitForDetachedLaunchWork()
+
+    let bodies = historyPutBodies(transport)
+    #expect(bodies.count == 2)
+    #expect(bodies.first.map { !$0.contains("2026-09-21T10:00:00Z") } == true)
+    #expect(bodies.last.map { $0.contains("2026-09-21T10:00:00Z") } == true)
+    let stored = try #require(watermarks.load().accounts["account_01"]?.series.first)
+    #expect(stored.oldestBucketStart == earlier)
+    #expect(stored.newestBucketStart == newest)
+
+    // Relay holds the span again: nothing new is sent.
+    await model.quotaHistory.sync()
+    #expect(historyPutBodies(transport).count == 2)
+  }
+
+  @Test func aRecordPastItsSpanFallsBackToTheWatermarkBeforeThisChunk() async throws {
+    let watermarks = MemoryQuotaHistoryWatermarkStore()
+    let resets = Fixtures.date("2026-09-21T15:00:00Z")
+    let confirmed = Fixtures.date("2026-09-21T10:00:00Z")
+    // The recorded oldest is 48 h old, so it is no longer evidence. Relay confirmed the 10:00
+    // bucket, which is already uploaded, so this pass sends only 10:15; an answer that names
+    // 10:15 as the oldest says the 10:00 row went.
+    try watermarks.save(
+      QuotaHistoryWatermarkFile(
+        accounts: [
+          "account_01": QuotaHistoryWatermarkFile.Account(
+            observedSync: true,
+            series: [
+              QuotaHistoryWatermarkFile.Series(
+                provider: "codex",
+                fingerprint: "account_test",
+                windowID: "five_hour",
+                newestBucketStart: confirmed,
+                lastUploaded: [
+                  QuotaHistorySync.Bucket(
+                    resetsAt: resets,
+                    bucketStart: confirmed,
+                    usedPercent: 14.5
+                  )
+                ],
+                oldestBucketStart: Fixtures.date("2026-09-19T10:00:00Z")
+              )
+            ]
+          )
+        ]
+      )
+    )
+    let transport = HistoryTransport(
+      historyOldest: ["2026-09-21T10:15:00Z", "2026-09-21T10:00:00Z"]
+    )
+    let model = historyModel(transport: transport, watermarks: watermarks)
+
+    await model.restore()
+    await model.waitForDetachedLaunchWork()
+
+    let bodies = historyPutBodies(transport)
+    #expect(bodies.count == 2)
+    #expect(bodies.first.map { !$0.contains("2026-09-21T10:00:00Z") } == true)
+    #expect(bodies.last.map { $0.contains("2026-09-21T10:00:00Z") } == true)
+    let stored = try #require(watermarks.load().accounts["account_01"]?.series.first)
+    #expect(stored.oldestBucketStart == confirmed)
+  }
+
   @Test func cachedSyncOnOfflineKeepsTheToggleAndTheAccountSeries() async throws {
     let reads = MemoryQuotaHistoryReadStore()
     try reads.save(
@@ -940,6 +1034,9 @@ private final class HistoryTransport: HTTPTransport, @unchecked Sendable {
   var settingsStatus: Int
   var settingsPUTStatus: Int
   var holdFirstHistoryPut: Bool
+  /// The `oldest_bucket_start` each quota-history PUT answers, in order. Past the end, the
+  /// 10:00 bucket the journal fixture backfills.
+  var historyOldest: [String]
 
   private struct MutableState {
     var recorded: [Recorded] = []
@@ -957,7 +1054,8 @@ private final class HistoryTransport: HTTPTransport, @unchecked Sendable {
     gateHistory: Bool = false,
     settingsStatus: Int = 200,
     settingsPUTStatus: Int = 200,
-    holdFirstHistoryPut: Bool = false
+    holdFirstHistoryPut: Bool = false,
+    historyOldest: [String] = []
   ) {
     self.historyStatus = historyStatus
     self.historyCode = historyCode
@@ -966,6 +1064,7 @@ private final class HistoryTransport: HTTPTransport, @unchecked Sendable {
     self.settingsStatus = settingsStatus
     self.settingsPUTStatus = settingsPUTStatus
     self.holdFirstHistoryPut = holdFirstHistoryPut
+    self.historyOldest = historyOldest
   }
 
   var isWaitingForHistory: Bool {
@@ -1049,7 +1148,13 @@ private final class HistoryTransport: HTTPTransport, @unchecked Sendable {
     case ("PUT", "/api/v6/device/snapshots"):
       return (200, snapshotUploadBody(), [:])
     case ("PUT", "/api/v6/device/quota-history"):
-      if historyStatus == 200 { return (200, historyUploadBody(), [:]) }
+      if historyStatus == 200 {
+        let ordinal = state.withLock(\.historyPuts)
+        let oldest =
+          historyOldest.indices.contains(ordinal - 1)
+          ? historyOldest[ordinal - 1] : "2026-09-21T10:00:00Z"
+        return (200, historyUploadBody(oldest: oldest), [:])
+      }
       return (historyStatus, errorBody(historyCode), [:])
     case ("GET", "/api/v6/account/quota-history"):
       if readStatus != 200 { return (readStatus, Data(), [:]) }
@@ -1092,11 +1197,12 @@ private func snapshotUploadBody() -> Data {
   )
 }
 
-private func historyUploadBody() -> Data {
+private func historyUploadBody(oldest: String) -> Data {
   Data(
     """
     {"protocol_version":6,"series":[{"provider":"codex","fingerprint":"account_test",\
-    "window_id":"five_hour","bucket_start":"2026-09-21T10:15:00Z"}]}
+    "window_id":"five_hour","bucket_start":"2026-09-21T10:15:00Z",\
+    "oldest_bucket_start":"\(oldest)"}]}
     """.utf8
   )
 }

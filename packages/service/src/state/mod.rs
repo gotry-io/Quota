@@ -184,6 +184,12 @@ pub struct QuotaHistorySyncRecord {
 pub struct QuotaHistorySeriesRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub watermark: Option<String>,
+    /// The oldest bucket this device uploaded in the current on-period that Relay must still
+    /// hold. Once it stops being live the watermark is the evidence, and the next accepted
+    /// chunk re-seeds it (`reseed_oldest` in the history sync fixture). A record
+    /// written before this field has none, and starts from its next upload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oldest: Option<String>,
     #[serde(default)]
     pub previous: Vec<crate::history::QuotaHistorySyncedPoint>,
 }
@@ -3177,6 +3183,19 @@ impl StateStore {
 ///
 /// An appended tail is already in `usage_file_records` by the time this runs, so the fold is
 /// the whole file rather than a running merge, and an empty file drops the row.
+/// One session file's aggregate row: first and last event, requests, input and output tokens,
+/// summed source cost, record count, and how many records carried a source cost.
+type UsageSessionTotals = (
+    Option<String>,
+    Option<String>,
+    i64,
+    i64,
+    i64,
+    Option<i64>,
+    i64,
+    i64,
+);
+
 fn fold_usage_session(
     tx: &rusqlite::Transaction<'_>,
     agent: UsageAgent,
@@ -3184,7 +3203,7 @@ fn fold_usage_session(
     project_key: &str,
     modified_ns: u128,
 ) -> Result<bool, StateError> {
-    let totals: (Option<String>, Option<String>, i64, i64, i64, Option<i64>, i64, i64) = tx
+    let totals: UsageSessionTotals = tx
         .query_row(
             "SELECT MIN(occurred_at), MAX(occurred_at),
                     COALESCE(SUM(CAST(json_extract(event_json, '$.requests') AS INTEGER)), 0),
@@ -6762,14 +6781,17 @@ mod tests {
         store
             .set_account_settings_cache("account_1", Some("\"4\""), &document)
             .expect("settings");
-        let mut record = QuotaHistorySyncRecord::default();
-        record.sync = true;
-        record.backfill_done = true;
-        record.last_upload_at = Some("2026-09-21T10:05:00Z".to_owned());
+        let mut record = QuotaHistorySyncRecord {
+            sync: true,
+            backfill_done: true,
+            last_upload_at: Some("2026-09-21T10:05:00Z".to_owned()),
+            ..Default::default()
+        };
         record.series.insert(
             "codex\u{0}account_test\u{0}five_hour".to_owned(),
             QuotaHistorySeriesRecord {
                 watermark: Some("2026-09-21T10:00:00Z".to_owned()),
+                oldest: None,
                 previous: Vec::new(),
             },
         );

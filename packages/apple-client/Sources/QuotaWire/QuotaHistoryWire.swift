@@ -215,10 +215,13 @@ public struct QuotaHistoryUploadRequest: Codable, Equatable, Sendable {
   }
 }
 
-/// What `PUT /api/v6/device/quota-history` answers: the newest `bucket_start` now held per series.
+/// What `PUT /api/v6/device/quota-history` answers: the newest and oldest bucket Relay now holds
+/// from this device, per series the upload named.
 ///
-/// The JSON key is `bucket_start`. The Swift name is `newestBucketStart`, so its coding key is
-/// the camelCase `bucketStart` that `WireCodec` turns into `bucket_start`.
+/// The JSON key of the newest is `bucket_start`. The Swift name is `newestBucketStart`, so its
+/// coding key is the camelCase `bucketStart` that `WireCodec` turns into `bucket_start`.
+/// `oldest_bucket_start` is optional on read: a Relay before ADR 0062's 2026-09-23 amendment
+/// does not send it.
 public struct QuotaHistoryUploadResponse: Codable, Equatable, Sendable {
   public let protocolVersion: Int
   public let series: [SeriesWatermark]
@@ -260,17 +263,20 @@ public struct QuotaHistoryUploadResponse: Codable, Equatable, Sendable {
     public let fingerprint: String
     public let windowId: String
     public let newestBucketStart: Date?
+    public let oldestBucketStart: Date?
 
     public init(
       provider: ProviderID,
       fingerprint: String,
       windowId: String,
-      newestBucketStart: Date?
+      newestBucketStart: Date?,
+      oldestBucketStart: Date? = nil
     ) {
       self.provider = provider
       self.fingerprint = fingerprint
       self.windowId = windowId
       self.newestBucketStart = newestBucketStart
+      self.oldestBucketStart = oldestBucketStart
     }
 
     public init(from decoder: any Decoder) throws {
@@ -279,6 +285,7 @@ public struct QuotaHistoryUploadResponse: Codable, Equatable, Sendable {
       fingerprint = try quotaHistoryReadFingerprint(container, forKey: .fingerprint)
       windowId = try quotaHistoryReadWindowId(container, forKey: .windowId)
       newestBucketStart = try container.decodeIfPresent(Date.self, forKey: .newestBucketStart)
+      oldestBucketStart = try container.decodeIfPresent(Date.self, forKey: .oldestBucketStart)
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -287,6 +294,7 @@ public struct QuotaHistoryUploadResponse: Codable, Equatable, Sendable {
       try container.encode(fingerprint, forKey: .fingerprint)
       try container.encode(windowId, forKey: .windowId)
       try container.encodeIfPresent(newestBucketStart, forKey: .newestBucketStart)
+      try container.encodeIfPresent(oldestBucketStart, forKey: .oldestBucketStart)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -295,6 +303,7 @@ public struct QuotaHistoryUploadResponse: Codable, Equatable, Sendable {
       case windowId
       /// JSON `bucket_start`, after `WireCodec` converts snake_case.
       case newestBucketStart = "bucketStart"
+      case oldestBucketStart
     }
   }
 }

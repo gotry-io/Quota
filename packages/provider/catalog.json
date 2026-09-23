@@ -139,7 +139,7 @@
       },
       "capabilities": {
         "tier": "first_class",
-        "known_gaps": ["pricing.api_equivalent"],
+        "known_gaps": [],
         "validated": {
           "quota.five_hour": {
             "kind": "fixture",
@@ -189,8 +189,10 @@
             "note": "the dated status-page table in provider-collection.md"
           },
           "pricing.api_equivalent": {
-            "kind": "unverified",
-            "note": "no pricing-conformance row and no test prices an anthropic_direct Claude row"
+            "kind": "fixture",
+            "fixture": "packages/protocol/fixtures/pricing-conformance.json",
+            "pointer": "/rows/claude_opus_5",
+            "note": "a verbatim slice of the Relay's claude-opus-5 entries; claude_code_log_prices_anthropic_direct_rows_at_the_list_rate prices a parsed log end to end"
           },
           "pricing.source_reported": {
             "kind": "test",
@@ -237,9 +239,9 @@
         "known_gaps": [],
         "validated": {
           "quota.weekly": {
-            "kind": "test",
-            "file": "packages/service/src/providers/grok/mod.rs",
-            "name": "maps_weekly_billing_cycle"
+            "kind": "fixture",
+            "fixture": "packages/provider/fixtures/quota-responses.json",
+            "pointer": "/grok/billing"
           },
           "quota.monthly": {
             "kind": "fixture",
@@ -382,10 +384,9 @@
         "known_gaps": [],
         "validated": {
           "quota.balance": {
-            "kind": "test",
-            "file": "packages/service/src/providers/deepseek.rs",
-            "name": "keeps_positive_non_usd_balance_when_usd_is_zero",
-            "note": "quota-responses.json also records this body and no test reads that entry"
+            "kind": "fixture",
+            "fixture": "packages/provider/fixtures/quota-responses.json",
+            "pointer": "/deepseek/balance"
           },
           "channel.api_key": {
             "kind": "test",
@@ -444,16 +445,14 @@
         "known_gaps": [],
         "validated": {
           "quota.five_hour": {
-            "kind": "test",
-            "file": "packages/service/src/providers/kimi.rs",
-            "name": "maps_weekly_and_five_hour_windows",
-            "note": "quota-responses.json also records this body and no test reads that entry"
+            "kind": "fixture",
+            "fixture": "packages/provider/fixtures/quota-responses.json",
+            "pointer": "/kimi/usages/limits/0"
           },
           "quota.weekly": {
-            "kind": "test",
-            "file": "packages/service/src/providers/kimi.rs",
-            "name": "maps_weekly_and_five_hour_windows",
-            "note": "quota-responses.json also records this body and no test reads that entry"
+            "kind": "fixture",
+            "fixture": "packages/provider/fixtures/quota-responses.json",
+            "pointer": "/kimi/usages/usage"
           },
           "channel.api_key": {
             "kind": "unverified",
@@ -511,10 +510,10 @@
         "known_gaps": [],
         "validated": {
           "quota.balance": {
-            "kind": "test",
-            "file": "packages/service/src/providers/litellm.rs",
-            "name": "maps_nested_key_info_and_team_list_variants",
-            "note": "asserts the team budget window; no test asserts its USD remaining_value"
+            "kind": "fixture",
+            "fixture": "packages/provider/fixtures/quota-responses.json",
+            "pointer": "/litellm",
+            "note": "key_info, user_info and team_info together: the personal and team USD budgets"
           },
           "channel.api_key": {
             "kind": "test",

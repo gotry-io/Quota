@@ -11,6 +11,11 @@ struct QuotaHistoryWatermarkFile: Codable, Equatable, Sendable {
     var windowID: String
     var newestBucketStart: Date?
     var lastUploaded: [QuotaHistorySync.Bucket]
+    /// The oldest bucket this iPhone uploaded in the current on-period that Relay must still
+    /// hold. Once it stops being live the watermark is the evidence, and the next accepted
+    /// chunk re-seeds it (`reseed_oldest` in the history sync fixture). A file
+    /// written before this field has none, and starts from its next upload.
+    var oldestBucketStart: Date? = nil
   }
 
   struct Account: Codable, Equatable, Sendable {

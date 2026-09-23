@@ -126,6 +126,20 @@ function sqliteEpochSql(value: string): string {
   return `CAST(strftime('%s', replace(replace(${value}, 'T', ' '), 'Z', '')) AS INTEGER)`;
 }
 
+/**
+ * The upload answer: per series of this device, the newest and oldest bucket Relay holds. One
+ * query per upload, a search of the primary key on `device_id` (`EXPLAIN QUERY PLAN`:
+ * `SEARCH quota_history USING INDEX sqlite_autoindex_quota_history_1 (device_id=?)`), grouped
+ * in that index's order. A device that uploaded an older bucket than the oldest answered knows
+ * Relay lost rows (ADR 0062, amendment 2026-09-23).
+ */
+export const quotaHistoryUploadAnswerSql = `SELECT provider, fingerprint, window_id,
+       MAX(bucket_start) AS bucket_start,
+       MIN(bucket_start) AS oldest_bucket_start
+FROM quota_history
+WHERE device_id = ?1 AND account_id = ?2
+GROUP BY provider, fingerprint, window_id`;
+
 function quotaHistoryInSpanSql(column: string, nowPlaceholder: string): string {
   return `${sqliteEpochSql(column)} >= ${sqliteEpochSql(nowPlaceholder)} - ${quotaHistorySpanSql}`;
 }
@@ -1379,18 +1393,14 @@ export class D1AccountState implements AccountState {
       ),
     );
     const watermarks = await this.database
-      .prepare(
-        `SELECT provider, fingerprint, window_id, MAX(bucket_start) AS bucket_start
-         FROM quota_history
-         WHERE device_id = ?1 AND account_id = ?2
-         GROUP BY provider, fingerprint, window_id`,
-      )
+      .prepare(quotaHistoryUploadAnswerSql)
       .bind(principal.device_id, principal.account_id)
       .all<{
         provider: ProviderId;
         fingerprint: string;
         window_id: string;
         bucket_start: string;
+        oldest_bucket_start: string;
       }>();
     return {
       outcome: "written",

@@ -374,7 +374,7 @@ impl UsagePeriodPayload {
         let first = NaiveDate::parse_from_str(&self.from, "%Y-%m-%d").map_err(|_| invalid())?;
         let last = NaiveDate::parse_from_str(&self.to, "%Y-%m-%d").map_err(|_| invalid())?;
         let days = (last - first).num_days();
-        if days < 0 || days >= MAXIMUM_USAGE_PERIOD_DAYS {
+        if !(0..MAXIMUM_USAGE_PERIOD_DAYS).contains(&days) {
             return Err(invalid());
         }
         if self.source == UsageSource::Account {

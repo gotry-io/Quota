@@ -44,6 +44,10 @@ class QuotaUITestCase: XCTestCase {
   }
 
 
+  /// Every launch names its text size and its appearance preference, so neither is whatever the
+  /// simulator or an earlier run left behind: the profile's size (`QUOTA_IOS_TEXT_SIZE`), else the
+  /// standard `large`; and the in-app Appearance preference as System, so the device appearance
+  /// `setUpWithError` set is the one drawn rather than a saved Light or Dark.
   func launch(fixture: String, route: String? = nil, textSize: String? = nil)
     -> XCUIApplication
   {
@@ -52,9 +56,9 @@ class QuotaUITestCase: XCTestCase {
     if let route {
       arguments += ["--route", route]
     }
-    if let size = textSize ?? uitestEnvironment("QUOTA_IOS_TEXT_SIZE") {
-      arguments += ["-UIPreferredContentSizeCategoryName", contentSizeCategoryName(size)]
-    }
+    let size = textSize ?? uitestEnvironment("QUOTA_IOS_TEXT_SIZE") ?? "large"
+    arguments += ["-UIPreferredContentSizeCategoryName", contentSizeCategoryName(size)]
+    arguments += ["-appearance", "system"]
     app.launchArguments = arguments
     app.launch()
     return app
@@ -202,35 +206,265 @@ class QuotaUITestCase: XCTestCase {
     XCTAssertTrue(app.tabBars.buttons[name].exists, "\(name) tab")
   }
 
-  /// Devices is a Settings destination. Restore the tab bar, open Settings, then the row.
-  func openDevicesFromSettings(_ app: XCUIApplication) throws {
-    let root = app.descendants(matching: .any)["settings.root"]
-    // A tap that lands while the iOS 26 tab bar is still expanding can be dropped; restore the
-    // bar and tap once more before calling the destination missing.
-    var settingsTaps = 0
-    for _ in 0..<2 where !root.exists {
-      try restoreTabBar(app)
-      let settings = app.tabBars.buttons["Settings"]
-      XCTAssertTrue(settings.waitForExistence(timeout: 10), "Settings tab")
-      settingsTaps += 1
-      settings.tap()
-      _ = root.waitForExistence(timeout: 6)
+  // MARK: Readiness
+
+  /// Where a content control can be tapped: the window, below the navigation bar and above the
+  /// tab bar. A row under the floating iOS 26 bars still reports `isHittable`, and a synthesized
+  /// tap there lands on the glass instead of the row.
+  func unobscuredViewport(_ app: XCUIApplication) -> CGRect {
+    var area = app.windows.firstMatch.frame
+    guard !area.isEmpty else { return area }
+    var top = area.minY
+    for index in 0..<app.navigationBars.count {
+      let bar = app.navigationBars.element(boundBy: index)
+      guard bar.exists else { continue }
+      let frame = bar.frame
+      // Only a bar pinned to the top of the window covers content; a sheet's bar sits lower and
+      // is part of the sheet.
+      if frame.minY <= area.minY + area.height * 0.2 { top = max(top, frame.maxY) }
     }
-    recordRecovery("the Settings tab dropped a tap", recovered: root.exists, attempts: settingsTaps)
-    XCTAssertTrue(root.exists, "settings.root")
+    var bottom = area.maxY
+    let tabBar = app.tabBars.firstMatch
+    if tabBar.exists, tabBar.isHittable, !tabBar.frame.isEmpty {
+      bottom = min(bottom, tabBar.frame.minY)
+    }
+    area.origin.y = top
+    area.size.height = max(0, bottom - top)
+    return area
+  }
+
+  /// What a control looked like when it was checked, for a failure that says why it was not ready.
+  struct Readiness: CustomStringConvertible {
+    var exists = false
+    var enabled = false
+    var hittable = false
+    var frame = CGRect.null
+    var stable = false
+    var viewport = CGRect.null
+    var inViewport = false
+
+    var description: String {
+      "exists=\(exists) enabled=\(enabled) hittable=\(hittable) stable=\(stable) "
+        + "inViewport=\(inViewport) frame=\(frame) viewport=\(viewport)"
+    }
+  }
+
+  /// Waits until `element` can be tapped the way a person would: it exists, is enabled (unless
+  /// `enabled` is false), is hittable, has held the same frame across two samples, and — for a
+  /// content control — lies inside the unobscured viewport, scrolling it there by a measured
+  /// nudge when it does not. A bar, menu or sheet control passes `chrome: true` and is checked
+  /// against the whole window. Fails the test with the observed state when the control never gets
+  /// there.
+  @discardableResult
+  func waitUntilReady(
+    _ element: XCUIElement,
+    in app: XCUIApplication,
+    _ what: String,
+    enabled: Bool = true,
+    chrome: Bool = false,
+    timeout: TimeInterval = 20,
+    file: StaticString = #filePath,
+    line: UInt = #line
+  ) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    var state = Readiness()
+    var lastFrame = CGRect.null
+    var lastSampled = Date.distantPast
+    var nudges = 0
+    var moved = true
+    var extraSamples = 0
+    while true {
+      state = Readiness()
+      state.exists = element.exists
+      if state.exists {
+        state.enabled = element.isEnabled
+        state.hittable = element.isHittable
+        state.frame = element.frame
+        let now = Date()
+        // Frames are compared within half a point: a settled SwiftUI layout can answer
+        // 116.0 one sample and 116.00000000000006 the next, and exact equality never held on
+        // the CI runner.
+        let same = Self.about(state.frame, equals: lastFrame)
+        moved = !same
+        state.stable = !state.frame.isEmpty && same
+          && now.timeIntervalSince(lastSampled) >= 0.15
+        if !same {
+          lastFrame = state.frame
+          lastSampled = now
+        }
+        state.viewport = chrome ? app.windows.firstMatch.frame : unobscuredViewport(app)
+        state.inViewport = Self.lies(state.frame, inside: state.viewport)
+        if (state.enabled || !enabled) && state.hittable && state.stable && state.inViewport {
+          return true
+        }
+        // Resting outside the viewport: move it by the distance it is out, not a page.
+        if !chrome, state.stable, !state.inViewport, nudges < 8, !state.frame.isEmpty {
+          nudges += 1
+          nudge(app, frame: state.frame, into: state.viewport)
+          lastFrame = .null
+          continue
+        }
+      }
+      // Stability is two samples that agree. On a slow runner one round of queries takes
+      // seconds, so a frame that was still settling when the deadline passed gets a few more
+      // looks rather than being called unstable on the strength of one changed sample.
+      if Date() >= deadline {
+        if !moved || extraSamples >= 3 { break }
+        extraSamples += 1
+      }
+      RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+    }
+    XCTFail("\(what) was not ready to tap after \(Int(timeout))s: \(state)", file: file, line: line)
+    return false
+  }
+
+  static func about(_ left: CGRect, equals right: CGRect) -> Bool {
+    guard !left.isNull, !right.isNull else { return left.isNull && right.isNull }
+    return abs(left.minX - right.minX) < 0.5 && abs(left.minY - right.minY) < 0.5
+      && abs(left.width - right.width) < 0.5 && abs(left.height - right.height) < 0.5
+  }
+
+  /// Inside, allowing a point for rounding; a control taller than the viewport needs only its
+  /// centre inside, which is where a tap lands.
+  static func lies(_ frame: CGRect, inside viewport: CGRect) -> Bool {
+    guard !frame.isEmpty, !viewport.isEmpty else { return false }
+    if frame.height > viewport.height {
+      return viewport.contains(CGPoint(x: frame.midX, y: frame.midY))
+    }
+    return frame.minY >= viewport.minY - 1 && frame.maxY <= viewport.maxY + 1
+      && frame.minX >= viewport.minX - 1 && frame.maxX <= viewport.maxX + 1
+  }
+
+  /// Drags the list by how far `frame` is outside `viewport`, holding at the end so the list does
+  /// not fling past it.
+  func nudge(_ app: XCUIApplication, frame: CGRect, into viewport: CGRect) {
+    let list = scrollableList(in: app)
+    let listFrame = list.frame
+    guard !listFrame.isEmpty else { return }
+    // Positive moves content up (reveals what is below).
+    var distance: CGFloat = 0
+    if frame.maxY > viewport.maxY { distance = frame.maxY - viewport.maxY + 24 }
+    if frame.minY < viewport.minY { distance = frame.minY - viewport.minY - 24 }
+    let limit = listFrame.height * 0.4
+    distance = min(max(distance, -limit), limit)
+    let start = list.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+    let end = start.withOffset(CGVector(dx: 0, dy: -distance))
+    start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.2)
+  }
+
+  /// Taps `control` once it is ready and waits for `destination` to appear. A second tap is made
+  /// only for the failure it exists for — the destination did not appear and the control is still
+  /// there and still ready, i.e. the first tap was dropped — and is recorded as a recovery.
+  func tapToOpen(
+    _ control: XCUIElement,
+    in app: XCUIApplication,
+    _ what: String,
+    destination: String,
+    chrome: Bool = false,
+    timeout: TimeInterval = 8,
+    file: StaticString = #filePath,
+    line: UInt = #line
+  ) {
+    let target = app.descendants(matching: .any)[destination].firstMatch
+    var taps = 0
+    for _ in 0..<2 where !target.exists {
+      if taps > 0, !(control.exists && control.isHittable) { break }
+      guard waitUntilReady(control, in: app, what, chrome: chrome, file: file, line: line) else {
+        return
+      }
+      taps += 1
+      control.tap()
+      _ = target.waitForExistence(timeout: timeout)
+    }
+    recordRecovery("\(what) dropped a tap", recovered: target.exists, attempts: taps)
+    XCTAssertTrue(target.exists, "\(destination) after tapping \(what)", file: file, line: line)
+  }
+
+  /// Switches to a tab and waits for it to be the selected one with its root on screen. A root can
+  /// already be in the hierarchy behind another tab, so the tab's own selected state decides.
+  func selectTab(
+    _ app: XCUIApplication,
+    _ name: String,
+    root: String,
+    file: StaticString = #filePath,
+    line: UInt = #line
+  ) throws {
+    try restoreTabBar(app)
+    let tab = app.tabBars.buttons[name].firstMatch
+    var taps = 0
+    for _ in 0..<2 where !tab.isSelected {
+      guard waitUntilReady(tab, in: app, "\(name) tab", chrome: true, file: file, line: line)
+      else { return }
+      taps += 1
+      tab.tap()
+      let deadline = Date().addingTimeInterval(5)
+      while !tab.isSelected, Date() < deadline {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+      }
+    }
+    recordRecovery("the \(name) tab dropped a tap", recovered: tab.isSelected, attempts: taps)
+    XCTAssertTrue(tab.isSelected, "\(name) tab is selected", file: file, line: line)
+    XCTAssertTrue(
+      app.descendants(matching: .any)[root].waitForExistence(timeout: 8), root,
+      file: file, line: line)
+  }
+
+  /// Waits for a screen, sheet or menu to leave, and fails with what is still there.
+  func assertGone(
+    _ element: XCUIElement,
+    _ what: String,
+    timeout: TimeInterval = 6,
+    file: StaticString = #filePath,
+    line: UInt = #line
+  ) {
+    let gone = element.waitForNonExistence(timeout: timeout)
+    XCTAssertTrue(
+      gone, "\(what) is still on screen: \(element.debugDescription)", file: file, line: line)
+  }
+
+  // MARK: Navigation
+
+  /// Devices is a Settings destination: select Settings, then open the row.
+  func openDevicesFromSettings(_ app: XCUIApplication) throws {
+    try selectTab(app, "Settings", root: "settings.root")
     openSettingsDestination(app, link: "settings.devices", root: "devices.root")
+  }
+
+  /// The period menu (`usage.period`) and its current value.
+  func selectedPeriod(_ app: XCUIApplication) -> String {
+    let period = app.descendants(matching: .any)["usage.period"].firstMatch
+    return period.label + " " + ((period.value as? String) ?? "")
+  }
+
+  /// Chooses `item` in the period menu and asserts the menu now says so.
+  func choosePeriod(_ app: XCUIApplication, _ item: String) {
+    let period = app.descendants(matching: .any)["usage.period"].firstMatch
+    XCTAssertTrue(period.waitForExistence(timeout: 5), "usage period menu")
+    guard waitUntilReady(period, in: app, "usage period menu") else { return }
+    period.tap()
+    let choice = app.buttons[item].firstMatch
+    XCTAssertTrue(choice.waitForExistence(timeout: 5), "\(item) in the period menu")
+    guard waitUntilReady(choice, in: app, "\(item) in the period menu", chrome: true) else {
+      return
+    }
+    choice.tap()
+    assertGone(choice, "the period menu")
+    let deadline = Date().addingTimeInterval(5)
+    while !selectedPeriod(app).contains(item), Date() < deadline {
+      RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+    }
+    XCTAssertTrue(
+      selectedPeriod(app).contains(item),
+      "the period menu says \(item), got \(selectedPeriod(app))"
+    )
   }
 
   /// B4b's period chooser is a menu (`usage.period`), not a segmented control.
   func selectLast30DaysIfNeeded(_ app: XCUIApplication) {
     let period = app.descendants(matching: .any)["usage.period"].firstMatch
     XCTAssertTrue(period.waitForExistence(timeout: 5), "usage period menu")
-    let selected = period.label + " " + ((period.value as? String) ?? "")
-    if selected.contains("Last 30 days") { return }
-    period.tap()
-    let last30 = app.buttons["Last 30 days"].firstMatch
-    XCTAssertTrue(last30.waitForExistence(timeout: 5), "Last 30 days in the period menu")
-    last30.tap()
+    if selectedPeriod(app).contains("Last 30 days") { return }
+    choosePeriod(app, "Last 30 days")
   }
 
   func openUsageDestination(
@@ -238,52 +472,19 @@ class QuotaUITestCase: XCTestCase {
     link: String,
     root: String
   ) {
-    let titles: [String: String] = [
-      "usage.open-breakdown": "By provider / By model",
-      "usage.open-patterns": "Activity patterns",
-    ]
-    let title = titles[link]
-    func target() -> XCUIElement {
-      let byId = app.descendants(matching: .any)[link].firstMatch
-      if byId.exists { return byId }
-      if let title {
-        let button = app.buttons[title].firstMatch
-        if button.exists { return button }
-        return app.staticTexts[title].firstMatch
-      }
-      return byId
-    }
-    var control = target()
+    let control = app.descendants(matching: .any)[link].firstMatch
     if !control.waitForExistence(timeout: 2) {
       scrollToTop(app)
-      control = target()
     }
     if !control.exists {
       scrollToIdentifier(app, link, attempts: 16)
-      control = target()
-    }
-    if !control.exists, let title {
-      for _ in 0..<16 where !app.buttons[title].exists && !app.staticTexts[title].exists {
-        scrollContent(app, up: true)
-      }
-      control = target()
     }
     XCTAssertTrue(control.waitForExistence(timeout: 5), link)
-    if !control.isHittable {
-      revealIdentifier(app, link, attempts: 8)
-      control = target()
-    }
-    settle(app)
-    XCTAssertTrue(control.waitForExistence(timeout: 5), "\(link) after scroll")
-    control.tap()
-    XCTAssertTrue(
-      app.descendants(matching: .any)[root].waitForExistence(timeout: 8),
-      root
-    )
+    tapToOpen(control, in: app, link, destination: root)
   }
 
-  func popUsageDestination(_ app: XCUIApplication) {
-    popBack(app, to: "usage.root", backTitle: "Usage")
+  func popUsageDestination(_ app: XCUIApplication, from source: String) {
+    popBack(app, from: source, to: "usage.root", backTitle: "Usage")
   }
 
   func openSettingsDestination(
@@ -291,7 +492,7 @@ class QuotaUITestCase: XCTestCase {
     link: String,
     root: String
   ) {
-    var control = app.descendants(matching: .any)[link]
+    let control = app.descendants(matching: .any)[link].firstMatch
     if !control.waitForExistence(timeout: 2) {
       // A popped destination restores the hub where it was left, which can be either side of the
       // row being asked for, so the top is where the search starts.
@@ -301,54 +502,34 @@ class QuotaUITestCase: XCTestCase {
       scrollToIdentifier(app, link, attempts: 12)
     }
     XCTAssertTrue(control.waitForExistence(timeout: 5), link)
-    // A row can exist and still be under the floating iOS 26 tab bar, where a synthesized tap
-    // lands on the glass instead. Scroll it clear before tapping.
-    if !control.isHittable {
-      revealIdentifier(app, link, attempts: 8)
-    }
-    // A List rebuilds its rows while it settles after a scroll, and a query that resolved a
-    // moment ago can resolve to nothing at the instant of the tap. Wait for the row to be back.
-    settle(app)
-    control = app.descendants(matching: .any)[link].firstMatch
-    XCTAssertTrue(control.waitForExistence(timeout: 5), "\(link) after scroll")
-    // A tap that lands while the list is still settling can be dropped; tap once more while the
-    // row is still there before calling the destination missing (the same rule as popBack).
-    let target = app.descendants(matching: .any)[root]
-    var attempts = 0
-    for _ in 0..<2 where !target.exists {
-      attempts += 1
-      if control.exists, control.isHittable {
-        control.tap()
-      } else {
-        revealIdentifier(app, link, attempts: 4)
-        control = app.descendants(matching: .any)[link].firstMatch
-        if control.exists { control.tap() }
-      }
-      _ = target.waitForExistence(timeout: 5)
-    }
-    recordRecovery("\(link) dropped a tap", recovered: target.exists, attempts: attempts)
-    XCTAssertTrue(target.exists, root)
+    tapToOpen(control, in: app, link, destination: root)
   }
 
-  /// Pops one navigation level and waits for `root`. A back tap that lands mid-transition can be
-  /// dropped by the iOS 26 bar; tap once more while the back button is still there before calling
-  /// the destination missing.
-  func popBack(_ app: XCUIApplication, to root: String, backTitle: String) {
-    let back = app.navigationBars.buttons[backTitle]
-    let target = app.descendants(matching: .any)[root]
-    XCTAssertTrue(back.waitForExistence(timeout: 5), "back to \(backTitle)")
-    var rounds = 0
-    for _ in 0..<2 where !target.exists {
-      rounds += 1
-      if back.exists { back.tap() }
-      _ = target.waitForExistence(timeout: 5)
+  /// Pops one navigation level: the back button is ready, the tap is made, and the screen it left
+  /// (`source`) is gone before `root` is checked — an assertion made while the outgoing screen is
+  /// still in the hierarchy would be reading the transition. A second tap is made only when the
+  /// source is still there and the back button is still ready (the first tap was dropped by the
+  /// iOS 26 bar), and is recorded as a recovery.
+  func popBack(_ app: XCUIApplication, from source: String, to root: String, backTitle: String) {
+    let back = app.navigationBars.buttons[backTitle].firstMatch
+    let leaving = app.descendants(matching: .any)[source].firstMatch
+    XCTAssertTrue(leaving.exists, "\(source) before back")
+    var taps = 0
+    for _ in 0..<2 where leaving.exists {
+      if taps > 0, !(back.exists && back.isHittable) { break }
+      guard waitUntilReady(back, in: app, "back to \(backTitle)", chrome: true) else { return }
+      taps += 1
+      back.tap()
+      _ = leaving.waitForNonExistence(timeout: 5)
     }
-    recordRecovery("back to \(backTitle) dropped a tap", recovered: target.exists, attempts: rounds)
-    XCTAssertTrue(target.exists, "\(root) after back")
+    recordRecovery("back to \(backTitle) dropped a tap", recovered: !leaving.exists, attempts: taps)
+    XCTAssertFalse(leaving.exists, "\(source) is gone after back")
+    XCTAssertTrue(
+      app.descendants(matching: .any)[root].waitForExistence(timeout: 5), "\(root) after back")
   }
 
-  func popSettingsDestination(_ app: XCUIApplication) {
-    popBack(app, to: "settings.root", backTitle: "Settings")
+  func popSettingsDestination(_ app: XCUIApplication, from source: String) {
+    popBack(app, from: source, to: "settings.root", backTitle: "Settings")
     let logout = app.descendants(matching: .any)["settings.logout"]
     if !logout.waitForExistence(timeout: 2) {
       scrollToIdentifier(app, "settings.logout", attempts: 12)
@@ -356,30 +537,47 @@ class QuotaUITestCase: XCTestCase {
     XCTAssertTrue(logout.waitForExistence(timeout: 5), "hub Log Out after pop")
   }
 
-  /// One identifier-targeted scroll. Accessibility sizes can push a hub row below the fold.
-  /// A list still decelerating after a programmatic scroll is what the contrast auditor
-  /// samples; give it a moment to come to rest before an audit that follows a drag.
-  func settle(_ app: XCUIApplication) {
-    _ = app.wait(for: .runningForeground, timeout: 1)
-    usleep(900_000)
+  /// Waits for the screen to be at rest before a capture or an audit: the app is in the
+  /// foreground, and `anchor` — by default the root of the screen on show — holds the same frame
+  /// across two samples. After a scroll, pass an element inside the list: the list's own frame
+  /// does not move while its content decelerates, and the contrast pass samples pixels, so a row
+  /// still gliding reads as low contrast. Fails with the frames it saw when the anchor never
+  /// comes to rest.
+  func settle(
+    _ app: XCUIApplication,
+    anchor: XCUIElement? = nil,
+    file: StaticString = #filePath,
+    line: UInt = #line
+  ) {
+    XCTAssertTrue(
+      app.wait(for: .runningForeground, timeout: 5), "app in the foreground", file: file,
+      line: line)
+    let element: XCUIElement
+    if let anchor {
+      element = anchor.firstMatch
+    } else if let root = currentScreenRoot(app) {
+      element = root
+    } else {
+      return
+    }
+    let deadline = Date().addingTimeInterval(5)
+    var last = element.frame
+    var frames = [last]
+    while Date() < deadline {
+      RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+      let now = element.frame
+      if now == last, !now.isEmpty { return }
+      last = now
+      if frames.count < 8 { frames.append(now) }
+    }
+    XCTFail("\(element) did not come to rest in 5s; frames \(frames)", file: file, line: line)
   }
 
-  /// After a run of swipes, wait until a row has stopped moving before the contrast pass samples
-  /// the screen: a list still decelerating, or bouncing back from its end, reads as low contrast
-  /// for whatever the sampler catches mid-motion ("Privacy" on Settings, twice in CI). Two
-  /// frames 300 ms apart that agree are a list at rest; a fixed delay is a guess at how long
-  /// that takes on a loaded runner.
-  func settleScroll(_ app: XCUIApplication, anchor: XCUIElement) {
-    settle(app)
-    let element = anchor.firstMatch
-    let deadline = Date().addingTimeInterval(4)
-    var last = element.frame
-    while Date() < deadline {
-      usleep(300_000)
-      let now = element.frame
-      if now == last { return }
-      last = now
-    }
+  /// The root of the screen on show, most specific first (see `currentScreenName`).
+  func currentScreenRoot(_ app: XCUIApplication) -> XCUIElement? {
+    let name = currentScreenName(app)
+    guard name != "unknown" else { return nil }
+    return app.descendants(matching: .any)[name].firstMatch
   }
 
   /// Back to the top of a list, whatever it was scrolled to. One swipe is not the top of a hub
@@ -407,6 +605,7 @@ class QuotaUITestCase: XCTestCase {
     {
       return
     }
+    guard waitUntilReady(sources, in: app, "subscription.sources") else { return }
     sources.tap()
     _ = app.descendants(matching: .any)["subscription.reporting"].waitForExistence(timeout: 2)
   }

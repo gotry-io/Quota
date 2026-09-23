@@ -3,6 +3,39 @@ set -eu
 root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$root"
 
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "Quota iOS tests require python3 to select Xcode and an iOS Simulator." >&2
+  exit 1
+fi
+
+# The run's configuration is a tuple — Xcode, runtime, device, text size, appearance — chosen
+# explicitly and printed, because each of them changes the layout the tests see and the audits
+# report. QUOTA_IOS_XCODE, QUOTA_IOS_RUNTIME and QUOTA_IOS_SIMULATOR pin the first three;
+# otherwise scripts/ios-simulator.py chooses the newest Xcode, the newest runtime, and the first
+# preferred model on it. The UI tests launch at the standard size (`large`) and light appearance
+# unless QUOTA_IOS_TEXT_SIZE / QUOTA_IOS_APPEARANCE name a profile.
+DEVELOPER_DIR="$(python3 scripts/ios-simulator.py xcode)"
+export DEVELOPER_DIR
+tuple="$(python3 scripts/ios-simulator.py tuple)"
+IFS="$(printf '\t')" read -r udid simulator_name runtime_version runtime_build <<EOF_TUPLE
+$tuple
+EOF_TUPLE
+
+if [ -z "${udid:-}" ]; then
+  echo "Quota iOS tests failed to select an iOS Simulator." >&2
+  exit 1
+fi
+
+xcode_line="$(xcodebuild -version | paste -sd ' ' -)"
+configuration="Xcode: $xcode_line ($DEVELOPER_DIR)
+Runtime: iOS $runtime_version ($runtime_build)
+Device: $simulator_name ($udid)
+Text size: ${QUOTA_IOS_TEXT_SIZE:-large (standard)}
+Appearance: ${QUOTA_IOS_APPEARANCE:-light}
+Selection: ${QUOTA_IOS_ONLY_TESTING:-whole scheme}"
+
+destination="platform=iOS Simulator,id=$udid"
+
 # The app embeds packages/apple-client, so a local run tests it first. In CI the macOS `verify`
 # job already runs every Swift package once (scripts/test-swift.sh); QUOTA_IOS_SKIP_PACKAGE_TESTS=1
 # lets the two iOS jobs skip that second and third compile of the same package.
@@ -11,22 +44,6 @@ if [ "${QUOTA_IOS_SKIP_PACKAGE_TESTS:-}" = "1" ]; then
 else
   swift test --package-path packages/apple-client
 fi
-
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "Quota iOS tests require python3 to select an iOS Simulator." >&2
-  exit 1
-fi
-
-udid="$(python3 scripts/ios-simulator.py udid)"
-
-if [ -z "$udid" ]; then
-  echo "Quota iOS tests failed to select an iOS Simulator." >&2
-  exit 1
-fi
-
-
-
-destination="platform=iOS Simulator,id=$udid"
 
 # QUOTA_IOS_ONLY_TESTING names a target, or a target/class ("QuotaUITests/QuotaSmokeUITests"), so
 # CI can run the unit tests, the required journeys and the advisory screen census separately;
@@ -104,12 +121,22 @@ if ! resolve_packages; then
   resolve_packages
 fi
 
+# The configuration goes to the job's step summary as well as the log, so two runs that disagree
+# can be told apart without opening either bundle.
+if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+  {
+    echo "#### iOS test configuration"
+    echo ""
+    printf '%s\n' "$configuration" | sed 's/^/- /'
+    echo ""
+  } >>"$GITHUB_STEP_SUMMARY"
+fi
+
 run_xcodebuild() {
   # The toolchain and the simulator are part of the result: a layout or an audit that differs
   # between two machines is usually these lines differing. They are printed here, inside whatever
   # the run's log captures, rather than before it.
-  xcodebuild -version
-  xcrun simctl list devices | grep -F "$udid" || true
+  printf 'iOS test configuration\n%s\n' "$configuration"
   xcodebuild \
     -project apps/ios/Quota.xcodeproj \
     -scheme Quota \

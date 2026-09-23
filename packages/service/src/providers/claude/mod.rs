@@ -999,6 +999,30 @@ mod tests {
         assert_eq!(error.source_id, SOURCE);
     }
 
+    /// The recorded OAuth `/api/oauth/usage` body: the two headline windows and nothing else.
+    #[test]
+    fn maps_provider_response_fixture() {
+        let windows = map_usage(&crate::providers::common::quota_response_fixture(
+            "claude", "usage",
+        ));
+        assert_eq!(
+            windows
+                .iter()
+                .map(|window| (window.id.as_str(), window.used_percent))
+                .collect::<Vec<_>>(),
+            [("five_hour", 8.0), ("seven_day", 22.0)]
+        );
+        assert_eq!(
+            windows[0].resets_at.as_deref(),
+            Some("2026-08-02T17:00:00Z")
+        );
+        assert_eq!(
+            windows[1].resets_at.as_deref(),
+            Some("2026-08-09T12:00:00Z")
+        );
+        assert_eq!(windows[1].primary_cadence, Some(Cadence::Weekly));
+    }
+
     #[test]
     fn map_usage_marks_headline_windows_and_leaves_scoped_ones_unmarked() {
         let windows = map_usage(&serde_json::json!({

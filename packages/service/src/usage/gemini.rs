@@ -102,7 +102,7 @@ fn scan_json_conversations(
             continue;
         }
         scanned_source_count += 1;
-        let mut parser = GeminiParser::default();
+        let mut parser = GeminiParser;
         let source_reasons = RefCell::new(Vec::new());
         let mut source_records = Vec::new();
         match read_json_file(&current.path) {

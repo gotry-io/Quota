@@ -86,6 +86,25 @@ describe("pricing conformance", () => {
       expect(actual, testCase.name).toEqual(testCase.expected);
     }
   });
+
+  it("prices one anthropic_direct Claude Code row on its own at the Anthropic list rate", () => {
+    const catalog = pricingConformance.catalogs.anthropic_claude!;
+    expect(calculateUsageRowCost(catalog, pricingConformance.rows.claude_opus_5!)).toEqual({
+      status: "priced",
+      amount_microusd: 13_707_500n,
+      assumptions: [
+        "wildcard_service_tier",
+        "wildcard_inference_geo",
+        "wildcard_context_bucket",
+        "cache_write_inferred_rate",
+      ],
+      entry_id: "anthropic-claude-opus-5-standard-2026-07-24-any-standard-any-any",
+    });
+    expect(calculateUsageRowCost(catalog, pricingConformance.rows.claude_unknown_model!)).toEqual({
+      status: "unpriced",
+      reason: "unknown_model",
+    });
+  });
 });
 
 describe("quota calculations", () => {

@@ -1947,7 +1947,7 @@ impl NativeBackend {
             .tokens_in
             .checked_add(session.tokens_out)
             .filter(|value| *value <= usage::MAX_SAFE_COUNT)
-            .ok_or_else(|| BackendError::unavailable())?;
+            .ok_or_else(BackendError::unavailable)?;
         let cost = self.session_cost(&session, catalog)?;
         Ok(json!({
             "agent": session.agent,
@@ -3188,7 +3188,7 @@ fn collect_discovered_provider(
             // uploads the observation and nothing about how long it stays current.
             Ok(snapshot) => {
                 sources.push(json!({
-                    "source_id": providers::session_source_id(provider, &session),
+                    "source_id": providers::session_source_id(provider, session),
                     "outcome": "success",
                     "category": "success"
                 }));
@@ -4161,7 +4161,7 @@ pub(crate) fn custom_period_window(
     let first = NaiveDate::parse_from_str(from, "%Y-%m-%d").map_err(|_| invalid_usage_period())?;
     let last = NaiveDate::parse_from_str(to, "%Y-%m-%d").map_err(|_| invalid_usage_period())?;
     let days = (last - first).num_days();
-    if days < 0 || days >= crate::protocol::MAXIMUM_USAGE_PERIOD_DAYS {
+    if !(0..crate::protocol::MAXIMUM_USAGE_PERIOD_DAYS).contains(&days) {
         return Err(invalid_usage_period());
     }
     let after = last
@@ -8242,7 +8242,7 @@ mod tests {
         });
         let _items = backend.build_overview(&quota, Some(&account));
         let pins = state.overview_source_pins().expect("pins");
-        assert!(pins.get("codex|fp|global|").is_none());
+        assert!(!pins.contains_key("codex|fp|global|"));
         drop(backend);
         drop(state);
         fs::remove_dir_all(root).expect("cleanup");

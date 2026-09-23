@@ -1325,7 +1325,7 @@ mod tests {
                 let named_row = weekday_named.get(&weekday.to_string());
                 for (hour, tokens) in row.iter().enumerate() {
                     let expected_tokens = named_row
-                        .and_then(|value| value.get(&hour.to_string()))
+                        .and_then(|value| value.get(hour.to_string()))
                         .and_then(Value::as_u64)
                         .unwrap_or(0);
                     assert_eq!(

@@ -756,12 +756,14 @@ mod tests {
         server.join().expect("server");
     }
 
+    /// The recorded `/coding/v1/usages` body: string counts, a weekly allowance, and a
+    /// 300-minute limit.
     #[test]
     fn maps_weekly_and_five_hour_windows() {
-        let data = map_usages(&serde_json::json!({
-            "usage": {"limit": "100", "used": "25", "remaining": "75"},
-            "limits": [{"window": {"duration": 300, "timeUnit": "TIME_UNIT_MINUTE"}, "detail": {"limit": "50", "used": "10", "remaining": "40"}}]
-        })).unwrap();
+        let data = map_usages(&crate::providers::common::quota_response_fixture(
+            "kimi", "usages",
+        ))
+        .unwrap();
         let windows = map_windows(&data);
         assert_eq!(
             windows
@@ -769,6 +771,18 @@ mod tests {
                 .map(|window| window.id.as_str())
                 .collect::<Vec<_>>(),
             ["weekly", "five_hour"]
+        );
+        assert_eq!(windows[0].limit_value, Some(2048.0));
+        assert_eq!(windows[0].remaining_value, Some(1834.0));
+        assert_eq!(
+            windows[0].resets_at.as_deref(),
+            Some("2026-01-09T15:23:13Z")
+        );
+        assert_eq!(windows[1].used_percent, 69.5);
+        assert_eq!(windows[1].remaining_value, Some(61.0));
+        assert_eq!(
+            windows[1].resets_at.as_deref(),
+            Some("2026-01-06T13:33:02Z")
         );
         assert_eq!(windows[1].value_unit, Some("count"));
     }
