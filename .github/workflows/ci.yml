@@ -170,7 +170,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         if: ${{ needs.changes.outputs.swift == 'true' }}
         with:
-          components: rustfmt
+          components: rustfmt, clippy
 
       # Only main writes the cache. Feature branches restore from it but never save, which
       # keeps a busy PR queue from evicting main's entry out of the 10 GB repository limit.
@@ -182,15 +182,16 @@ jobs:
       # quota-service carries `cfg(target_os = "macos")` branches in relay and the Claude
       # provider, so these tests cannot move to a Linux runner.
       # This job runs the root `test` script's Rust and Swift halves without pnpm, because it
-      # installs no node. `cargo test` supersedes the `cargo check --all-targets` that root
-      # `check` runs first, and the packaging step below links QuotaBar in release, so neither
-      # belongs here. rustfmt covers the whole workspace and this is the only Rust runner.
+      # installs no node. Clippy is the root `check` script's Rust half and gates on warnings;
+      # the packaging step below links QuotaBar in release, so no separate build belongs here.
+      # rustfmt and clippy cover the whole workspace and this is the only Rust runner.
       - name: Verify Rust and Swift
         if: ${{ needs.changes.outputs.swift == 'true' }}
         run: |
           set -euo pipefail
           swift --version
           cargo fmt --all -- --check
+          cargo clippy --locked --workspace --all-targets -- -D warnings
           cargo test --locked --package quota-service --package quota-menubar-helper
           ./scripts/test-swift.sh
 

@@ -82,13 +82,10 @@ pub fn poll(
     let headers = [("User-Agent", user_agent)];
     let mut out = BTreeMap::new();
     for (provider, url) in pages {
-        match fetch_one(client, &headers, url) {
-            Ok(body) => {
-                if let Some(reading) = parse_statuspage_v2(&body, provider, checked_at) {
-                    out.insert((*provider).to_owned(), reading);
-                }
-            }
-            Err(_) => {}
+        if let Ok(body) = fetch_one(client, &headers, url)
+            && let Some(reading) = parse_statuspage_v2(&body, provider, checked_at)
+        {
+            out.insert((*provider).to_owned(), reading);
         }
     }
     out

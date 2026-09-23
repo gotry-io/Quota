@@ -462,9 +462,10 @@ mod tests {
         assert_eq!(error.source_id, SOURCE);
     }
 
+    /// The recorded proxy billing body: a weekly period and a usage percent.
     #[test]
     fn maps_weekly_billing_cycle() {
-        let value = serde_json::json!({"config": {"creditUsagePercent": 8, "currentPeriod": {"type": "USAGE_PERIOD_TYPE_WEEKLY", "start": "2026-07-30T07:33:06Z", "end": "2026-08-06T07:33:06Z"}}});
+        let value = crate::providers::common::quota_response_fixture("grok", "billing");
         let window = map_billing(&value).unwrap();
         assert_eq!(window.title, "Weekly");
         assert_eq!(window.used_percent, 8.0);

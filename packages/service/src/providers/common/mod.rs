@@ -40,6 +40,18 @@ pub use renewal::{
     RENEWAL_FLOOR_SECONDS, RenewalAttempt, RenewalAttempts, RenewalOutcome, RenewalPlan,
     json_rpc_reply, renew_sign_in,
 };
+/// One recorded response body from `packages/provider/fixtures/quota-responses.json`, which the
+/// capability matrix cites as `/<provider>/<response>`. Every section there is read by a test in
+/// that provider's collector, so a cited pointer is a body the parser was shown to accept.
+#[cfg(test)]
+pub fn quota_response_fixture(provider: &str, response: &str) -> serde_json::Value {
+    const FIXTURE: &str = include_str!("../../../../provider/fixtures/quota-responses.json");
+    let root: serde_json::Value = serde_json::from_str(FIXTURE).expect("provider quota fixture");
+    root.pointer(&format!("/{provider}/{response}"))
+        .cloned()
+        .unwrap_or_else(|| panic!("quota-responses.json has no /{provider}/{response}"))
+}
+
 pub use types::{
     BROWSER_COOKIE_HEADER_LIMIT, BROWSER_SESSION_SOURCE, Cadence, CollectionContext, ErrorCategory,
     KeychainSecret, ProviderError, ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow,

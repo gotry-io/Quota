@@ -888,9 +888,9 @@ fn parse_object(text: &str) -> Option<Map<String, Value>> {
 fn decode_hex(text: &str) -> Option<Vec<u8>> {
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len() / 2);
-    for pair in bytes.chunks_exact(2) {
-        let hi = from_hex(pair[0])?;
-        let lo = from_hex(pair[1])?;
+    for [high, low] in bytes.as_chunks::<2>().0 {
+        let hi = from_hex(*high)?;
+        let lo = from_hex(*low)?;
         out.push((hi << 4) | lo);
     }
     Some(out)

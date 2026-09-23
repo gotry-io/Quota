@@ -282,6 +282,48 @@ fn map_windows(personal: Option<&Budget>, team: Option<&Budget>) -> Vec<QuotaWin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::common::quota_response_fixture;
+
+    /// The recorded `/key/info`, `/user/info`, and `/team/info` bodies: a key bound to a user and a
+    /// team, each with its own budget.
+    #[test]
+    fn maps_provider_response_fixture() {
+        let key = map_key_info(&quota_response_fixture("litellm", "key_info")).unwrap();
+        assert_eq!(key.user_id.as_deref(), Some("fixture-user"));
+        assert_eq!(key.team_id.as_deref(), Some("fixture-team"));
+        assert_eq!(key.key_name.as_deref(), Some("fixture-key"));
+        let personal = map_budget(
+            &quota_response_fixture("litellm", "user_info"),
+            "Personal",
+            None,
+            false,
+        )
+        .unwrap();
+        let team = map_budget(
+            &quota_response_fixture("litellm", "team_info"),
+            "Team",
+            key.team_id.as_deref(),
+            true,
+        )
+        .unwrap();
+        let windows = map_windows(Some(&personal), Some(&team));
+        assert_eq!(
+            windows
+                .iter()
+                .map(|window| (window.id.as_str(), window.title.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("personal", "Personal Budget"),
+                ("team", "Team Fixture Budget")
+            ]
+        );
+        assert_eq!(windows[0].used_percent, 25.0);
+        assert_eq!(windows[0].remaining_value, Some(75.0));
+        assert_eq!(windows[0].limit_value, Some(100.0));
+        assert_eq!(windows[1].used_percent, 20.0);
+        assert_eq!(windows[1].remaining_value, Some(160.0));
+        assert_eq!(windows[1].value_unit, Some("usd"));
+    }
 
     #[test]
     fn does_not_turn_unbounded_spend_into_quota() {

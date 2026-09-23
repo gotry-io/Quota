@@ -1004,11 +1004,12 @@ mod tests {
         assert_eq!(cadence("codex-spark-weekly"), None);
     }
 
+    /// The recorded OAuth `/wham/usage` body: a plan and the two headline slots.
     #[test]
     fn maps_primary_and_secondary_windows() {
-        let usage = map_usage(
-            &serde_json::json!({"rate_limit": {"primary_window": {"used_percent": 12, "limit_window_seconds": 18000}, "secondary_window": {"used_percent": 33, "limit_window_seconds": 604800}}}),
-        );
+        let usage = map_usage(&crate::providers::common::quota_response_fixture(
+            "codex", "usage",
+        ));
         assert_eq!(
             usage
                 .windows
@@ -1017,6 +1018,14 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["five_hour", "weekly"]
         );
+        assert_eq!(usage.plan.as_deref(), Some("pro"));
+        assert_eq!(usage.windows[0].used_percent, 12.0);
+        assert_eq!(
+            usage.windows[0].resets_at.as_deref(),
+            Some("2025-08-02T13:20:00Z")
+        );
+        assert_eq!(usage.windows[1].used_percent, 33.0);
+        assert_eq!(usage.windows[1].duration_seconds, Some(604_800));
         assert!(!usage.malformed_success);
     }
 

@@ -32,11 +32,11 @@ carry its human page.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | [Codex](codex.md) | First-class | 5-hour F · weekly F · monthly T · balance T | local logs F | CLI credentials T · browser session (macOS) F · web session (iOS) F | uploads to the Account F | Statuspage v2 L | API-equivalent F |
 | [Claude Code](claude.md) | First-class | 5-hour F · weekly F · balance T | local logs F | CLI credentials T · browser session (macOS) F · web session (iOS) F | uploads to the Account F | Statuspage v2 L | API-equivalent U · source-reported T |
-| [Grok](grok.md) | Best-effort | weekly T · monthly F · plan cycle F · balance T | local logs F | CLI credentials T · browser session (macOS) F · web session (iOS) F | uploads to the Account F | — | API-equivalent F · source-reported T |
+| [Grok](grok.md) | Best-effort | weekly F · monthly F · plan cycle F · balance T | local logs F | CLI credentials T · browser session (macOS) F · web session (iOS) F | uploads to the Account F | — | API-equivalent F · source-reported T |
 | [OpenRouter](openrouter.md) | Best-effort | daily F · weekly U · monthly U · balance F | — | API key T | uploads to the Account F | — | — |
-| [DeepSeek](deepseek.md) | Best-effort | balance T | — | API key T | uploads to the Account F | — | — |
-| [Kimi Code](kimi.md) | Best-effort | 5-hour T · weekly T | — | CLI credentials T · API key U · browser session (macOS) T | uploads to the Account F | Statuspage v2 L | — |
-| [LiteLLM](litellm.md) | Best-effort | balance T | — | API key T | uploads to the Account F | — | — |
+| [DeepSeek](deepseek.md) | Best-effort | balance F | — | API key T | uploads to the Account F | — | — |
+| [Kimi Code](kimi.md) | Best-effort | 5-hour F · weekly F | — | CLI credentials T · API key U · browser session (macOS) T | uploads to the Account F | Statuspage v2 L | — |
+| [LiteLLM](litellm.md) | Best-effort | balance F | — | API key T | uploads to the Account F | — | — |
 | [Cursor](cursor.md) | Best-effort | weekly T · plan cycle T · balance T | local logs F | CLI credentials T · browser session (macOS) T | uploads to the Account F | Statuspage v2 L | API-equivalent U · source-reported U |
 | [Gemini CLI](gemini.md) | Best-effort | per minute T · daily T · weekly U · monthly U | local logs F | CLI credentials T | uploads to the Account F | — | API-equivalent U |
 | [GitHub Copilot](copilot.md) | Best-effort | monthly T | local logs F | CLI credentials T | uploads to the Account F | — | API-equivalent U |
@@ -49,11 +49,11 @@ Validated cells per provider:
 | --- | --- | --- | --- | --- | --- |
 | `codex` | First-class | 7 | 3 | 1 | 0 |
 | `claude` | First-class | 6 | 3 | 1 | 1 |
-| `grok` | Best-effort | 7 | 4 | 0 | 0 |
+| `grok` | Best-effort | 8 | 3 | 0 | 0 |
 | `openrouter` | Best-effort | 3 | 1 | 0 | 2 |
-| `deepseek` | Best-effort | 1 | 2 | 0 | 0 |
-| `kimi` | Best-effort | 1 | 4 | 1 | 1 |
-| `litellm` | Best-effort | 1 | 2 | 0 | 0 |
+| `deepseek` | Best-effort | 2 | 1 | 0 | 0 |
+| `kimi` | Best-effort | 3 | 2 | 1 | 1 |
+| `litellm` | Best-effort | 2 | 1 | 0 | 0 |
 | `cursor` | Best-effort | 2 | 5 | 1 | 2 |
 | `gemini` | Best-effort | 2 | 3 | 0 | 3 |
 | `copilot` | Best-effort | 2 | 2 | 0 | 1 |
@@ -89,7 +89,7 @@ a test, so evidence that is moved or rewritten cannot leave a stale claim behind
 | `claude` | `account.sync` | F | [`packages/protocol/fixtures/wire-conformance.json`](../../packages/protocol/fixtures/wire-conformance.json) `/contracts/quota_snapshot_envelope/0` — one envelope contract for every id; the fixture case uses codex |
 | `claude` | `status.statuspage_v2` | L | 2026-09-06 — the dated status-page table in provider-collection.md |
 | `claude` | `pricing.source_reported` | T | [`packages/service/src/usage/tests.rs`](../../packages/service/src/usage/tests.rs) `parser_fixtures_preserve_normalized_fields_and_coverage` |
-| `grok` | `quota.weekly` | T | [`packages/service/src/providers/grok/mod.rs`](../../packages/service/src/providers/grok/mod.rs) `maps_weekly_billing_cycle` |
+| `grok` | `quota.weekly` | F | [`packages/provider/fixtures/quota-responses.json`](../../packages/provider/fixtures/quota-responses.json) `/grok/billing` |
 | `grok` | `quota.monthly` | F | [`packages/protocol/fixtures/provider-web-conformance.json`](../../packages/protocol/fixtures/provider-web-conformance.json) `/cases/10/expect/snapshot/windows/0` |
 | `grok` | `quota.plan_cycle` | F | [`packages/protocol/fixtures/provider-web-conformance.json`](../../packages/protocol/fixtures/provider-web-conformance.json) `/cases/9/expect/snapshot/windows/0` |
 | `grok` | `quota.balance` | T | [`packages/service/src/providers/grok/mod.rs`](../../packages/service/src/providers/grok/mod.rs) `maps_credit_amounts_when_the_legacy_money_fields_are_present` |
@@ -104,16 +104,16 @@ a test, so evidence that is moved or rewritten cannot leave a stale claim behind
 | `openrouter` | `quota.balance` | F | [`packages/provider/fixtures/quota-responses.json`](../../packages/provider/fixtures/quota-responses.json) `/openrouter/credits` |
 | `openrouter` | `channel.api_key` | T | [`packages/service/src/providers/common/config.rs`](../../packages/service/src/providers/common/config.rs) `config_precedes_environment_and_fixed_urls_ignore_stale_values` |
 | `openrouter` | `account.sync` | F | [`packages/protocol/fixtures/wire-conformance.json`](../../packages/protocol/fixtures/wire-conformance.json) `/contracts/quota_snapshot_envelope/0` — one envelope contract for every id; the fixture case uses codex |
-| `deepseek` | `quota.balance` | T | [`packages/service/src/providers/deepseek.rs`](../../packages/service/src/providers/deepseek.rs) `keeps_positive_non_usd_balance_when_usd_is_zero` — quota-responses.json also records this body and no test reads that entry |
+| `deepseek` | `quota.balance` | F | [`packages/provider/fixtures/quota-responses.json`](../../packages/provider/fixtures/quota-responses.json) `/deepseek/balance` |
 | `deepseek` | `channel.api_key` | T | [`packages/service/src/providers/common/config.rs`](../../packages/service/src/providers/common/config.rs) `a_saved_key_with_a_null_base_url_is_the_key` |
 | `deepseek` | `account.sync` | F | [`packages/protocol/fixtures/wire-conformance.json`](../../packages/protocol/fixtures/wire-conformance.json) `/contracts/quota_snapshot_envelope/0` — one envelope contract for every id; the fixture case uses codex |
-| `kimi` | `quota.five_hour` | T | [`packages/service/src/providers/kimi.rs`](../../packages/service/src/providers/kimi.rs) `maps_weekly_and_five_hour_windows` — quota-responses.json also records this body and no test reads that entry |
-| `kimi` | `quota.weekly` | T | [`packages/service/src/providers/kimi.rs`](../../packages/service/src/providers/kimi.rs) `maps_weekly_and_five_hour_windows` — quota-responses.json also records this body and no test reads that entry |
+| `kimi` | `quota.five_hour` | F | [`packages/provider/fixtures/quota-responses.json`](../../packages/provider/fixtures/quota-responses.json) `/kimi/usages/limits/0` |
+| `kimi` | `quota.weekly` | F | [`packages/provider/fixtures/quota-responses.json`](../../packages/provider/fixtures/quota-responses.json) `/kimi/usages/usage` |
 | `kimi` | `channel.cli_credentials` | T | [`packages/service/src/providers/kimi.rs`](../../packages/service/src/providers/kimi.rs) `accepts_fresh_cli_credential_and_rejects_stale_or_missing_expiry` |
 | `kimi` | `channel.browser_session_macos` | T | [`packages/service/src/providers/kimi.rs`](../../packages/service/src/providers/kimi.rs) `validate_keeps_only_a_session_with_a_coding_allowance` |
 | `kimi` | `account.sync` | F | [`packages/protocol/fixtures/wire-conformance.json`](../../packages/protocol/fixtures/wire-conformance.json) `/contracts/quota_snapshot_envelope/0` — one envelope contract for every id; the fixture case uses codex |
 | `kimi` | `status.statuspage_v2` | L | 2026-09-06 — the dated status-page table in provider-collection.md |
-| `litellm` | `quota.balance` | T | [`packages/service/src/providers/litellm.rs`](../../packages/service/src/providers/litellm.rs) `maps_nested_key_info_and_team_list_variants` — asserts the team budget window; no test asserts its USD remaining_value |
+| `litellm` | `quota.balance` | F | [`packages/provider/fixtures/quota-responses.json`](../../packages/provider/fixtures/quota-responses.json) `/litellm` — key_info, user_info and team_info together: the personal and team USD budgets |
 | `litellm` | `channel.api_key` | T | [`packages/service/src/providers/common/config.rs`](../../packages/service/src/providers/common/config.rs) `an_empty_saved_base_url_is_refused_and_a_null_one_means_none` |
 | `litellm` | `account.sync` | F | [`packages/protocol/fixtures/wire-conformance.json`](../../packages/protocol/fixtures/wire-conformance.json) `/contracts/quota_snapshot_envelope/0` — one envelope contract for every id; the fixture case uses codex |
 | `cursor` | `quota.weekly` | T | [`packages/service/src/providers/cursor/mod.rs`](../../packages/service/src/providers/cursor/mod.rs) `grok_bot_weekly_allowance_follows_the_included_windows` |

@@ -78,6 +78,7 @@ impl AccountManager {
     }
 
     /// Blocks until the detached backfill, if one is running, has finished.
+    #[cfg(test)]
     pub(crate) fn wait_for_history_backfill(&self) {
         let handle = self
             .history_backfill

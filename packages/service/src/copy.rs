@@ -39,7 +39,7 @@ pub fn is_amount_of_limit(window: &Value) -> bool {
     ) else {
         return false;
     };
-    if !(limit > 0.0) {
+    if limit.is_nan() || limit <= 0.0 {
         return false;
     }
     if !matches!(unit(window), Some("usd" | "credits")) {
@@ -111,7 +111,7 @@ where
     Zone::Offset: std::fmt::Display,
 {
     let seconds = (resets_at - now).num_milliseconds() as f64 / 1_000.0;
-    if !(seconds > 0.0) {
+    if seconds.is_nan() || seconds <= 0.0 {
         return None;
     }
     if style == ResetStyle::Relative {

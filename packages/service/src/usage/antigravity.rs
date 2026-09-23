@@ -345,10 +345,10 @@ fn parse_generation_events(
         .and_then(|blob| parse_generation_info_timestamp(blob).ok().flatten())
         .or(fallback);
     let mut events = Vec::new();
-    if let Some(usage) = field_bytes(&fields, 4).and_then(|blob| parse_model_usage(blob).ok()) {
-        if let Some(event) = usage_event(usage, model.as_deref(), timestamp) {
-            events.push(event);
-        }
+    if let Some(usage) = field_bytes(&fields, 4).and_then(|blob| parse_model_usage(blob).ok())
+        && let Some(event) = usage_event(usage, model.as_deref(), timestamp)
+    {
+        events.push(event);
     }
     for retry in field_bytes_all(&fields, 17) {
         if let Ok(Some(usage)) = parse_retry_info(retry)
@@ -659,7 +659,8 @@ pub(crate) fn encode_generation_blob(
 
 #[cfg(test)]
 fn field_varint_out(number: u64, value: u64, output: &mut Vec<u8>) {
-    write_varint((number << 3) | 0, output);
+    // Wire type 0 (varint) leaves the low three bits clear.
+    write_varint(number << 3, output);
     write_varint(value, output);
 }
 

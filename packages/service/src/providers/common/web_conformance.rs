@@ -261,7 +261,6 @@ impl Server {
         if let Some(handle) = self.handle.take() {
             handle.join().expect("server");
         }
-        let heads = self.heads.lock().expect("heads").clone();
-        heads
+        self.heads.lock().expect("heads").clone()
     }
 }

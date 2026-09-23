@@ -148,18 +148,18 @@ fn map_windows(balances: &[Balance]) -> Vec<QuotaWindow> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::common::quota_response_fixture;
 
+    /// The recorded `/user/balance` body: a CNY balance beside a zero USD one.
     #[test]
     fn keeps_positive_non_usd_balance_when_usd_is_zero() {
-        let balances = map_balances(&serde_json::json!({"balance_infos": [
-            {"currency": "CNY", "total_balance": "3.96"},
-            {"currency": "USD", "total_balance": "0"}
-        ]}))
-        .unwrap();
+        let balances = map_balances(&quota_response_fixture("deepseek", "balance")).unwrap();
         let windows = map_windows(&balances);
         assert_eq!(windows.len(), 1);
         assert_eq!(windows[0].id, "balance_cny");
+        assert_eq!(windows[0].title, "Balance (CNY)");
         assert_eq!(windows[0].remaining_value, Some(3.96));
+        assert_eq!(windows[0].value_unit, None);
     }
 
     #[test]

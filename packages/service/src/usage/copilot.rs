@@ -106,17 +106,14 @@ impl CopilotParser {
             {
                 continue;
             }
-            match event_from_counts(value, model, delta, source_file_id) {
-                ParsedLine {
-                    records: mut next,
-                    reason: next_reason,
-                    ..
-                } => {
-                    records.append(&mut next);
-                    if reason.is_none() {
-                        reason = next_reason;
-                    }
-                }
+            let ParsedLine {
+                records: mut next,
+                reason: next_reason,
+                ..
+            } = event_from_counts(value, model, delta, source_file_id);
+            records.append(&mut next);
+            if reason.is_none() {
+                reason = next_reason;
             }
         }
         ParsedLine {

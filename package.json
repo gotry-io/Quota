@@ -17,7 +17,7 @@
   "scripts": {
     "prepare": "./scripts/install-git-hooks.sh",
     "build": "pnpm --filter @gotry-io/quota-relay build && cargo build --locked --package quota-service --package quota-menubar-helper && swift build --package-path apps/menubar",
-    "check": "pnpm check:provider-catalog && pnpm check:capability-matrix && pnpm check:design-tokens && pnpm check:plan-display && pnpm check:adr-index && pnpm check:reference && pnpm check:schema && pnpm -r --if-present check && cargo check --locked --package quota-service --package quota-menubar-helper --all-targets",
+    "check": "pnpm check:provider-catalog && pnpm check:capability-matrix && pnpm check:design-tokens && pnpm check:plan-display && pnpm check:adr-index && pnpm check:reference && pnpm check:schema && pnpm -r --if-present check && cargo clippy --locked --workspace --all-targets -- -D warnings",
     "check:provider-catalog": "node --experimental-strip-types scripts/generate-provider-catalog.mjs --check",
     "generate:provider-catalog": "node --experimental-strip-types scripts/generate-provider-catalog.mjs",
     "check:capability-matrix": "node --experimental-strip-types scripts/generate-capability-matrix.mjs --check",
