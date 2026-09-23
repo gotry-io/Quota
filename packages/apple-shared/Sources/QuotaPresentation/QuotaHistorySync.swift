@@ -100,6 +100,47 @@ public enum QuotaHistorySync {
     }
   }
 
+  /// How long before its expiry a recorded oldest bucket stops being evidence. Relay sweeps
+  /// expired rows hourly on its own clock, so a bucket this close to the end of its span may
+  /// already be gone without anything having been lost.
+  public static let oldestSlackSeconds = 3_600
+
+  /// Whether Relay must still hold a bucket this device uploaded: its span has more than
+  /// ``oldestSlackSeconds`` left at `now`.
+  public static func oldestIsLive(_ oldest: Date, durationSeconds: Int, now: Date) -> Bool {
+    let span = Double(spanSeconds(durationSeconds: durationSeconds))
+    return oldest.timeIntervalSince1970 + span
+      > now.timeIntervalSince1970 + Double(oldestSlackSeconds)
+  }
+
+  /// What the upload answer says about one series the upload named.
+  public enum UploadAnswer: Equatable, Sendable {
+    /// The answer leaves the series out.
+    case absent
+    /// Its `oldest_bucket_start`, or `nil` from a Relay that does not send one.
+    case oldest(Date?)
+  }
+
+  /// Relay lost rows of a series this device uploaded (ADR 0062, amendment 2026-09-23): the
+  /// oldest bucket the device uploaded in this on-period is still live, and the answer leaves
+  /// the series out or names a later `oldest_bucket_start`. No `oldest_bucket_start` says
+  /// nothing.
+  public static func rowsLost(
+    recordedOldest: Date?,
+    answer: UploadAnswer,
+    durationSeconds: Int,
+    now: Date
+  ) -> Bool {
+    guard let recordedOldest,
+      oldestIsLive(recordedOldest, durationSeconds: durationSeconds, now: now)
+    else { return false }
+    switch answer {
+    case .absent: return true
+    case .oldest(nil): return false
+    case .oldest(let answered?): return answered > recordedOldest
+    }
+  }
+
   /// The fixture's `merge` rule: union, maximum `usedPercent` per `(resetsAt, bucketStart)`,
   /// oldest first.
   public static func merge(_ devices: [[Bucket]]) -> [Bucket] {

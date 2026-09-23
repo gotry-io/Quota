@@ -11,6 +11,10 @@ struct QuotaHistoryWatermarkFile: Codable, Equatable, Sendable {
     var windowID: String
     var newestBucketStart: Date?
     var lastUploaded: [QuotaHistorySync.Bucket]
+    /// The oldest bucket this iPhone uploaded in the current on-period that Relay must still
+    /// hold. Re-seeded from the next accepted upload once its span is nearly over. A file
+    /// written before this field has none, and starts from its next upload.
+    var oldestBucketStart: Date? = nil
   }
 
   struct Account: Codable, Equatable, Sendable {

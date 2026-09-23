@@ -26,6 +26,32 @@ struct QuotaHistorySyncUploadableTests {
     )
     #expect(kept.map(\.usedPercent) == [2, 3, 4])
   }
+
+  @Test func relayLostRowsOnlyWhileTheRecordedOldestIsLive() throws {
+    let now = try instant("2026-09-23T12:00:00Z")
+    let recorded = try instant("2026-09-23T08:00:00Z")
+    func lost(_ recorded: Date?, _ answer: QuotaHistorySync.UploadAnswer) -> Bool {
+      QuotaHistorySync.rowsLost(
+        recordedOldest: recorded,
+        answer: answer,
+        durationSeconds: 18_000,
+        now: now
+      )
+    }
+    #expect(lost(recorded, .oldest(try instant("2026-09-23T11:45:00Z"))))
+    #expect(!lost(recorded, .oldest(recorded)))
+    #expect(!lost(recorded, .oldest(try instant("2026-09-22T08:00:00Z"))))
+    #expect(lost(recorded, .absent))
+    #expect(!lost(recorded, .oldest(nil)))
+    #expect(!lost(nil, .oldest(try instant("2026-09-23T11:45:00Z"))))
+    #expect(!lost(try instant("2026-09-21T12:30:00Z"), .oldest(try instant("2026-09-23T11:45:00Z"))))
+    #expect(
+      QuotaHistorySync.oldestIsLive(
+        try instant("2026-09-21T13:15:00Z"), durationSeconds: 18_000, now: now))
+    #expect(
+      !QuotaHistorySync.oldestIsLive(
+        try instant("2026-09-21T12:45:00Z"), durationSeconds: 18_000, now: now))
+  }
 }
 
 private func instant(_ wire: String) throws -> Date {

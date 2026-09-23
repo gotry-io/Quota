@@ -5,6 +5,8 @@
 - Amended: 2026-09-22: a window's history is as long as its chart, not thirty days for
   everything. Span is `min(30 d, max(48 h, 4 × duration_seconds))`. Expiry is a stored
   `expires_at`. One duration per window. 50 000-row ceiling. Future points refused.
+- Amended: 2026-09-23: the upload answer names each series' `oldest_bucket_start`, and a
+  device that uploaded an older bucket in the current on-period backfills that series again.
 - Supersedes the "never leaves" sentence of
   [ADR 0042](0042-quota-history-is-local-samples.md)
 - Amends [ADR 0035](0035-quota-pace-is-derived-from-the-reading.md),
@@ -59,7 +61,7 @@ bucket of clock slack, or more than one bucket ahead of now, is `400 invalid_req
 on `(device_id, provider, fingerprint, window_id, resets_at, bucket_start)` keeping the larger
 `used_percent` and writing `duration_seconds` / `expires_at` even when the percent is not
 larger (`updated_at` stays when nothing changed). The answer is the newest `bucket_start`
-Relay now holds per series. An Account that already holds 50 000 rows is `413
+Relay now holds per series, and (amendment 2026-09-23) the oldest, `oldest_bucket_start`. An Account that already holds 50 000 rows is `413
 quota_history_full`.
 
 The span of a window is computed from the `duration_seconds` the uploading device declares.
@@ -104,3 +106,27 @@ The span is taken from the duration the uploading device declares; Relay does no
 provider's windows. The latest declaration for a window rewrites every row of that window.
 Expiry is stored as `expires_at` and swept on that column. A point more than one bucket ahead
 of now is refused. An Account at 50 000 rows is `413 quota_history_full`.
+
+## Amendment 2026-09-23
+
+A device only sees the switch as `true → true` when it goes off and on on the website between
+two of its refreshes. Relay deleted every row at "off"; the device kept its watermark and would
+upload only newer points, and the Account would miss the span for good. So:
+
+- The upload answer names, per series the upload sent, `oldest_bucket_start` beside
+  `bucket_start`: the oldest bucket Relay holds **from this device** (`MIN(bucket_start)` in
+  the same query as the newest, a search of the primary key on `device_id`). A client reads
+  it as optional (ADR 0023): an older Relay does not send it, and then nothing below applies.
+- A device records, per series, the oldest bucket it has uploaded in the current on-period.
+  Off, sign-out, and `409 history_sync_off` clear it with the watermark.
+- **Relay lost rows** when that record is still live and the answer to an upload that sent
+  the series names a later `oldest_bucket_start`, or leaves the series out. The device then
+  clears that series' watermark and its last uploaded buckets, backfills its span once in the
+  same pass, and continues. The rest of the pass is planned again from the cleared record.
+- *Live* is: the recorded bucket plus its window's span is more than one hour after now. Relay
+  sweeps expired rows hourly on its own clock, so a bucket in its last hour may be gone
+  without anything having been lost. A record that is no longer live is re-seeded from the
+  next accepted upload's oldest bucket; detection resumes from that point.
+
+`quota_history_rows_lost` in `packages/service` and `QuotaHistorySync.rowsLost` in
+`packages/apple-shared` state the rule; QuotaBar's helper and the iOS coordinator apply it.

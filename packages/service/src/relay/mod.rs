@@ -4214,6 +4214,44 @@ mod tests {
         (format!("http://{address}"), server)
     }
 
+    /// Like [`spawn_mock_server`], but a response nobody asks for within five seconds is not
+    /// waited for: joining yields the requests that did arrive, so a test fails instead of
+    /// hanging when the client sends fewer requests than scripted.
+    fn spawn_bounded_mock_server(
+        responses: Vec<String>,
+    ) -> (String, thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("mock listener");
+        listener.set_nonblocking(true).expect("mock nonblocking");
+        let address = listener.local_addr().expect("mock address");
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut recorded = Vec::new();
+            for response in responses {
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(_) if Instant::now() < deadline => {
+                            thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(_) => return recorded,
+                    }
+                };
+                stream.set_nonblocking(false).expect("mock blocking");
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .expect("mock timeout");
+                let mut request = [0_u8; 8_192];
+                let read = stream.read(&mut request).unwrap_or(0);
+                recorded.push(String::from_utf8_lossy(&request[..read]).into_owned());
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("mock response");
+            }
+            recorded
+        });
+        (format!("http://{address}"), server)
+    }
+
     fn wait_gate(arrived: &Arc<(Mutex<bool>, std::sync::Condvar)>) {
         let (lock, cond) = arrived.as_ref();
         let mut ready = lock.lock().expect("gate");
@@ -5146,6 +5184,165 @@ mod tests {
         assert!(refused.series.is_empty());
         assert_eq!(refused.refused_revision, Some(3));
         assert!(!refused.backfill_done);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn quota_history_backfills_a_series_again_when_relay_answers_a_newer_oldest() {
+        let now = chrono::Utc::now();
+        let earlier = now - chrono::Duration::hours(2);
+        let stamp = |instant: chrono::DateTime<chrono::Utc>| {
+            instant.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        };
+        let bucket = |instant: chrono::DateTime<chrono::Utc>| {
+            crate::history::quota_history_bucket_start_utc(&stamp(instant), 18_000).expect("bucket")
+        };
+        let resets = stamp(now + chrono::Duration::hours(2));
+        let series_key = "codex\u{0}account_test\u{0}five_hour";
+        let root = std::env::temp_dir().join(format!("quota-history-gap-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("root");
+        let state = Arc::new(crate::state::StateStore::open(&root).expect("state"));
+        state
+            .write_session_json(&fresh_session_json())
+            .expect("session");
+        let key = crate::protocol::QuotaOverviewIdentity::selector_for(
+            "codex",
+            "account_test",
+            "global",
+            None,
+        );
+        for (instant, used) in [(earlier, 30.0), (now, 42.5)] {
+            state
+                .record_quota_samples(
+                    &key,
+                    "codex",
+                    &stamp(instant),
+                    &[serde_json::json!({
+                        "id": "five_hour",
+                        "used_percent": used,
+                        "resets_at": resets,
+                        "duration_seconds": 18000
+                    })],
+                    instant,
+                )
+                .expect("sample");
+        }
+        state
+            .set_component(
+                crate::protocol::ComponentName::Quota,
+                crate::protocol::ComponentStatus::Ready,
+                Some(serde_json::json!({
+                    "captured_at": stamp(now),
+                    "results": [{
+                        "provider": "codex",
+                        "snapshots": [{
+                            "provider": "codex",
+                            "account": {"fingerprint": "account_test", "fingerprint_scope": "global"},
+                            "observed_at": stamp(now),
+                            "windows": [{
+                                "id": "five_hour",
+                                "used_percent": 42.5,
+                                "resets_at": resets,
+                                "duration_seconds": 18000
+                            }]
+                        }]
+                    }]
+                })),
+                Some(stamp(now)),
+                None,
+                false,
+            )
+            .expect("quota");
+        let document = serde_json::json!({
+            "protocol_version": CONTROL_PROTOCOL,
+            "revision": 3,
+            "updated_at": stamp(now),
+            "alerts": {"reset_reminders": true, "pace_alerts": true, "thresholds": {}},
+            "budget": {"amount_usd": null, "alerts": true},
+            "history": {"sync": true}
+        });
+        state
+            .set_account_settings_cache("account_1", Some("\"3\""), &document)
+            .expect("settings");
+        // This on-period already uploaded the earlier bucket. The switch then went off and on
+        // on the website, so Relay holds nothing older than what this collection sends.
+        let mut record = crate::state::QuotaHistorySyncRecord {
+            sync: true,
+            backfill_done: true,
+            ..Default::default()
+        };
+        record.series.insert(
+            series_key.to_owned(),
+            crate::state::QuotaHistorySeriesRecord {
+                watermark: Some(bucket(now)),
+                oldest: Some(bucket(earlier)),
+                previous: Vec::new(),
+            },
+        );
+        state
+            .set_quota_history_sync("account_1", &record)
+            .expect("record");
+        let answer = |oldest: &str| {
+            serde_json::json!({
+                "protocol_version": MANAGED_DATA_PROTOCOL,
+                "series": [{
+                    "provider": "codex",
+                    "fingerprint": "account_test",
+                    "window_id": "five_hour",
+                    "bucket_start": bucket(now),
+                    "oldest_bucket_start": oldest
+                }]
+            })
+        };
+        let (origin, server) = spawn_bounded_mock_server(vec![
+            http_json(200, None, &answer(&bucket(now))),
+            http_json(200, None, &answer(&bucket(earlier))),
+        ]);
+        let manager = AccountManager::new(
+            Arc::new(RelayClient::for_test(&origin).expect("client")),
+            state.clone(),
+            "Test Mac".to_owned(),
+        );
+        let cancel = AtomicBool::new(false);
+        manager.sync_quota_history_after_collection(&cancel);
+        let sent = server.join().expect("server");
+        assert_eq!(sent.len(), 2, "{sent:?}");
+        assert!(!sent[0].contains(&bucket(earlier)), "{}", sent[0]);
+        assert!(sent[1].contains(&bucket(earlier)), "{}", sent[1]);
+        assert!(sent[1].contains(&bucket(now)), "{}", sent[1]);
+        let record = state.quota_history_sync("account_1").expect("record");
+        let series = record.series.get(series_key).expect("series");
+        assert_eq!(series.oldest.as_deref(), Some(bucket(earlier).as_str()));
+        assert_eq!(series.watermark.as_deref(), Some(bucket(now).as_str()));
+        assert_eq!(record.last_error, None);
+
+        // Relay now holds the span again: the next answer names the recorded oldest, and one
+        // upload is all that is sent.
+        state
+            .record_quota_samples(
+                &key,
+                "codex",
+                &stamp(now + chrono::Duration::seconds(1)),
+                &[serde_json::json!({
+                    "id": "five_hour",
+                    "used_percent": 50,
+                    "resets_at": resets,
+                    "duration_seconds": 18000
+                })],
+                now + chrono::Duration::seconds(1),
+            )
+            .expect("sample");
+        let (origin, server) =
+            spawn_bounded_mock_server(vec![http_json(200, None, &answer(&bucket(earlier)))]);
+        let manager = AccountManager::new(
+            Arc::new(RelayClient::for_test(&origin).expect("client")),
+            state.clone(),
+            "Test Mac".to_owned(),
+        );
+        manager.sync_quota_history_after_collection(&cancel);
+        let sent = server.join().expect("server");
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert!(!sent[0].contains(&bucket(earlier)), "{}", sent[0]);
         let _ = std::fs::remove_dir_all(&root);
     }
 

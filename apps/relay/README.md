@@ -65,8 +65,11 @@ The v6 data contract is seven routes
   bucket ahead of now, is 400. Upsert keeps the larger `used_percent` and writes
   `duration_seconds` / `expires_at` even when the percent is not larger. The latest duration
   declared for a window rewrites every row of that window. `409 history_sync_off` while the
-  switch is false. `413 quota_history_full` at 50 000 rows. The answer is the newest
-  `bucket_start` now held per series.
+  switch is false. `413 quota_history_full` at 50 000 rows. The answer names, per series the
+  upload sent, the newest (`bucket_start`) and oldest (`oldest_bucket_start`) bucket Relay now
+  holds from this device, in one query that searches the primary key on `device_id`. A device
+  that uploaded an older bucket in its current on-period learns the switch went off and on
+  behind it and backfills that series again.
 - `GET /api/v6/account/quota-history?provider=&fingerprint=&since=` answers one global-scope
   subscription's merged buckets, `MAX(used_percent)` in SQL, oldest first, `since` clamped per
   window to that window's span (`min(30 d, max(48 h, 4 × duration_seconds))`: 48 h for a

@@ -29,7 +29,20 @@ struct QuotaHistoryWireTests {
     #expect(series.fingerprint == "account_test")
     #expect(series.windowId == "five_hour")
     #expect(series.newestBucketStart == instant("2026-09-21T10:15:00Z"))
+    #expect(series.oldestBucketStart == instant("2026-09-21T10:00:00Z"))
     try expectSameJSON(uploadAnswer, WireCodec.encodeRequest(answer))
+  }
+
+  @Test func anUploadAnswerWithoutTheOldestBucketStillDecodes() throws {
+    var object = try jsonObject(uploadAnswer)
+    var series = try #require((object["series"] as? [[String: Any]])?.first)
+    series.removeValue(forKey: "oldest_bucket_start")
+    object["series"] = [series]
+    let data = try JSONSerialization.data(withJSONObject: object)
+    let answer = try WireCodec.decode(QuotaHistoryUploadResponse.self, from: data)
+    let decoded = try #require(answer.series.first)
+    #expect(decoded.newestBucketStart == instant("2026-09-21T10:15:00Z"))
+    #expect(decoded.oldestBucketStart == nil)
   }
 
   @Test func readAnswerRoundTripsTheRelayFixture() throws {
@@ -151,7 +164,8 @@ private let uploadAnswer = """
         "provider": "codex",
         "fingerprint": "account_test",
         "window_id": "five_hour",
-        "bucket_start": "2026-09-21T10:15:00Z"
+        "bucket_start": "2026-09-21T10:15:00Z",
+        "oldest_bucket_start": "2026-09-21T10:00:00Z"
       }
     ]
   }

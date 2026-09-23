@@ -16,7 +16,8 @@ use crate::history::{
     MAXIMUM_QUOTA_HISTORY_POINTS_PER_UPLOAD, MAXIMUM_QUOTA_HISTORY_UPLOAD_BYTES,
     QuotaHistoryLocalSample, QuotaHistorySeriesInput, QuotaHistorySyncedPoint,
     chunk_quota_history_upload, history_sync_enabled, plan_quota_history_upload,
-    quota_history_series_key,
+    quota_history_oldest_is_live, quota_history_rows_lost, quota_history_series_key,
+    whole_second_utc,
 };
 use crate::protocol::{ComponentName, ErrorCode, QuotaOverviewIdentity, RecoveryAction};
 use crate::service::BackendError;
@@ -295,80 +296,106 @@ impl AccountManager {
                     .get("revision")
                     .and_then(Value::as_u64)
             });
-        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-        let planned = plan_quota_history_upload(&series_inputs(&self.state, &record), &now);
-        if planned.is_empty() {
-            // Nothing to send is not an error, so an earlier one stops being shown.
-            let changed = (backfill && !record.backfill_done) || record.last_error.is_some();
-            if backfill && !record.backfill_done {
-                record.backfill_done = true;
-                record.sync = true;
-            }
-            record.last_error = None;
-            if changed {
-                let _ = self.state.set_quota_history_sync(account_id, &record);
-            }
-            return;
-        }
-        let chunks = chunk_quota_history_upload(
-            &planned,
-            generation,
-            MAXIMUM_QUOTA_HISTORY_POINTS_PER_UPLOAD,
-            MAXIMUM_QUOTA_HISTORY_UPLOAD_BYTES,
-        );
-        for chunk in &chunks {
-            if cancel.load(Ordering::Acquire) {
+        // Relay lost rows of a series behind this device (the switch went off and on between
+        // two of its refreshes): that series is backfilled again, once per pass.
+        let mut rebackfilled = false;
+        loop {
+            let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+            let planned = plan_quota_history_upload(&series_inputs(&self.state, &record), &now);
+            if planned.is_empty() {
+                // Nothing to send is not an error, so an earlier one stops being shown.
+                let changed = (backfill && !record.backfill_done) || record.last_error.is_some();
+                if backfill && !record.backfill_done {
+                    record.backfill_done = true;
+                    record.sync = true;
+                }
+                record.last_error = None;
+                if changed {
+                    let _ = self.state.set_quota_history_sync(account_id, &record);
+                }
                 return;
             }
-            match self.client.put_quota_history(&access_token, chunk) {
-                Ok(answer) => {
-                    remember_chunk(&mut record, chunk);
-                    apply_answer(&mut record, &answer);
-                    record.last_upload_at =
-                        Some(Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true));
-                    record.last_error = None;
-                    if self
-                        .state
-                        .set_quota_history_sync(account_id, &record)
-                        .is_err()
+            let chunks = chunk_quota_history_upload(
+                &planned,
+                generation,
+                MAXIMUM_QUOTA_HISTORY_POINTS_PER_UPLOAD,
+                MAXIMUM_QUOTA_HISTORY_UPLOAD_BYTES,
+            );
+            let mut lost = Vec::new();
+            for chunk in &chunks {
+                if cancel.load(Ordering::Acquire) {
+                    return;
+                }
+                match self.client.put_quota_history(&access_token, chunk) {
+                    Ok(answer) => {
+                        let answered_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+                        // The second pass re-seeds the record; it does not judge again.
+                        if !rebackfilled {
+                            lost = lost_series(&record, chunk, &answer, &answered_at);
+                        }
+                        remember_chunk(&mut record, chunk, &answered_at);
+                        apply_answer(&mut record, &answer);
+                        for key in &lost {
+                            record.series.remove(key);
+                        }
+                        record.last_upload_at = Some(answered_at);
+                        record.last_error = None;
+                        if self
+                            .state
+                            .set_quota_history_sync(account_id, &record)
+                            .is_err()
+                        {
+                            return;
+                        }
+                        if !lost.is_empty() {
+                            // The rest of this plan resumes past watermarks the lost series no
+                            // longer has; plan again from the cleared record.
+                            break;
+                        }
+                    }
+                    Err(RelayError::Rejected { ref code, .. }) if code == "history_sync_off" => {
+                        record.series.clear();
+                        record.sync = false;
+                        record.backfill_done = false;
+                        record.refused_revision = revision;
+                        record.last_error = Some("history_sync_off".to_owned());
+                        let _ = self.state.set_quota_history_sync(account_id, &record);
+                        return;
+                    }
+                    Err(RelayError::Rejected { ref code, status })
+                        if code == "quota_history_full" || status == 413 =>
                     {
+                        record.last_error = Some("quota_history_full".to_owned());
+                        self.history_full.store(true, Ordering::Release);
+                        eprintln!("quota-history: upload stopped, quota_history_full");
+                        let _ = self.state.set_quota_history_sync(account_id, &record);
+                        return;
+                    }
+                    Err(error) => {
+                        let code = history_error_code(&error);
+                        if code == "rejected" && record.last_error.as_deref() != Some(code) {
+                            eprintln!(
+                                "quota-history: Relay refused the upload body (400); a clock more than one bucket ahead of Relay does this on every upload"
+                            );
+                        }
+                        record.last_error = Some(code.to_owned());
+                        let _ = self.state.set_quota_history_sync(account_id, &record);
+                        let backend = relay_backend_error(error, session_epoch);
+                        if let Some(epoch) = backend.sign_out_epoch() {
+                            let _ = self.state.clear_session_if_epoch(epoch);
+                        }
                         return;
                     }
                 }
-                Err(RelayError::Rejected { ref code, .. }) if code == "history_sync_off" => {
-                    record.series.clear();
-                    record.sync = false;
-                    record.backfill_done = false;
-                    record.refused_revision = revision;
-                    record.last_error = Some("history_sync_off".to_owned());
-                    let _ = self.state.set_quota_history_sync(account_id, &record);
-                    return;
-                }
-                Err(RelayError::Rejected { ref code, status })
-                    if code == "quota_history_full" || status == 413 =>
-                {
-                    record.last_error = Some("quota_history_full".to_owned());
-                    self.history_full.store(true, Ordering::Release);
-                    eprintln!("quota-history: upload stopped, quota_history_full");
-                    let _ = self.state.set_quota_history_sync(account_id, &record);
-                    return;
-                }
-                Err(error) => {
-                    let code = history_error_code(&error);
-                    if code == "rejected" && record.last_error.as_deref() != Some(code) {
-                        eprintln!(
-                            "quota-history: Relay refused the upload body (400); a clock more than one bucket ahead of Relay does this on every upload"
-                        );
-                    }
-                    record.last_error = Some(code.to_owned());
-                    let _ = self.state.set_quota_history_sync(account_id, &record);
-                    let backend = relay_backend_error(error, session_epoch);
-                    if let Some(epoch) = backend.sign_out_epoch() {
-                        let _ = self.state.clear_session_if_epoch(epoch);
-                    }
-                    return;
-                }
             }
+            if lost.is_empty() || rebackfilled {
+                break;
+            }
+            rebackfilled = true;
+            eprintln!(
+                "quota-history: Relay no longer holds rows this device uploaded; backfilling {} series again",
+                lost.len()
+            );
         }
         if backfill {
             record.backfill_done = true;
@@ -519,7 +546,7 @@ fn collect_snapshot_windows(
     }
 }
 
-fn remember_chunk(record: &mut QuotaHistorySyncRecord, chunk: &Value) {
+fn remember_chunk(record: &mut QuotaHistorySyncRecord, chunk: &Value, now: &str) {
     let Some(series) = chunk.get("series").and_then(Value::as_array) else {
         return;
     };
@@ -535,6 +562,17 @@ fn remember_chunk(record: &mut QuotaHistorySyncRecord, chunk: &Value) {
         };
         let key = quota_history_series_key(provider, fingerprint, window_id);
         let slot = record.series.entry(key).or_default();
+        let duration_seconds = series
+            .get("duration_seconds")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        if slot
+            .oldest
+            .as_deref()
+            .is_some_and(|oldest| !quota_history_oldest_is_live(oldest, duration_seconds, now))
+        {
+            slot.oldest = None;
+        }
         for point in series
             .get("points")
             .and_then(Value::as_array)
@@ -548,6 +586,13 @@ fn remember_chunk(record: &mut QuotaHistorySyncRecord, chunk: &Value) {
             ) else {
                 continue;
             };
+            if slot
+                .oldest
+                .as_deref()
+                .is_none_or(|oldest| whole_second_utc(bucket_start) < whole_second_utc(oldest))
+            {
+                slot.oldest = Some(bucket_start.to_owned());
+            }
             remember_point(
                 slot,
                 QuotaHistorySyncedPoint {
@@ -582,6 +627,56 @@ fn remember_point(slot: &mut QuotaHistorySeriesRecord, point: QuotaHistorySynced
         let extra = slot.previous.len() - 64;
         slot.previous.drain(0..extra);
     }
+}
+
+/// The series of `chunk` whose rows Relay no longer holds, judged before this chunk is
+/// remembered: see [`quota_history_rows_lost`].
+fn lost_series(
+    record: &QuotaHistorySyncRecord,
+    chunk: &Value,
+    answer: &Value,
+    now: &str,
+) -> Vec<String> {
+    let answered = answer
+        .get("series")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let mut lost = Vec::new();
+    for series in chunk
+        .get("series")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let field = |name: &str| series.get(name).and_then(Value::as_str);
+        let (Some(provider), Some(fingerprint), Some(window_id)) =
+            (field("provider"), field("fingerprint"), field("window_id"))
+        else {
+            continue;
+        };
+        let key = quota_history_series_key(provider, fingerprint, window_id);
+        let recorded = record
+            .series
+            .get(&key)
+            .and_then(|slot| slot.oldest.as_deref());
+        let answer = answered
+            .iter()
+            .find(|candidate| {
+                candidate.get("provider").and_then(Value::as_str) == Some(provider)
+                    && candidate.get("fingerprint").and_then(Value::as_str) == Some(fingerprint)
+                    && candidate.get("window_id").and_then(Value::as_str) == Some(window_id)
+            })
+            .map(|candidate| candidate.get("oldest_bucket_start").and_then(Value::as_str));
+        let duration_seconds = series
+            .get("duration_seconds")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        if quota_history_rows_lost(recorded, answer, duration_seconds, now) {
+            lost.push(key);
+        }
+    }
+    lost
 }
 
 fn apply_answer(record: &mut QuotaHistorySyncRecord, answer: &Value) {
@@ -650,10 +745,18 @@ pub(super) fn validate_quota_history_upload_response(value: &Value) -> Result<()
             .get("bucket_start")
             .and_then(Value::as_str)
             .ok_or(RelayError::InvalidResponse)?;
+        // Optional on read: a Relay before the 2026-09-23 amendment does not send it.
+        let oldest_is_valid = match series.get("oldest_bucket_start") {
+            None => true,
+            Some(value) => value
+                .as_str()
+                .is_some_and(|value| chrono::DateTime::parse_from_rfc3339(value).is_ok()),
+        };
         if ProviderId::parse(provider).is_none()
             || !is_opaque_id(fingerprint)
             || !is_window_id(window_id)
             || chrono::DateTime::parse_from_rfc3339(bucket_start).is_err()
+            || !oldest_is_valid
         {
             return Err(RelayError::InvalidResponse);
         }

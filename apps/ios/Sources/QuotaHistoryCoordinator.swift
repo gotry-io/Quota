@@ -367,67 +367,84 @@ final class QuotaHistoryCoordinator {
       break
     }
     guard !stoppedForFull else { return }
-    let now = now()
-    if let failed = lastUploadFailure, now.timeIntervalSince(failed) < Self.uploadBackoff {
+    let started = now()
+    if let failed = lastUploadFailure, started.timeIntervalSince(failed) < Self.uploadBackoff {
       return
     }
-    if Task.isCancelled { return }
-    let backfill = !accountState.observedSync
-    let built = buildSeries(
-      snapshots: snapshots(),
-      samples: localSamples(),
-      state: accountState,
-      backfill: backfill,
-      now: now
-    )
-    // One out-of-range point makes Relay refuse the whole PUT.
-    let chunks = Self.uploadableBatches(
-      QuotaHistoryChunker.chunks(
-        built,
-        maxPoints: maximumPointsPerChunk,
-        maxBytes: maximumBytesPerChunk
-      ),
-      now: now
-    )
-    if chunks.isEmpty {
-      accountState.observedSync = true
-      file.accounts[accountID] = accountState
+    // Relay lost rows of a series behind this iPhone (the switch went off and on between two
+    // refreshes): that series is backfilled again, once per pass.
+    var rebackfilled = false
+    while true {
+      if Task.isCancelled { return }
+      let now = rebackfilled ? self.now() : started
+      let backfill = !accountState.observedSync
+      let built = buildSeries(
+        snapshots: snapshots(),
+        samples: localSamples(),
+        state: accountState,
+        backfill: backfill,
+        now: now
+      )
+      // One out-of-range point makes Relay refuse the whole PUT.
+      let chunks = Self.uploadableBatches(
+        QuotaHistoryChunker.chunks(
+          built,
+          maxPoints: maximumPointsPerChunk,
+          maxBytes: maximumBytesPerChunk
+        ),
+        now: now
+      )
+      if chunks.isEmpty {
+        accountState.observedSync = true
+        file.accounts[accountID] = accountState
+        guard generation == self.generation else { return }
+        try? watermarks.save(file)
+        lastUploadFailure = nil
+        return
+      }
+      if Task.isCancelled { return }
+      let batch = await account.uploadQuotaHistory(chunks: chunks)
       guard generation == self.generation else { return }
-      try? watermarks.save(file)
-      lastUploadFailure = nil
-      return
-    }
-    if Task.isCancelled { return }
-    let batch = await account.uploadQuotaHistory(chunks: chunks)
-    guard generation == self.generation else { return }
-    if batch.cancelled {
-      guard !batch.responses.isEmpty else { return }
-      for (chunk, response) in zip(chunks, batch.responses) {
-        apply(chunk: chunk, response: response, to: &accountState)
+      let answeredAt = self.now()
+      if batch.cancelled {
+        guard !batch.responses.isEmpty else { return }
+        _ = apply(
+          chunks: chunks,
+          responses: batch.responses,
+          to: &accountState,
+          judge: !rebackfilled,
+          now: answeredAt
+        )
+        file.accounts[accountID] = accountState
+        try? watermarks.save(file)
+        return
+      }
+      if batch.error == .historySyncOff {
+        file.accounts[accountID] = .empty
+        try? watermarks.save(file)
+        noteSyncOff()
+        return
+      }
+      let lost = apply(
+        chunks: chunks,
+        responses: batch.responses,
+        to: &accountState,
+        judge: !rebackfilled,
+        now: answeredAt
+      )
+      if batch.error == nil {
+        accountState.observedSync = true
+        lastUploadFailure = nil
+      } else {
+        lastUploadFailure = answeredAt
       }
       file.accounts[accountID] = accountState
       try? watermarks.save(file)
-      return
-    }
-    if batch.error == .historySyncOff {
-      file.accounts[accountID] = .empty
-      try? watermarks.save(file)
-      noteSyncOff()
-      return
-    }
-    for (chunk, response) in zip(chunks, batch.responses) {
-      apply(chunk: chunk, response: response, to: &accountState)
-    }
-    if batch.error == nil {
-      accountState.observedSync = true
-      lastUploadFailure = nil
-    } else {
-      lastUploadFailure = self.now()
-    }
-    file.accounts[accountID] = accountState
-    try? watermarks.save(file)
-    if batch.error == .quotaHistoryFull {
-      stoppedForFull = true
+      if batch.error == .quotaHistoryFull {
+        stoppedForFull = true
+      }
+      guard batch.error == nil, !lost.isEmpty, !rebackfilled else { return }
+      rebackfilled = true
     }
   }
 
@@ -553,62 +570,113 @@ final class QuotaHistoryCoordinator {
     )
   }
 
+  /// Remembers what each answered chunk stored. With `judge`, a series whose rows Relay no
+  /// longer holds (``QuotaHistorySync/rowsLost(recordedOldest:answer:durationSeconds:now:)``)
+  /// is forgotten instead, for this and every later chunk, so the next pass backfills it.
   private func apply(
-    chunk: [QuotaHistoryUploadRequest.Series],
-    response: QuotaHistoryUploadResponse,
-    to state: inout QuotaHistoryWatermarkFile.Account
-  ) {
-    for series in chunk {
-      let answered = response.series.first {
-        $0.provider == series.provider && $0.fingerprint == series.fingerprint
-          && $0.windowId == series.windowId
-      }
-      var stored = state.series.first {
-        $0.provider == series.provider.rawValue && $0.fingerprint == series.fingerprint
-          && $0.windowID == series.windowId
-      } ?? QuotaHistoryWatermarkFile.Series(
-        provider: series.provider.rawValue,
-        fingerprint: series.fingerprint,
-        windowID: series.windowId,
-        newestBucketStart: nil,
-        lastUploaded: []
-      )
-      if let newest = answered?.newestBucketStart {
-        if let current = stored.newestBucketStart {
-          stored.newestBucketStart = max(current, newest)
-        } else {
-          stored.newestBucketStart = newest
+    chunks: [[QuotaHistoryUploadRequest.Series]],
+    responses: [QuotaHistoryUploadResponse],
+    to state: inout QuotaHistoryWatermarkFile.Account,
+    judge: Bool,
+    now: Date
+  ) -> Set<String> {
+    var lost: Set<String> = []
+    for (chunk, response) in zip(chunks, responses) {
+      for series in chunk {
+        let key = Self.seriesKey(series.provider.rawValue, series.fingerprint, series.windowId)
+        if lost.contains(key) { continue }
+        let answered = response.series.first {
+          $0.provider == series.provider && $0.fingerprint == series.fingerprint
+            && $0.windowId == series.windowId
         }
-      } else if let latest = series.points.map(\.bucketStart).max() {
-        if let current = stored.newestBucketStart {
-          stored.newestBucketStart = max(current, latest)
-        } else {
-          stored.newestBucketStart = latest
+        let stored = state.series.first {
+          Self.seriesKey($0.provider, $0.fingerprint, $0.windowID) == key
         }
-      }
-      for point in series.points {
-        let bucket = QuotaHistorySync.Bucket(
-          resetsAt: point.resetsAt,
-          bucketStart: point.bucketStart,
-          usedPercent: point.usedPercent
-        )
-        if let index = stored.lastUploaded.firstIndex(where: { $0.resetsAt == bucket.resetsAt }) {
-          if bucket.bucketStart >= stored.lastUploaded[index].bucketStart {
-            stored.lastUploaded[index] = bucket
+        if judge,
+          QuotaHistorySync.rowsLost(
+            recordedOldest: stored?.oldestBucketStart,
+            answer: answered.map { .oldest($0.oldestBucketStart) } ?? .absent,
+            durationSeconds: series.durationSeconds,
+            now: now
+          )
+        {
+          lost.insert(key)
+          state.series.removeAll {
+            Self.seriesKey($0.provider, $0.fingerprint, $0.windowID) == key
           }
-        } else {
-          stored.lastUploaded.append(bucket)
+          continue
         }
-      }
-      if let index = state.series.firstIndex(where: {
-        $0.provider == stored.provider && $0.fingerprint == stored.fingerprint
-          && $0.windowID == stored.windowID
-      }) {
-        state.series[index] = stored
-      } else {
-        state.series.append(stored)
+        apply(series: series, answered: answered, to: &state, now: now)
       }
     }
+    return lost
+  }
+
+  private func apply(
+    series: QuotaHistoryUploadRequest.Series,
+    answered: QuotaHistoryUploadResponse.SeriesWatermark?,
+    to state: inout QuotaHistoryWatermarkFile.Account,
+    now: Date
+  ) {
+    var stored = state.series.first {
+      $0.provider == series.provider.rawValue && $0.fingerprint == series.fingerprint
+        && $0.windowID == series.windowId
+    } ?? QuotaHistoryWatermarkFile.Series(
+      provider: series.provider.rawValue,
+      fingerprint: series.fingerprint,
+      windowID: series.windowId,
+      newestBucketStart: nil,
+      lastUploaded: []
+    )
+    if let newest = answered?.newestBucketStart {
+      if let current = stored.newestBucketStart {
+        stored.newestBucketStart = max(current, newest)
+      } else {
+        stored.newestBucketStart = newest
+      }
+    } else if let latest = series.points.map(\.bucketStart).max() {
+      if let current = stored.newestBucketStart {
+        stored.newestBucketStart = max(current, latest)
+      } else {
+        stored.newestBucketStart = latest
+      }
+    }
+    if let current = stored.oldestBucketStart,
+      !QuotaHistorySync.oldestIsLive(current, durationSeconds: series.durationSeconds, now: now)
+    {
+      stored.oldestBucketStart = nil
+    }
+    if let earliest = series.points.map(\.bucketStart).min() {
+      stored.oldestBucketStart = min(stored.oldestBucketStart ?? earliest, earliest)
+    }
+    for point in series.points {
+      let bucket = QuotaHistorySync.Bucket(
+        resetsAt: point.resetsAt,
+        bucketStart: point.bucketStart,
+        usedPercent: point.usedPercent
+      )
+      if let index = stored.lastUploaded.firstIndex(where: { $0.resetsAt == bucket.resetsAt }) {
+        if bucket.bucketStart >= stored.lastUploaded[index].bucketStart {
+          stored.lastUploaded[index] = bucket
+        }
+      } else {
+        stored.lastUploaded.append(bucket)
+      }
+    }
+    if let index = state.series.firstIndex(where: {
+      $0.provider == stored.provider && $0.fingerprint == stored.fingerprint
+        && $0.windowID == stored.windowID
+    }) {
+      state.series[index] = stored
+    } else {
+      state.series.append(stored)
+    }
+  }
+
+  private static func seriesKey(_ provider: String, _ fingerprint: String, _ windowID: String)
+    -> String
+  {
+    "\(provider)\u{0}\(fingerprint)\u{0}\(windowID)"
   }
 
   private static func samplesByWindow(

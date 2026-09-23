@@ -934,9 +934,18 @@
               },
               "bucket_start": {
                 "$ref": "#/$defs/__schema3"
+              },
+              "oldest_bucket_start": {
+                "$ref": "#/$defs/__schema3"
               }
             },
-            "required": ["provider", "fingerprint", "window_id", "bucket_start"],
+            "required": [
+              "provider",
+              "fingerprint",
+              "window_id",
+              "bucket_start",
+              "oldest_bucket_start"
+            ],
             "additionalProperties": false
           }
         }

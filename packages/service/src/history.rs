@@ -684,6 +684,47 @@ fn quota_history_upload_body(generation: u64, points: &[&QuotaHistoryUploadPoint
     })
 }
 
+/// How long before its expiry a recorded oldest bucket stops being evidence. Relay sweeps
+/// expired rows hourly on its own clock, so a bucket this close to the end of its span may
+/// already be gone without anything having been lost.
+pub const QUOTA_HISTORY_OLDEST_SLACK_SECONDS: i64 = 3_600;
+
+/// Whether Relay must still hold a bucket this device uploaded: its span has more than
+/// [`QUOTA_HISTORY_OLDEST_SLACK_SECONDS`] left at `now`.
+pub fn quota_history_oldest_is_live(oldest: &str, duration_seconds: i64, now: &str) -> bool {
+    let (Some(oldest), Some(now)) = (instant_millis(oldest), instant_millis(now)) else {
+        return false;
+    };
+    let span_ms = quota_history_span_seconds(duration_seconds).saturating_mul(1_000);
+    oldest.saturating_add(span_ms) > now.saturating_add(QUOTA_HISTORY_OLDEST_SLACK_SECONDS * 1_000)
+}
+
+/// Relay lost rows of a series this device uploaded (ADR 0062, amendment 2026-09-23): the
+/// oldest bucket the device uploaded in this on-period is still live, and the answer to an
+/// upload that named the series either leaves the series out or answers a later
+/// `oldest_bucket_start`. An answer without `oldest_bucket_start` (an older Relay) says nothing.
+pub fn quota_history_rows_lost(
+    recorded_oldest: Option<&str>,
+    answered: Option<Option<&str>>,
+    duration_seconds: i64,
+    now: &str,
+) -> bool {
+    let Some(recorded) = recorded_oldest else {
+        return false;
+    };
+    if !quota_history_oldest_is_live(recorded, duration_seconds, now) {
+        return false;
+    }
+    match answered {
+        None => true,
+        Some(None) => false,
+        Some(Some(answered)) => match (instant_millis(answered), instant_millis(recorded)) {
+            (Some(answered), Some(recorded)) => answered > recorded,
+            _ => false,
+        },
+    }
+}
+
 /// Preference key for one series: provider, fingerprint, window. Not the local selector.
 pub fn quota_history_series_key(provider: &str, fingerprint: &str, window_id: &str) -> String {
     format!("{provider}\u{0}{fingerprint}\u{0}{window_id}")
@@ -692,6 +733,60 @@ pub fn quota_history_series_key(provider: &str, fingerprint: &str, window_id: &s
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relay_lost_rows_only_while_the_recorded_oldest_is_live() {
+        let now = "2026-09-23T12:00:00Z";
+        let recorded = Some("2026-09-23T08:00:00Z");
+        // Relay answers a later oldest than this device uploaded: rows were lost.
+        assert!(quota_history_rows_lost(
+            recorded,
+            Some(Some("2026-09-23T11:45:00Z")),
+            18_000,
+            now
+        ));
+        // The same, or an older one: nothing lost.
+        assert!(!quota_history_rows_lost(
+            recorded,
+            Some(Some("2026-09-23T08:00:00Z")),
+            18_000,
+            now
+        ));
+        assert!(!quota_history_rows_lost(
+            recorded,
+            Some(Some("2026-09-22T08:00:00Z")),
+            18_000,
+            now
+        ));
+        // The series this upload named is missing from the answer.
+        assert!(quota_history_rows_lost(recorded, None, 18_000, now));
+        // An older Relay sends no oldest_bucket_start: nothing is judged.
+        assert!(!quota_history_rows_lost(recorded, Some(None), 18_000, now));
+        // Nothing recorded yet.
+        assert!(!quota_history_rows_lost(
+            None,
+            Some(Some("2026-09-23T11:45:00Z")),
+            18_000,
+            now
+        ));
+        // Within an hour of the end of its 48 h span Relay may already have swept it.
+        assert!(!quota_history_rows_lost(
+            Some("2026-09-21T12:30:00Z"),
+            Some(Some("2026-09-23T11:45:00Z")),
+            18_000,
+            now
+        ));
+        assert!(quota_history_oldest_is_live(
+            "2026-09-21T13:15:00Z",
+            18_000,
+            now
+        ));
+        assert!(!quota_history_oldest_is_live(
+            "2026-09-21T12:45:00Z",
+            18_000,
+            now
+        ));
+    }
 
     const FIXTURE: &str = include_str!("../../protocol/fixtures/quota-history-conformance.json");
 

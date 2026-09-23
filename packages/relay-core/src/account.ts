@@ -483,7 +483,10 @@ export type QuotaHistoryWriteResult =
         provider: ProviderId;
         fingerprint: string;
         window_id: string;
+        /** Newest bucket Relay holds from this device for the series. */
         bucket_start: string;
+        /** Oldest bucket Relay holds from this device for the series. */
+        oldest_bucket_start: string;
       }[];
     };
 
