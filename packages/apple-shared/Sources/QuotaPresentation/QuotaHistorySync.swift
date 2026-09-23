@@ -100,6 +100,82 @@ public enum QuotaHistorySync {
     }
   }
 
+  /// How long before its expiry a bucket stops counting as one Relay must still hold. Relay
+  /// never sweeps a row before its `expires_at`, but a device clock behind Relay's, or an
+  /// `expires_at` another device shortened by declaring a shorter duration, can make a row go
+  /// earlier than this device expects.
+  public static let oldestSlackSeconds = 3_600
+
+  /// Relay must still hold this bucket: `bucket + span > now + 1 h`.
+  public static func oldestIsLive(_ bucketStart: Date, durationSeconds: Int, now: Date) -> Bool {
+    let span = Double(spanSeconds(durationSeconds: durationSeconds))
+    return bucketStart.timeIntervalSince1970 + span
+      > now.timeIntervalSince1970 + Double(oldestSlackSeconds)
+  }
+
+  /// What the upload answer says about one series the upload sent.
+  public enum UploadAnswer: Equatable, Sendable {
+    /// The answer leaves the series out.
+    case absent
+    /// Its `oldest_bucket_start`, or `nil` from a Relay that does not send one.
+    case oldest(Date?)
+  }
+
+  /// Relay lost rows of a series this device uploaded (ADR 0062, amendment 2026-09-23).
+  ///
+  /// The evidence is the oldest bucket uploaded in this on-period while it is live, otherwise
+  /// the watermark from before this chunk while it is live and every point of the chunk is
+  /// later than it. A series the answer leaves out is always a loss: the answer names every
+  /// series sent. No `oldest_bucket_start` (an older Relay) judges nothing. The fixture's
+  /// `rows_lost` section is the contract.
+  public static func rowsLost(
+    recordedOldest: Date?,
+    watermark: Date?,
+    chunkOldest: Date,
+    answer: UploadAnswer,
+    durationSeconds: Int,
+    now: Date
+  ) -> Bool {
+    let answered: Date
+    switch answer {
+    case .absent: return true
+    case .oldest(nil): return false
+    case .oldest(let value?): answered = value
+    }
+    let evidence: Date?
+    if let recordedOldest,
+      oldestIsLive(recordedOldest, durationSeconds: durationSeconds, now: now)
+    {
+      evidence = recordedOldest
+    } else if let watermark,
+      oldestIsLive(watermark, durationSeconds: durationSeconds, now: now),
+      chunkOldest > watermark
+    {
+      evidence = watermark
+    } else {
+      evidence = nil
+    }
+    guard let evidence else { return false }
+    return answered > evidence
+  }
+
+  /// The recorded oldest after an accepted chunk: the older of a live record and the chunk's
+  /// oldest point, else the chunk's oldest point. The fixture's `reseed_oldest` section.
+  public static func reseedOldest(
+    _ recordedOldest: Date?,
+    chunkOldest: Date,
+    durationSeconds: Int,
+    now: Date
+  ) -> Date {
+    if let recordedOldest,
+      oldestIsLive(recordedOldest, durationSeconds: durationSeconds, now: now),
+      recordedOldest <= chunkOldest
+    {
+      return recordedOldest
+    }
+    return chunkOldest
+  }
+
   /// The fixture's `merge` rule: union, maximum `usedPercent` per `(resetsAt, bucketStart)`,
   /// oldest first.
   public static func merge(_ devices: [[Bucket]]) -> [Bucket] {

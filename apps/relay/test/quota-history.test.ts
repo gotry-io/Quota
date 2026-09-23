@@ -10,7 +10,7 @@ import { AccountService } from "../src/account/service.ts";
 import { accountMaintenanceInput, createRelayApp } from "../src/app.ts";
 import { SecretHasher } from "../src/security.ts";
 import type { SessionScope } from "@gotry-io/relay-core";
-import { D1AccountState } from "../src/state/d1-account-state.ts";
+import { D1AccountState, quotaHistoryUploadAnswerSql } from "../src/state/d1-account-state.ts";
 import { DEVICE_SESSION_SCOPES, encodeScopes } from "../src/state/records.ts";
 import { D1UsageState } from "../src/state/d1-usage-state.ts";
 import { SignedInWebSessionStub } from "./web-session-stub.ts";
@@ -65,6 +65,7 @@ describe("Account quota history", () => {
           fingerprint,
           window_id: "five_hour",
           bucket_start: "2026-09-21T10:15:00Z",
+          oldest_bucket_start: "2026-09-21T10:00:00Z",
         },
       ],
     });
@@ -108,6 +109,53 @@ describe("Account quota history", () => {
 
     const again = await app.request(historyUrl(), { headers: { "If-None-Match": etag ?? "" } });
     expect(again.status).toBe(304);
+  });
+
+  it("answers a later oldest bucket after the switch went off and on behind the device", async () => {
+    const session = await seedDevice("gap");
+    const app = appFor("account_gap");
+    expect((await putSettings(app, { ...policy, history: { sync: true } })).status).toBe(200);
+    expect(
+      (
+        await upload(session, [
+          point("2026-09-21T09:00:00Z", 30),
+          point("2026-09-21T09:15:00Z", 35),
+        ])
+      ).status,
+    ).toBe(200);
+    expect((await putSettings(app, { ...policy, history: { sync: false } }, '"1"')).status).toBe(
+      200,
+    );
+    expect((await putSettings(app, { ...policy, history: { sync: true } }, '"2"')).status).toBe(
+      200,
+    );
+
+    const after = await upload(session, [point("2026-09-21T09:45:00Z", 40)]);
+    expect(after.status).toBe(200);
+    const body = (await after.json()) as {
+      series: { bucket_start: string; oldest_bucket_start: string }[];
+    };
+    expect(body.series).toEqual([
+      expect.objectContaining({
+        bucket_start: "2026-09-21T09:45:00Z",
+        oldest_bucket_start: "2026-09-21T09:45:00Z",
+      }),
+    ]);
+  });
+
+  it("answers the upload with one search of the primary key on device_id", async () => {
+    const plan = await db
+      .prepare(`EXPLAIN QUERY PLAN ${quotaHistoryUploadAnswerSql}`)
+      .bind("device_plan", "account_plan")
+      .all<{ detail: string }>();
+    expect(
+      plan.results.some((row) =>
+        /SEARCH quota_history USING INDEX sqlite_autoindex_quota_history_1 \(device_id=\?\)/.test(
+          row.detail,
+        ),
+      ),
+    ).toBe(true);
+    expect(plan.results.some((row) => /TEMP B-TREE/.test(row.detail))).toBe(false);
   });
 
   it("answers empty windows while the switch is off, and refuses extra query keys", async () => {

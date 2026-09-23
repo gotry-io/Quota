@@ -72,4 +72,4 @@ instructions. Stable ADR URLs stay.
 | [0059](./0059-the-leaderboard-is-retired.md) | The leaderboard is retired | Accepted |  |  |
 | [0060](./0060-provider-freeze-and-two-tiers.md) | Freeze new providers and keep two provider tiers | Accepted |  | 2026-09-23 |
 | [0061](./0061-alert-policy-and-the-budget-follow-the-account.md) | Alert policy and the budget follow the Account | Accepted |  | 2026-09-21 |
-| [0062](./0062-quota-history-may-follow-the-account.md) | Quota history may follow the Account, when the Account says so | Accepted |  | 2026-09-22 |
+| [0062](./0062-quota-history-may-follow-the-account.md) | Quota history may follow the Account, when the Account says so | Accepted |  | 2026-09-22, 2026-09-23 |

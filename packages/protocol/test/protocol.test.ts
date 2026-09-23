@@ -51,6 +51,7 @@ import {
   QuotaCollectionReportSchema,
   QuotaHistoryResponseReadSchema,
   QuotaHistoryResponseSchema,
+  QuotaHistoryUploadResponseSchema,
   QuotaHistoryUploadSchema,
   QuotaSnapshotEnvelopeSchema,
   QuotaSnapshotUploadResponseSchema,
@@ -1452,6 +1453,26 @@ describe("quota protocol", () => {
       ],
     };
     expect(QuotaHistoryUploadSchema.safeParse(tooMany).success).toBe(false);
+    const answer = {
+      protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
+      series: [
+        {
+          provider: "codex",
+          fingerprint: "account_test",
+          window_id: "five_hour",
+          bucket_start: "2026-09-21T10:15:00Z",
+          oldest_bucket_start: "2026-09-21T10:00:00Z",
+        },
+      ],
+    };
+    expect(QuotaHistoryUploadResponseSchema.parse(answer)).toEqual(answer);
+    const [answered] = answer.series;
+    expect(
+      QuotaHistoryUploadResponseSchema.safeParse({
+        ...answer,
+        series: [{ ...answered, oldest_bucket_start: undefined }],
+      }).success,
+    ).toBe(false);
     expect(
       protocol.RelayErrorEnvelopeSchema.parse({
         error: { code: "quota_history_full", message: "This Account is full." },

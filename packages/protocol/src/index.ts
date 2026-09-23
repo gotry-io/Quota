@@ -2036,6 +2036,13 @@ export const QuotaHistoryUploadSchema = z
   });
 export type QuotaHistoryUpload = z.infer<typeof QuotaHistoryUploadSchema>;
 
+/**
+ * Per series this upload named: the newest (`bucket_start`) and the oldest
+ * (`oldest_bucket_start`) bucket Relay now holds from this device. A device that uploaded an
+ * older bucket in the current on-period than `oldest_bucket_start` learns that Relay lost rows
+ * (the switch went off and on between two of its refreshes) and backfills that series again.
+ * A client reads `oldest_bucket_start` as optional: an older Relay does not send it.
+ */
 export const QuotaHistoryUploadResponseSchema = z
   .object({
     protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
@@ -2046,6 +2053,7 @@ export const QuotaHistoryUploadResponseSchema = z
           fingerprint: z.string().min(1).max(128).regex(OPAQUE_ID_PATTERN),
           window_id: z.string().min(1).max(64).regex(BILLING_DIMENSION_PATTERN),
           bucket_start: Rfc3339InstantSchema,
+          oldest_bucket_start: Rfc3339InstantSchema,
         })
         .strict(),
     ),

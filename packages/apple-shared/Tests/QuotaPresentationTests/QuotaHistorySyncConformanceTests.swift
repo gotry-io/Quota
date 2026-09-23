@@ -74,6 +74,45 @@ struct QuotaHistorySyncConformanceTests {
     )
   }
 
+  @Test func everyRowsLostAndReseedCaseMatchesTheSharedFixture() throws {
+    let object = try QuotaHistorySyncFixture.raw()
+    let lost = try #require(object["rows_lost"] as? [[String: Any]])
+    #expect(lost.count >= 15)
+    for testCase in lost {
+      let name = try #require(testCase["name"] as? String)
+      let answer: QuotaHistorySync.UploadAnswer
+      if testCase["answer"] as? String == "absent" {
+        answer = .absent
+      } else {
+        let fields = try #require(testCase["answer"] as? [String: Any])
+        answer = .oldest(
+          try fields["oldest_bucket_start"].map { try QuotaHistorySyncFixture.instant($0) }
+        )
+      }
+      let judged = QuotaHistorySync.rowsLost(
+        recordedOldest: try QuotaHistorySyncFixture.optionalInstant(testCase["recorded_oldest"]),
+        watermark: try QuotaHistorySyncFixture.optionalInstant(testCase["watermark"]),
+        chunkOldest: try QuotaHistorySyncFixture.instant(testCase["chunk_oldest"]),
+        answer: answer,
+        durationSeconds: try #require(testCase["duration_seconds"] as? Int),
+        now: try QuotaHistorySyncFixture.instant(testCase["now"])
+      )
+      #expect(judged == (testCase["expected"] as? Bool), "\(name)")
+    }
+    let reseed = try #require(object["reseed_oldest"] as? [[String: Any]])
+    #expect(reseed.count >= 4)
+    for testCase in reseed {
+      let name = try #require(testCase["name"] as? String)
+      let seeded = QuotaHistorySync.reseedOldest(
+        try QuotaHistorySyncFixture.optionalInstant(testCase["recorded_oldest"]),
+        chunkOldest: try QuotaHistorySyncFixture.instant(testCase["chunk_oldest"]),
+        durationSeconds: try #require(testCase["duration_seconds"] as? Int),
+        now: try QuotaHistorySyncFixture.instant(testCase["now"])
+      )
+      #expect(seeded == (try QuotaHistorySyncFixture.instant(testCase["expected"])), "\(name)")
+    }
+  }
+
   @Test func mergedBucketsAreTheSamplesFoldAlreadyTakes() throws {
     let now = try QuotaHistorySyncFixture.instant("2026-09-21T12:00:00Z")
     let reset = try QuotaHistorySyncFixture.instant("2026-09-21T15:00:00Z")
@@ -185,6 +224,16 @@ private struct QuotaHistorySyncFixture {
       spanDurationMultiple: try integer(object["span_duration_multiple"]),
       retentionDays: try integer(object["retention_days"])
     )
+  }
+
+  static func raw() throws -> [String: Any] {
+    let root = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
+    return try #require(root)
+  }
+
+  static func optionalInstant(_ value: Any?) throws -> Date? {
+    if value == nil || value is NSNull { return nil }
+    return try instant(value)
   }
 
   static func instant(_ value: Any?) throws -> Date {

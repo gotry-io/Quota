@@ -5,6 +5,8 @@
 - Amended: 2026-09-22: a window's history is as long as its chart, not thirty days for
   everything. Span is `min(30 d, max(48 h, 4 × duration_seconds))`. Expiry is a stored
   `expires_at`. One duration per window. 50 000-row ceiling. Future points refused.
+- Amended: 2026-09-23: the upload answer names each series' `oldest_bucket_start`, and a
+  device that uploaded an older bucket in the current on-period backfills that series again.
 - Supersedes the "never leaves" sentence of
   [ADR 0042](0042-quota-history-is-local-samples.md)
 - Amends [ADR 0035](0035-quota-pace-is-derived-from-the-reading.md),
@@ -59,8 +61,8 @@ bucket of clock slack, or more than one bucket ahead of now, is `400 invalid_req
 on `(device_id, provider, fingerprint, window_id, resets_at, bucket_start)` keeping the larger
 `used_percent` and writing `duration_seconds` / `expires_at` even when the percent is not
 larger (`updated_at` stays when nothing changed). The answer is the newest `bucket_start`
-Relay now holds per series. An Account that already holds 50 000 rows is `413
-quota_history_full`.
+Relay now holds per series, and (amendment 2026-09-23) the oldest, `oldest_bucket_start`.
+An Account that already holds 50 000 rows is `413 quota_history_full`.
 
 The span of a window is computed from the `duration_seconds` the uploading device declares.
 Relay does not know a provider's windows. The latest declaration for
@@ -104,3 +106,40 @@ The span is taken from the duration the uploading device declares; Relay does no
 provider's windows. The latest declaration for a window rewrites every row of that window.
 Expiry is stored as `expires_at` and swept on that column. A point more than one bucket ahead
 of now is refused. An Account at 50 000 rows is `413 quota_history_full`.
+
+## Amendment 2026-09-23
+
+A device only sees the switch as `true → true` when it goes off and on on the website between
+two of its refreshes. Relay deleted every row at "off"; the device kept its watermark and would
+upload only newer points, and the Account would miss the span for good. So:
+
+- The upload answer names, per series the upload sent, `oldest_bucket_start` beside
+  `bucket_start`: the oldest bucket Relay holds **from this device** (`MIN(bucket_start)` in
+  the same query as the newest, a search of the primary key on `device_id`). A client reads
+  it as optional (ADR 0023): an older Relay does not send it.
+- A device records, per series, the oldest bucket it has uploaded in the current on-period.
+  After an accepted chunk the record is the older of itself (while live) and the chunk's
+  oldest point, else the chunk's oldest point. Off, sign-out, and `409 history_sync_off` clear
+  it with the watermark.
+- A bucket is **live** while `bucket_start + span > now + 1 h`. Relay never sweeps a row
+  before its `expires_at`; the hour covers a device clock behind Relay's and an `expires_at`
+  that another device shortened by declaring a shorter `duration_seconds` for the window.
+- The **evidence** for a series is the recorded oldest while it is live; otherwise the
+  watermark from before this chunk (the newest bucket Relay confirmed) while it is live and
+  every point of the chunk is later than it. The fallback matters: a backfill seeds the record
+  near `now − span`, so without it most of the record's life would judge nothing.
+- **Relay lost rows** when the answer leaves out a series the upload sent — on any Relay
+  version, since the answer is always filtered to the series sent — or names an
+  `oldest_bucket_start` later than the evidence. An answer without `oldest_bucket_start`
+  judges nothing else. The device then clears that series' watermark and its last uploaded
+  buckets, backfills its span once in the same pass, and continues. The rest of the pass is
+  planned again from the cleared record; the second pass does not judge.
+- What is still not seen: a loss once both the record and the last confirmed watermark have
+  stopped being live, and before the next upload — a device that has not uploaded a series
+  for most of its span. The Account misses that span until the rows age out anyway.
+
+The contract is the `rows_lost` and `reseed_oldest` sections of
+`packages/protocol/fixtures/quota-history-sync-conformance.json`, answered by
+`quotaHistoryRowsLost` in `packages/quota-model`, `quota_history_rows_lost` in
+`packages/service`, and `QuotaHistorySync.rowsLost` in `packages/apple-shared`. QuotaBar's
+helper and the iOS coordinator apply it.

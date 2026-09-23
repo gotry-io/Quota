@@ -1,5 +1,5 @@
 {
-  "$comment": "How a device downsamples local remaining-quota samples into uploadable buckets (`bucket`) and how several devices' buckets merge into the one series an Account read draws (`merge`). Bucket size is 900 s when the window's duration_seconds is at most 86 400, otherwise 3 600 s; bucket_start is floor(observed_at / size) × size in UTC; a bucket's value is the maximum used_percent in it for that resets_at; a bucket whose value equals the previous uploaded bucket of the same (window, resets_at) is not sent; a new resets_at is a new series. The span of a window is min(30 d, max(48 h, 4 × duration_seconds)): five-hour → 48 h, weekly → 28 d, monthly → 30 d. Points older than that span are not uploaded; a series with no duration_seconds is refused. Merge takes the maximum used_percent per (window_id, resets_at, bucket_start), oldest first. Shape is JSON only: TypeScript (`packages/quota-model`), Swift, and Rust each answer this file. See ADR 0062. The fold a surface draws is still quota-history-conformance.json.",
+  "$comment": "How a device downsamples local remaining-quota samples into uploadable buckets (`bucket`) and how several devices' buckets merge into the one series an Account read draws (`merge`). Bucket size is 900 s when the window's duration_seconds is at most 86 400, otherwise 3 600 s; bucket_start is floor(observed_at / size) × size in UTC; a bucket's value is the maximum used_percent in it for that resets_at; a bucket whose value equals the previous uploaded bucket of the same (window, resets_at) is not sent; a new resets_at is a new series. The span of a window is min(30 d, max(48 h, 4 × duration_seconds)): five-hour → 48 h, weekly → 28 d, monthly → 30 d. Points older than that span are not uploaded; a series with no duration_seconds is refused. Merge takes the maximum used_percent per (window_id, resets_at, bucket_start), oldest first. `rows_lost` is the upload-answer check of the 2026-09-23 amendment: a device's evidence is the oldest bucket it uploaded in this on-period when that is live (bucket + span > now + 1 h), otherwise the watermark from before this chunk when that is live and every point of the chunk is later than it; rows are lost when the answer leaves the series out (always), or names an oldest_bucket_start later than the evidence. An answer without oldest_bucket_start judges nothing. `reseed_oldest` is how the record moves after an accepted chunk: the older of a live record and the chunk's oldest point, else the chunk's oldest point. Shape is JSON only: TypeScript (`packages/quota-model`), Swift, and Rust each answer this file. See ADR 0062. The fold a surface draws is still quota-history-conformance.json.",
   "now": "2026-09-21T12:00:00Z",
   "short_window_bucket_seconds": 900,
   "long_window_bucket_seconds": 3600,
@@ -413,6 +413,216 @@
           "used_percent": 30
         }
       ]
+    }
+  ],
+  "rows_lost": [
+    {
+      "name": "a later answered oldest than the live recorded oldest is a loss",
+      "now": "2026-09-23T12:00:00Z",
+      "duration_seconds": 18000,
+      "recorded_oldest": "2026-09-23T08:00:00Z",
+      "watermark": "2026-09-23T11:30:00Z",
+      "chunk_oldest": "2026-09-23T11:45:00Z",
+      "answer": {
+        "oldest_bucket_start": "2026-09-23T11:45:00Z"
+      },
+      "expected": true
+    },
+    {
+      "name": "the same answered oldest is not a loss",
+      "now": "2026-09-23T12:00:00Z",
+      "duration_seconds": 18000,
+      "recorded_oldest": "2026-09-23T08:00:00Z",
+      "watermark": "2026-09-23T11:30:00Z",
+      "chunk_oldest": "2026-09-23T11:45:00Z",
+      "answer": {
+        "oldest_bucket_start": "2026-09-23T08:00:00Z"
+      },
+      "expected": false
+    },
+    {
+      "name": "an earlier answered oldest (another upload's backfill) is not a loss",
+      "now": "2026-09-23T12:00:00Z",
+      "duration_seconds": 18000,
+      "recorded_oldest": "2026-09-23T08:00:00Z",
+      "watermark": "2026-09-23T11:30:00Z",
+      "chunk_oldest": "2026-09-23T11:45:00Z",
+      "answer": {
+        "oldest_bucket_start": "2026-09-22T08:00:00Z"
+      },
+      "expected": false
+    },
+    {
+      "name": "a series the upload sent but the answer leaves out is a loss",
+      "now": "2026-09-23T12:00:00Z",
+      "duration_seconds": 18000,
+      "recorded_oldest": "2026-09-23T08:00:00Z",
+      "watermark": "2026-09-23T11:30:00Z",
+      "chunk_oldest": "2026-09-23T11:45:00Z",
+      "answer": "absent",
+      "expected": true
+    },
+    {
+      "name": "a series left out is a loss even with nothing recorded",
+      "now": "2026-09-23T12:00:00Z",
+      "duration_seconds": 18000,
+      "recorded_oldest": null,
+      "watermark": null,
+      "chunk_oldest": "2026-09-23T11:45:00Z",
+      "answer": "absent",
+      "expected": true
+    },
+    {
+      "name": "an answer without oldest_bucket_start (an older Relay) judges nothing",
+      "now": "2026-09-23T12:00:00Z",
+      "duration_seconds": 18000,
+      "recorded_oldest": "2026-09-23T08:00:00Z",
+      "watermark": "2026-09-23T11:30:00Z",
+      "chunk_oldest": "2026-09-23T11:45:00Z",
+      "answer": {},
+      "expected": false
+    },
+    {
+      "name": "nothing recorded and no watermark judges nothing",
+      "now": "2026-09-23T12:00:00Z",
+      "duration_seconds": 18000,
+      "recorded_oldest": null,
+      "watermark": null,
+      "chunk_oldest": "2026-09-23T11:45:00Z",
+      "answer": {
+        "oldest_bucket_start": "2026-09-23T11:45:00Z"
+      },
+      "expected": false
+    },
+    {
+      "name": "recorded + span exactly now + 1 h is not live, so it is not judged",
+      "now": "2026-09-23T12:00:00Z",
+      "duration_seconds": 18000,
+      "recorded_oldest": "2026-09-21T13:00:00Z",
+      "watermark": null,
+      "chunk_oldest": "2026-09-23T11:45:00Z",
+      "answer": {
+        "oldest_bucket_start": "2026-09-23T11:45:00Z"
+      },
+      "expected": false
+    },
+    {
+      "name": "one second earlier it is live and judged",
+      "now": "2026-09-23T11:59:59Z",
+      "duration_seconds": 18000,
+      "recorded_oldest": "2026-09-21T13:00:00Z",
+      "watermark": null,
+      "chunk_oldest": "2026-09-23T11:45:00Z",
+      "answer": {
+        "oldest_bucket_start": "2026-09-23T11:45:00Z"
+      },
+      "expected": true
+    },
+    {
+      "name": "a weekly window's 28-day span keeps a four-week-old record live",
+      "now": "2026-09-23T12:00:00Z",
+      "duration_seconds": 604800,
+      "recorded_oldest": "2026-08-27T12:00:00Z",
+      "watermark": "2026-09-23T10:00:00Z",
+      "chunk_oldest": "2026-09-23T11:00:00Z",
+      "answer": {
+        "oldest_bucket_start": "2026-09-23T11:00:00Z"
+      },
+      "expected": true
+    },
+    {
+      "name": "a monthly window falls back to the watermark once its 30-day record is not live",
+      "now": "2026-09-23T12:00:00Z",
+      "duration_seconds": 2592000,
+      "recorded_oldest": "2026-08-24T12:00:00Z",
+      "watermark": "2026-09-23T10:00:00Z",
+      "chunk_oldest": "2026-09-23T11:00:00Z",
+      "answer": {
+        "oldest_bucket_start": "2026-09-23T11:00:00Z"
+      },
+      "expected": true
+    },
+    {
+      "name": "a record that is not live falls back to the watermark before this chunk",
+      "now": "2026-09-23T12:00:00Z",
+      "duration_seconds": 18000,
+      "recorded_oldest": "2026-09-21T12:00:00Z",
+      "watermark": "2026-09-23T11:30:00Z",
+      "chunk_oldest": "2026-09-23T11:45:00Z",
+      "answer": {
+        "oldest_bucket_start": "2026-09-23T11:45:00Z"
+      },
+      "expected": true
+    },
+    {
+      "name": "the watermark fallback is not a loss when Relay still holds the watermark",
+      "now": "2026-09-23T12:00:00Z",
+      "duration_seconds": 18000,
+      "recorded_oldest": "2026-09-21T12:00:00Z",
+      "watermark": "2026-09-23T11:30:00Z",
+      "chunk_oldest": "2026-09-23T11:45:00Z",
+      "answer": {
+        "oldest_bucket_start": "2026-09-23T11:30:00Z"
+      },
+      "expected": false
+    },
+    {
+      "name": "the watermark fallback does not judge a chunk that re-sends the watermark bucket",
+      "now": "2026-09-23T12:00:00Z",
+      "duration_seconds": 18000,
+      "recorded_oldest": "2026-09-21T12:00:00Z",
+      "watermark": "2026-09-23T11:30:00Z",
+      "chunk_oldest": "2026-09-23T11:30:00Z",
+      "answer": {
+        "oldest_bucket_start": "2026-09-23T11:45:00Z"
+      },
+      "expected": false
+    },
+    {
+      "name": "a watermark that is not live either leaves the loss unseen",
+      "now": "2026-09-23T12:00:00Z",
+      "duration_seconds": 18000,
+      "recorded_oldest": null,
+      "watermark": "2026-09-21T12:30:00Z",
+      "chunk_oldest": "2026-09-23T11:45:00Z",
+      "answer": {
+        "oldest_bucket_start": "2026-09-23T11:45:00Z"
+      },
+      "expected": false
+    }
+  ],
+  "reseed_oldest": [
+    {
+      "name": "a live record keeps the older of itself and the chunk",
+      "now": "2026-09-23T12:00:00Z",
+      "duration_seconds": 18000,
+      "recorded_oldest": "2026-09-23T08:00:00Z",
+      "chunk_oldest": "2026-09-23T11:45:00Z",
+      "expected": "2026-09-23T08:00:00Z"
+    },
+    {
+      "name": "a chunk older than the live record replaces it",
+      "now": "2026-09-23T12:00:00Z",
+      "duration_seconds": 18000,
+      "recorded_oldest": "2026-09-23T08:00:00Z",
+      "chunk_oldest": "2026-09-23T07:45:00Z",
+      "expected": "2026-09-23T07:45:00Z"
+    },
+    {
+      "name": "a record that is not live is re-seeded from the chunk",
+      "now": "2026-09-23T12:00:00Z",
+      "duration_seconds": 18000,
+      "recorded_oldest": "2026-09-21T12:00:00Z",
+      "chunk_oldest": "2026-09-23T11:45:00Z",
+      "expected": "2026-09-23T11:45:00Z"
+    },
+    {
+      "name": "no record is seeded from the chunk",
+      "now": "2026-09-23T12:00:00Z",
+      "duration_seconds": 18000,
+      "recorded_oldest": null,
+      "chunk_oldest": "2026-09-23T11:45:00Z",
+      "expected": "2026-09-23T11:45:00Z"
     }
   ]
 }

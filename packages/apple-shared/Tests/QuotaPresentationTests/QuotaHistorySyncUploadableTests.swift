@@ -26,6 +26,7 @@ struct QuotaHistorySyncUploadableTests {
     )
     #expect(kept.map(\.usedPercent) == [2, 3, 4])
   }
+
 }
 
 private func instant(_ wire: String) throws -> Date {
