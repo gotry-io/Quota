@@ -104,6 +104,10 @@ Do not create a second description of a canonical rule. Update its source and li
 - Prefer direct implementations over redundant wrappers, retries, fallbacks, and defensive branches.
   Add them only for a concrete boundary, failure mode, or security requirement.
 
+Tests follow the rule in [`CONTRIBUTING.md`](CONTRIBUTING.md#tests): few and exact — a test exists to
+refuse a specific wrong change; fixtures are the tests for shared contracts; no getters, no copy
+equality outside a fixture, no rule proven twice, no wall clock.
+
 Development commands, hooks, the merge queue, and review expectations live in
 [`CONTRIBUTING.md`](CONTRIBUTING.md). Do not commit generated state such as `node_modules/`,
 `dist/`, `target/`, `.build/`, `.swiftpm/`, `.wrangler/`, SQLite files, logs, or local credentials.
