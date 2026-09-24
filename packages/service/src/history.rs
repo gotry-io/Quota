@@ -855,49 +855,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_snapshot_carries_history_only_on_the_windows_that_have_samples() {
-        let snapshot = json!({
-            "provider": "codex",
-            "windows": [
-                {
-                    "id": "five_hour",
-                    "title": "5 Hours",
-                    "used_percent": 50,
-                    "resets_at": "2026-09-05T12:00:00Z",
-                    "duration_seconds": 18000
-                },
-                {
-                    "id": "weekly",
-                    "title": "Weekly",
-                    "used_percent": 10,
-                    "resets_at": "2026-09-08T00:00:00Z",
-                    "duration_seconds": 604800
-                }
-            ]
-        });
-        let mut stored = BTreeMap::new();
-        stored.insert(
-            "five_hour".to_owned(),
-            vec![QuotaSample {
-                resets_at: instant(Some(&json!("2026-09-05T12:00:00Z"))).expect("resets"),
-                observed_at: instant(Some(&json!("2026-09-05T09:30:00Z"))).expect("observed"),
-                used_percent: 50.0,
-            }],
-        );
-        let now = instant(Some(&json!("2026-09-05T09:30:00Z"))).expect("now");
-        let restated = snapshot_with_history(&snapshot, &stored, now, 0);
-        let windows = restated["windows"].as_array().expect("windows");
-        assert_eq!(
-            windows[0]["history"]["points"]
-                .as_array()
-                .expect("points")
-                .len(),
-            1
-        );
-        assert!(windows[1].get("history").is_none());
-    }
-
     /// Decimation keeps the first reading of each 300 s span after the previous kept point,
     /// and always the last (ADR 0042).
     #[test]
@@ -939,9 +896,10 @@ mod tests {
         );
     }
 
-    /// Samples of five_hour, weekly, and monthly fold onto their own windows and nowhere else.
+    /// Samples of five_hour and weekly fold onto their own windows and nowhere else, and a
+    /// window nothing has sampled carries no `history` key at all.
     #[test]
-    fn three_windows_fold_separately() {
+    fn each_window_takes_only_its_own_samples_and_an_unsampled_one_takes_no_history() {
         let snapshot = json!({
             "provider": "codex",
             "windows": [
@@ -985,10 +943,6 @@ mod tests {
             "weekly".to_owned(),
             vec![sample("2026-09-08T00:00:00Z", "2026-09-05T09:30:00Z", 20.0)],
         );
-        stored.insert(
-            "monthly".to_owned(),
-            vec![sample("2026-10-01T00:00:00Z", "2026-09-05T09:30:00Z", 8.0)],
-        );
         let now = instant(Some(&json!("2026-09-05T09:30:00Z"))).expect("now");
         let restated = snapshot_with_history(&snapshot, &stored, now, 0);
         let windows = restated["windows"].as_array().expect("windows");
@@ -1002,7 +956,7 @@ mod tests {
         };
         assert_eq!(used(0), vec![10.0, 40.0]);
         assert_eq!(used(1), vec![20.0]);
-        assert_eq!(used(2), vec![8.0]);
+        assert!(windows[2].get("history").is_none());
     }
 
     const SYNC_FIXTURE: &str =

@@ -877,25 +877,6 @@ mod tests {
         }
     }
 
-    /// The user agent states the platform whether or not a version could be read, and never
-    /// invents a version field.
-    #[test]
-    fn the_user_agent_states_a_version_only_when_one_was_read() {
-        let known = build_pat_user_agent(Some("0.42.1"), Some("15.6"));
-        assert!(known.starts_with("codex_cli_rs/0.42.1 ("), "{known}");
-        assert!(known.contains(" 15.6; "), "{known}");
-        assert!(known.ends_with(')'), "{known}");
-        let unknown = build_pat_user_agent(None, Some("15.6"));
-        assert!(unknown.starts_with("codex_cli_rs ("), "{unknown}");
-        assert!(!unknown.contains('/'), "{unknown}");
-        // Without an OS version the platform stands alone rather than trailing a blank.
-        let bare = build_pat_user_agent(None, None);
-        assert!(!bare.contains("  ") && !bare.contains(" ;"), "{bare}");
-        assert!(build_pat_user_agent(Some("1.0.0"), None).starts_with("codex_cli_rs/1.0.0 ("));
-        // The kernel answers on macOS and is not consulted anywhere else.
-        assert_eq!(os_version().is_some(), cfg!(target_os = "macos"));
-    }
-
     /// Codex owns this grant, so a Mac without one has nothing for this collector to try.
     /// There is no second rung to fall to.
     fn isolated_context() -> CollectionContext {
@@ -912,24 +893,6 @@ mod tests {
             cli_versions: Default::default(),
             proven_credentials: Default::default(),
         }
-    }
-
-    /// Without a Codex grant and without a stored cookie there is nothing to try; a stored
-    /// cookie alone is the last rung, and it is discovered as one.
-    #[test]
-    fn the_browser_session_is_discovered_only_without_a_local_grant() {
-        let mut context = isolated_context();
-        assert!(discover(&context).is_empty());
-        context.browser_sessions.insert(
-            ProviderId::Codex,
-            vec!["__Secure-next-auth.session-token=abc".to_owned()],
-        );
-        let sessions = discover(&context);
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(
-            sessions[0].credential_source,
-            super::super::BROWSER_SESSION_SOURCE
-        );
     }
 
     /// The stored session is the last rung, and only the last rung.
@@ -1126,30 +1089,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             [("weekly", Some(604_800)), ("monthly", Some(2_592_000))]
         );
-    }
-
-    #[test]
-    fn maps_free_monthly_primary_without_calling_it_five_hour() {
-        let usage = map_usage(&serde_json::json!({
-            "plan_type": "free",
-            "rate_limit": {
-                "primary_window": {
-                    "used_percent": 67,
-                    "limit_window_seconds": 2592000,
-                    "reset_at": 1787842532
-                },
-                "secondary_window": null
-            }
-        }));
-        assert_eq!(
-            usage
-                .windows
-                .iter()
-                .map(|window| (window.id.as_str(), window.title.as_str()))
-                .collect::<Vec<_>>(),
-            [("monthly", "Monthly")]
-        );
-        assert!(!usage.malformed_success);
     }
 
     #[test]

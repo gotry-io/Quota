@@ -2,27 +2,22 @@
 //!
 //! Fills 30 days × 12 providers × 3 windows at the 300 s decimation, folds through
 //! [`LocalQuotaHistory`] the way a state push restates Overview, and prints the JSON byte
-//! size. A second path copies `~/.config/quota/cache.sqlite` and folds that image read-only.
+//! size.
 //!
 //! ```sh
-//! cargo test --locked --package quota-service --lib \
-//!     -- history_payload --ignored --nocapture
+//! cargo test --locked --package quota-service --lib -- history_payload --nocapture
 //! ```
 
 use std::collections::BTreeMap;
-use std::fs;
-use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
-use rusqlite::{Connection, OpenFlags};
 use serde_json::{Value, json};
-use uuid::Uuid;
 
 use super::{LocalQuotaHistory, overview_item};
 use crate::catalog::ProviderId;
 use crate::history::{HISTORY_DECIMATION_SECONDS, HISTORY_RETENTION_DAYS, QuotaSample};
 use crate::protocol::{QuotaOverviewIdentity, QuotaOverviewItem};
-use crate::state::{QuotaSamplesBySubscription, StateStore};
+use crate::state::QuotaSamplesBySubscription;
 
 /// Above this, the 30-day fold does not ride on every state push (plan B).
 const PLAN_A_BUDGET_BYTES: usize = 200 * 1024;
@@ -62,56 +57,6 @@ fn thirty_day_history_in_state_exceeds_the_plan_a_budget() {
         size.overview_bytes,
         PLAN_A_BUDGET_BYTES
     );
-}
-
-/// Fills `quota_samples`, then folds a read-only copy of this Mac's cache if one exists.
-#[test]
-#[ignore = "fills 30 days of quota_samples and copies ~/.config/quota/cache.sqlite"]
-fn plan_a_history_payload_size() {
-    let now = DateTime::parse_from_rfc3339("2026-09-16T12:00:00Z")
-        .expect("now")
-        .with_timezone(&Utc);
-    let root = temp_root("history-payload");
-    let store = StateStore::open(&root).expect("state");
-    let inserted = store.seed_quota_samples(synthetic_rows(now)).expect("seed");
-    let samples = store.quota_samples().expect("samples");
-    assert_eq!(
-        inserted,
-        samples
-            .values()
-            .flat_map(|windows| windows.values().map(Vec::len))
-            .sum::<usize>()
-    );
-    let synthetic = measure(&samples, now);
-    println!(
-        "synthetic_sqlite: rows={} overview_bytes={} history_bytes={}",
-        synthetic.sample_rows, synthetic.overview_bytes, synthetic.history_bytes
-    );
-    drop(store);
-    let _ = fs::remove_dir_all(&root);
-
-    match copy_user_cache() {
-        None => println!("real_cache: skipped (no ~/.config/quota/cache.sqlite)"),
-        Some(copy) => {
-            let samples = samples_from_readonly_cache(&copy.path).expect("read copy");
-            let now = samples
-                .values()
-                .flat_map(|windows| windows.values())
-                .flatten()
-                .map(|sample| sample.observed_at)
-                .max()
-                .unwrap_or_else(Utc::now);
-            let real = measure(&samples, now);
-            println!(
-                "real_cache: rows={} overview_bytes={} history_bytes={} path={}",
-                real.sample_rows,
-                real.overview_bytes,
-                real.history_bytes,
-                copy.path.display()
-            );
-            copy.cleanup();
-        }
-    }
 }
 
 fn measure(samples: &QuotaSamplesBySubscription, now: DateTime<Utc>) -> PayloadSize {
@@ -163,7 +108,7 @@ fn snapshots_from_samples(samples: &QuotaSamplesBySubscription, now: DateTime<Ut
                 .iter()
                 .filter_map(|(id, group)| {
                     let last = group.last()?;
-                    let duration = cadence_seconds(id, group);
+                    let duration = cadence_seconds(id);
                     (duration > 0).then(|| {
                         json!({
                             "id": id,
@@ -276,109 +221,13 @@ fn containing_resets_at(
     current_resets_at - Duration::seconds(periods_back * duration_seconds)
 }
 
-fn cadence_seconds(window_id: &str, samples: &[QuotaSample]) -> i64 {
-    match window_id {
-        "five_hour" => 18_000,
-        "weekly" | "seven_day" => 604_800,
-        "monthly" => 2_592_000,
-        "hourly" => 3_600,
-        "daily" => 86_400,
-        _ => inferred_cadence(samples).unwrap_or(0),
-    }
-}
-
-fn inferred_cadence(samples: &[QuotaSample]) -> Option<i64> {
-    let mut resets: Vec<DateTime<Utc>> = samples.iter().map(|sample| sample.resets_at).collect();
-    resets.sort();
-    resets.dedup();
-    if let Some(gap) = resets
-        .windows(2)
-        .map(|pair| (pair[1] - pair[0]).num_seconds())
-        .filter(|gap| *gap > 0)
-        .min()
-    {
-        return Some(gap);
-    }
-    let first = samples.iter().map(|sample| sample.observed_at).min()?;
-    let resets_at = samples.last()?.resets_at;
-    let span = (resets_at - first).num_seconds();
-    (span > 0).then_some(span)
+fn cadence_seconds(window_id: &str) -> i64 {
+    WINDOWS
+        .iter()
+        .find(|(id, _)| *id == window_id)
+        .map_or(0, |(_, duration)| *duration)
 }
 
 fn rfc3339(instant: DateTime<Utc>) -> String {
     instant.to_rfc3339_opts(SecondsFormat::Secs, true)
-}
-
-fn samples_from_readonly_cache(path: &Path) -> Result<QuotaSamplesBySubscription, rusqlite::Error> {
-    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    let mut statement = conn.prepare(
-        "SELECT subscription_key, window_id, resets_at, observed_at, used_percent
-         FROM quota_samples ORDER BY observed_at",
-    )?;
-    let rows = statement.query_map([], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
-            row.get::<_, String>(3)?,
-            row.get::<_, f64>(4)?,
-        ))
-    })?;
-    let mut samples = QuotaSamplesBySubscription::new();
-    for row in rows {
-        let (subscription_key, window_id, resets_at, observed_at, used_percent) = row?;
-        let (Some(resets_at), Ok(observed_at)) = (
-            crate::history::whole_second_utc(&resets_at),
-            DateTime::parse_from_rfc3339(&observed_at),
-        ) else {
-            continue;
-        };
-        samples
-            .entry(subscription_key)
-            .or_default()
-            .entry(window_id)
-            .or_default()
-            .push(QuotaSample {
-                resets_at,
-                observed_at: observed_at.with_timezone(&Utc),
-                used_percent,
-            });
-    }
-    Ok(samples)
-}
-
-struct CacheCopy {
-    path: PathBuf,
-    root: PathBuf,
-}
-
-impl CacheCopy {
-    fn cleanup(self) {
-        let _ = fs::remove_dir_all(self.root);
-    }
-}
-
-fn copy_user_cache() -> Option<CacheCopy> {
-    let src = PathBuf::from(std::env::var_os("HOME")?).join(".config/quota/cache.sqlite");
-    if !src.is_file() {
-        return None;
-    }
-    let root = std::env::temp_dir().join(format!("quota-cache-copy-{}", Uuid::new_v4()));
-    fs::create_dir_all(&root).ok()?;
-    let path = root.join("cache-copy.sqlite");
-    fs::copy(&src, &path).ok()?;
-    for suffix in ["-wal", "-shm"] {
-        let side = PathBuf::from(format!("{}{suffix}", src.display()));
-        if side.is_file() {
-            let dest = PathBuf::from(format!("{}{suffix}", path.display()));
-            let _ = fs::copy(&side, dest);
-        }
-    }
-    Some(CacheCopy { path, root })
-}
-
-fn temp_root(name: &str) -> PathBuf {
-    let root = std::env::temp_dir().join(format!("quota-{name}-{}", Uuid::new_v4()));
-    fs::create_dir_all(&root).expect("root");
-    fs::canonicalize(&root).expect("canonical root")
 }

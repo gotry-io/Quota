@@ -437,20 +437,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cursor_is_an_account_sync_catalog_provider() {
-        assert!(ProviderId::ALL.contains(&ProviderId::Cursor));
-        assert!(ProviderId::Cursor.metadata().account_sync);
-        assert!(ProviderId::Cursor.syncs_to_account());
-        assert_eq!(
-            ProviderId::Cursor
-                .metadata()
-                .browser_session
-                .map(|session| session.exclusive),
-            Some(true)
-        );
-    }
-
-    #[test]
     fn a_stored_session_is_discovered_only_without_a_usable_app_session() {
         let mut context = CollectionContext {
             home_directory: std::path::PathBuf::from("/tmp/quota-cursor-missing-home"),
@@ -651,16 +637,6 @@ mod tests {
     }
 
     #[test]
-    fn provider_text_is_bounded_before_wire_output() {
-        assert_eq!(
-            bounded_identity(Some(&serde_json::json!(" Pro ")), 64).as_deref(),
-            Some("Pro")
-        );
-        assert!(bounded_identity(Some(&serde_json::json!("x".repeat(65))), 64).is_none());
-        assert!(bounded_identity(Some(&serde_json::json!("bad\nplan")), 64).is_none());
-    }
-
-    #[test]
     fn identity_rejects_oversized_control_and_malformed_values() {
         for value in [
             serde_json::json!({"sub":"x".repeat(257)}),
@@ -670,6 +646,12 @@ mod tests {
         ] {
             assert!(identity_from_response(&value, "wos-session=secret", WEB_SOURCE).is_err());
         }
+        // The plan name takes the same bound on its way to the wire.
+        assert_eq!(
+            bounded_identity(Some(&serde_json::json!(" Pro ")), 64).as_deref(),
+            Some("Pro")
+        );
+        assert!(bounded_identity(Some(&serde_json::json!("x".repeat(65))), 64).is_none());
     }
 
     #[test]

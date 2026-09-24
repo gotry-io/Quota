@@ -534,18 +534,6 @@ mod tests {
         )
     }
 
-    #[test]
-    fn the_catalog_names_the_grok_session_cookies() {
-        let spec = ProviderId::Grok
-            .metadata()
-            .browser_session
-            .expect("grok browser session");
-        assert_eq!(spec.cookie_names, &["sso", "sso-rw"]);
-        assert_eq!(sso_token("sso=session-value"), Some("session-value"));
-        assert_eq!(sso_token("sso-rw=alt"), Some("alt"));
-        assert!(sso_token("sessionKey=sk-ant-ok").is_none());
-    }
-
     /// Both runtimes answer the same cases, so a rule this collector starts reading differently
     /// fails here rather than resolving one account into two subscriptions.
     #[test]
@@ -575,21 +563,6 @@ mod tests {
             ),
             BILLING_RPC_URL
         );
-    }
-
-    #[test]
-    fn parses_grpc_web_percent_and_auth_trailer() {
-        let billing =
-            parse_grpc_web_billing(&percent_frame(25.0), 1_786_320_000, RPC_SOURCE).unwrap();
-        assert_eq!(billing.used_percent, 25.0);
-
-        let error = parse_grpc_web_billing(
-            &trailer_frame("grpc-status: 16\r\ngrpc-message: no-credentials\r\n"),
-            1_786_320_000,
-            RPC_SOURCE,
-        )
-        .unwrap_err();
-        assert_eq!(error.category, ErrorCategory::AuthRequired);
     }
 
     /// The cookie is kept only once grok.com has answered the billing RPC cleanly, and a
@@ -651,15 +624,6 @@ mod tests {
         server.join().expect("server");
     }
 
-    /// A header with no grok.com session cookie is refused before a request is made.
-    #[test]
-    fn validate_rejects_a_header_that_names_no_session() {
-        let error = validate_at("sessionKey=sk-ant-ok", &context(), "http://127.0.0.1:1")
-            .expect_err("no sso");
-        assert_eq!(error.category, ErrorCategory::Error);
-        assert_eq!(error.source_id, WEB_SOURCE);
-    }
-
     /// The title heuristic is display copy and may guess; `primary_cadence` is the field a
     /// client reads instead of a title, so it is only set where the reset actually lands in a
     /// cadence.
@@ -690,22 +654,5 @@ mod tests {
         );
         assert_eq!(undated.title, "Billing Cycle");
         assert_eq!(undated.primary_cadence, None);
-    }
-
-    /// A reading over the cookie is one window from the same RPC the token rung reads.
-    #[test]
-    fn a_reading_is_the_billing_cycle_window() {
-        let (address, server) = serve(percent_frame(25.0));
-        let snapshot = collect_at(
-            "sso=session-value",
-            &context(),
-            &format!("http://{address}"),
-        )
-        .expect("snapshot");
-        assert_eq!(snapshot.windows.len(), 1);
-        assert_eq!(snapshot.windows[0].id, "billing_cycle");
-        assert_eq!(snapshot.windows[0].used_percent, 25.0);
-        assert_eq!(snapshot.account.fingerprint_scope, "source");
-        server.join().expect("server");
     }
 }

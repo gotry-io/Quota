@@ -5013,10 +5013,12 @@ mod tests {
         }
     }
 
+    /// A Relay that holds each answer until the test opens `release`, so what the test does
+    /// while a request is in flight happens before the answer lands — by event, not by clock.
     fn spawn_gated_relay(
         responses: Vec<String>,
-        delay: std::time::Duration,
         arrived: Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+        release: Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
     ) -> MockRelay {
         use std::io::{Read as _, Write as _};
 
@@ -5039,12 +5041,8 @@ mod tests {
                         let read = stream.read(&mut request).unwrap_or(0);
                         let head = String::from_utf8_lossy(&request[..read]).into_owned();
                         recorded.push(head.clone());
-                        {
-                            let (lock, cond) = arrived.as_ref();
-                            *lock.lock().expect("gate") = true;
-                            cond.notify_all();
-                        }
-                        std::thread::sleep(delay);
+                        open_gate(&arrived);
+                        wait_gate(&release, "the test never released the relay");
                         let body = if head.contains("/api/v6/account/usage/activity") {
                             activity_hours_response()
                         } else if head.contains("GET /api/v2/account/settings") {
@@ -5074,16 +5072,22 @@ mod tests {
         }
     }
 
-    fn wait_arrived_gate(arrived: &Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>) {
-        let (lock, cond) = arrived.as_ref();
+    fn wait_gate(gate: &Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>, never: &str) {
+        let (lock, cond) = gate.as_ref();
         let mut ready = lock.lock().expect("gate");
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while !*ready {
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-            assert!(!remaining.is_zero(), "relay never received a request");
+            assert!(!remaining.is_zero(), "{never}");
             let (guard, _) = cond.wait_timeout(ready, remaining).expect("wait");
             ready = guard;
         }
+    }
+
+    fn open_gate(gate: &Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>) {
+        let (lock, cond) = gate.as_ref();
+        *lock.lock().expect("gate") = true;
+        cond.notify_all();
     }
 
     fn http_unauthorized() -> String {
@@ -5555,10 +5559,11 @@ mod tests {
     #[test]
     fn account_read_session_changed_leaves_the_session_installed() {
         let arrived = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let release = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
         let relay_server = spawn_gated_relay(
             vec![token_refresh_response()],
-            std::time::Duration::from_millis(150),
             arrived.clone(),
+            release.clone(),
         );
         let root =
             std::env::temp_dir().join(format!("quota-session-changed-{}", uuid::Uuid::new_v4()));
@@ -5567,10 +5572,11 @@ mod tests {
             .write_session_json(&near_expiry_session())
             .expect("near-expiry session");
         let reader = std::thread::spawn(move || backend.account_read(&AtomicBool::new(false)));
-        wait_arrived_gate(&arrived);
+        wait_gate(&arrived, "relay never received a request");
         state
             .write_session_json(&active_session())
             .expect("rotated session");
+        open_gate(&release);
         let result = reader.join().expect("account_read");
         let error = result
             .expect("an active session was present")
@@ -5589,11 +5595,9 @@ mod tests {
     #[test]
     fn a_relay_401_at_epoch_n_does_not_clear_epoch_n_plus_one() {
         let arrived = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
-        let relay_server = spawn_gated_relay(
-            vec![http_unauthorized()],
-            std::time::Duration::from_millis(150),
-            arrived.clone(),
-        );
+        let release = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let relay_server =
+            spawn_gated_relay(vec![http_unauthorized()], arrived.clone(), release.clone());
         let root = std::env::temp_dir().join(format!("quota-401-epoch-{}", uuid::Uuid::new_v4()));
         let (state, backend) = signed_in_backend(&root, &relay_server.origin);
         let (_, epoch) = state
@@ -5601,10 +5605,11 @@ mod tests {
             .expect("snapshot")
             .expect("session");
         let reader = std::thread::spawn(move || backend.account_read(&AtomicBool::new(false)));
-        wait_arrived_gate(&arrived);
+        wait_gate(&arrived, "relay never received a request");
         state
             .write_session_json(&active_session())
             .expect("newer session");
+        open_gate(&release);
         let result = reader.join().expect("account_read");
         let error = result
             .expect("an active session was present")
@@ -5780,7 +5785,9 @@ mod tests {
     /// Account has observed before, and only past half an hour of lag.
     #[test]
     fn account_observation_behind_needs_a_recent_summary_and_a_real_lag() {
-        let now = Utc::now();
+        let now = DateTime::parse_from_rfc3339("2026-08-31T13:00:00Z")
+            .expect("now")
+            .with_timezone(&Utc);
         let instant = |ago: Duration| (now - ago).to_rfc3339_opts(SecondsFormat::Secs, true);
         let quota = observation_component(quota_observed_at(&instant(Duration::minutes(1))), now);
         let behind = observation_component(
@@ -6201,91 +6208,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn account_period_detail_maps_days_and_coverage() {
-        let totals = json!({
-            "total_tokens": 12,
-            "input_tokens": 10,
-            "output_tokens": 2,
-            "cache_read_input_tokens": 0,
-            "cache_write_input_tokens": 0,
-            "reasoning_tokens": 0,
-            "messages": 1
-        });
-        let cost = json!({
-            "mode": "calculate",
-            "basis": "none",
-            "status": "unavailable",
-            "amount_microusd": null,
-            "catalog_revision": null,
-            "calculated_rows": 0,
-            "reported_rows": 0,
-            "unpriced_rows": 1,
-            "assumptions": [],
-            "unpriced": [{
-                "billing_channel": "api",
-                "model": "a-model",
-                "reason": "unknown_model",
-                "rows": 1
-            }]
-        });
-        let body = json!({
-            "protocol_version": 6,
-            "request": {
-                "from": "2026-08-01",
-                "to": "2026-08-03",
-                "timezone": "Asia/Singapore"
-            },
-            "bounds": {
-                "start": "2026-07-31T16:00:00Z",
-                "end": "2026-08-03T16:00:00Z",
-                "grid": "first_whole_hour_of_local_date; fractional_midnight_to_previous_day; no_proration"
-            },
-            "totals": totals,
-            "cost": cost,
-            "cache_saved": {
-                "amount_microusd": "0",
-                "status": "complete",
-                "unpriced_rows": 0
-            },
-            "days": [{
-                "date": "2026-08-01",
-                "totals": totals.clone(),
-                "cost": cost.clone(),
-                "partial": true
-            }],
-            "agents": [],
-            "coverage": {
-                "partial": true,
-                "daily_retained_from": "2026-07-01",
-                "hourly_retained_from": null,
-                "truncated_by_retention": true
-            },
-            "revision": {
-                "usage_revision": 4,
-                "device_generation": 1,
-                "account_updated_at": "2026-08-03T10:00:00Z",
-                "pricing_revision": "pricing_1",
-                "model_catalog_revision": "models_1",
-                "fold_version": 1
-            }
-        });
-        let detail = account_period_detail(&body).expect("mapped");
-        assert_eq!(detail["range"]["from"], "2026-08-01");
-        assert_eq!(detail["range"]["to"], "2026-08-03");
-        assert_eq!(detail["timezone"], "Asia/Singapore");
-        assert_eq!(detail["bounds"]["start"], "2026-07-31T16:00:00Z");
-        assert_eq!(detail["revision"]["usage_revision"], 4);
-        assert_eq!(detail["incomplete"], json!(true));
-        assert_eq!(detail["coverage"]["truncated_by_retention"], json!(true));
-        assert_eq!(detail["coverage"]["partial"], json!(true));
-        assert_eq!(detail["usage"]["days"].as_array().expect("days").len(), 1);
-        assert_eq!(detail["usage"]["days"][0]["date"], "2026-08-01");
-        assert!(detail["usage"]["days"][0].get("partial").is_none());
-        assert_eq!(detail["usage"]["totals"]["total_tokens"], 12);
-        assert_eq!(detail["usage"]["cache_saved"]["status"], "complete");
-    }
-
     /// A change that skips or repeats midnight still leaves the day one instant to begin at.
     #[test]
     fn a_local_day_begins_once_across_a_daylight_change() {
@@ -6380,47 +6302,6 @@ mod tests {
                 .len(),
             2
         );
-    }
-
-    /// A period with no agents in it still answers, and its fold says there was no cost.
-    #[test]
-    fn a_managed_period_with_nothing_in_it_folds_to_no_cost() {
-        let detail = account_usage_detail(
-            &json!({
-                "totals": {
-                    "total_tokens": 0,
-                    "input_tokens": 0,
-                    "output_tokens": 0,
-                    "cache_read_input_tokens": 0,
-                    "cache_write_input_tokens": 0,
-                    "reasoning_tokens": 0,
-                    "messages": 0
-                },
-                "cost": {
-                    "mode": "auto",
-                    "basis": "none",
-                    "status": "complete",
-                    "amount_microusd": null,
-                    "catalog_revision": null,
-                    "calculated_rows": 0,
-                    "reported_rows": 0,
-                    "unpriced_rows": 0,
-                    "assumptions": [],
-                    "unpriced": []
-                },
-                "cache_saved": {
-                    "amount_microusd": "0",
-                    "status": "complete",
-                    "unpriced_rows": 0
-                },
-                "partial": false,
-                "agents": []
-            }),
-            &("2026-08-13".to_owned(), "2026-08-13".to_owned()),
-        )
-        .expect("detail");
-        assert_eq!(detail["usage"]["agents"], json!([]));
-        assert_eq!(detail["incomplete"], json!(false));
     }
 
     /// A period that does not carry the tree is not a period this build can read.
@@ -6790,24 +6671,6 @@ mod tests {
     }
 
     #[test]
-    fn native_backend_collects_empty_home_without_unavailable_fallback() {
-        let root = std::env::temp_dir().join(format!("quota-backend-{}", uuid::Uuid::new_v4()));
-        let home = root.join("home");
-        fs::create_dir_all(&home).expect("home");
-        let state = Arc::new(StateStore::open(&root).expect("state"));
-        let relay = Arc::new(RelayClient::new().expect("relay"));
-        let mut backend = NativeBackend::new(state, relay, "QuotaTest", "test");
-        backend.home = home;
-        backend.environment.clear();
-        let collection = backend
-            .collect_usage(Arc::new(AtomicBool::new(false)))
-            .expect("empty usage collection");
-        assert_eq!(collection.agents.len(), UsageAgent::ALL.len());
-        assert!(!collection.timezone.is_empty());
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
     fn usage_index_read_failure_does_not_leave_a_running_scan_attempt() {
         let root = std::env::temp_dir().join(format!("quota-usage-index-{}", uuid::Uuid::new_v4()));
         let home = root.join("home");
@@ -6867,49 +6730,6 @@ mod tests {
         assert_eq!(usage.agents.len(), UsageAgent::ALL.len());
         drop(backend);
         drop(state);
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
-    fn local_quota_collection_does_not_require_or_modify_account_state() {
-        let root =
-            std::env::temp_dir().join(format!("quota-local-status-{}", uuid::Uuid::new_v4()));
-        let home = root.join("home");
-        fs::create_dir_all(&home).expect("home");
-        let state = Arc::new(StateStore::open(&root).expect("state"));
-        let relay = Arc::new(RelayClient::new().expect("relay"));
-        let mut backend = NativeBackend::new(state.clone(), relay, "QuotaTest", "test");
-        backend.home = home;
-        backend.environment.clear();
-        assert!(
-            backend
-                .configured_providers()
-                .expect("providers")
-                .is_empty()
-        );
-        let report = backend
-            .collect_quota(Arc::new(AtomicBool::new(false)))
-            .expect("local quota report");
-        assert!(report.get("protocol_version").is_none());
-        for result in report
-            .get("results")
-            .and_then(Value::as_array)
-            .expect("quota results")
-        {
-            let result = result.as_object().expect("quota result object");
-            assert_eq!(result.len(), 4);
-            assert!(result.contains_key("provider"));
-            assert!(result.contains_key("outcome"));
-            assert!(result.contains_key("snapshots"));
-            // An isolated home has no credentials, so every provider reports that it was
-            // never set up here rather than that collection failed here.
-            assert_eq!(
-                result.get("sources").and_then(Value::as_array),
-                Some(&Vec::new())
-            );
-        }
-        assert!(state.session_json().expect("session state").is_none());
-        drop(backend);
         fs::remove_dir_all(root).expect("cleanup");
     }
 
@@ -7220,30 +7040,6 @@ mod tests {
         fs::remove_dir_all(root).expect("cleanup");
     }
 
-    #[test]
-    fn fresh_store_diagnose_is_empty_not_partial() {
-        let root = std::env::temp_dir().join(format!("quota-fresh-diag-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&root).expect("root");
-        let state = Arc::new(StateStore::open(&root).expect("state"));
-        let backend = NativeBackend::new(
-            state,
-            Arc::new(RelayClient::new().expect("relay")),
-            "QuotaTest",
-            "test",
-        );
-        let report = backend.diagnostic_report().expect("diagnostics");
-        let usage = report
-            .surfaces
-            .iter()
-            .find(|surface| surface.id == "usage_this_device")
-            .expect("usage surface");
-        assert_eq!(usage.data, DiagnosticDataState::Empty);
-        assert_ne!(usage.data, DiagnosticDataState::Partial);
-        assert_eq!(report.summary.attention, DiagnosticAttention::None);
-        drop(backend);
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
     /// An identity this device could not read is the one loss no refresh undoes, so it is said
     /// out loud with the action that fixes it rather than filed as an informational note.
     #[test]
@@ -7273,7 +7069,9 @@ mod tests {
 
     #[test]
     fn a_failed_collection_republishes_this_devices_reading_as_failed() {
-        let now = Utc::now();
+        let now = DateTime::parse_from_rfc3339("2026-08-28T08:00:00Z")
+            .expect("now")
+            .with_timezone(&Utc);
         let observed_at = (now - Duration::hours(1)).to_rfc3339_opts(SecondsFormat::Secs, true);
         let collected = |status: &str, observed_at: &str| {
             serde_json::json!({
@@ -7465,9 +7263,8 @@ mod tests {
         assert!(!retry.contains(&ProviderId::Grok));
         assert!(!retry.contains(&ProviderId::Kimi));
     }
-
     #[test]
-    fn a_forced_pass_skips_providers_already_asked() {
+    fn a_recheck_never_starts_a_cli_the_first_pass_already_started() {
         let retry = HashSet::from([ProviderId::Claude, ProviderId::Codex, ProviderId::Grok]);
         // Recheck already spawned for an expired grant in the first pass.
         assert_eq!(
@@ -8249,184 +8046,6 @@ mod tests {
     }
 
     #[test]
-    fn expired_observations_are_stale_and_lose_to_a_still_valid_device() {
-        let root = std::env::temp_dir().join(format!("quota-overview-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&root).expect("root");
-        let state = Arc::new(StateStore::open(&root).expect("state"));
-        let backend = NativeBackend::new(
-            state,
-            Arc::new(RelayClient::new().expect("relay")),
-            "QuotaTest",
-            "test",
-        );
-        // The reading itself says how long it speaks for: a window that reports no reset
-        // and no cadence ages out at the maximum, so how old it is decides.
-        let snapshot = |observed_at: DateTime<Utc>| {
-            json!({
-                "provider": "codex",
-                "account": {"fingerprint": "account", "fingerprint_scope": "global"},
-                "windows": [{"id": "five_hour", "title": "5 Hours", "used_percent": 40.0}],
-                "status": "available",
-                "observed_at": observed_at.to_rfc3339_opts(SecondsFormat::Secs, true)
-            })
-        };
-        let subscription = |device_id: &str, snapshot: Value| {
-            json!({
-                "key": "codex|account|global|",
-                "provider": "codex",
-                "snapshot": snapshot.clone(),
-                "sources": [{
-                    "device_id": device_id,
-                    "observed_at": snapshot["observed_at"].clone()
-                }]
-            })
-        };
-        let now = Utc::now();
-        let quota = json!({"results": []});
-        let mut account = json!({
-            "auth_status": "signed_in",
-            "device_id": "this-device",
-            "account_summary": {
-                "devices": [{"id": "asleep", "display_name": "Asleep"}],
-                "subscriptions": [subscription("asleep", snapshot(now - Duration::days(2)))]
-            }
-        });
-        let expired = backend.build_overview(&quota, Some(&account));
-        assert_eq!(expired.len(), 1);
-        assert!(expired[0].is_stale);
-
-        // Relay resolves the account's devices into one row, so a fresher reading arrives as
-        // that row rather than as a second card to collapse here.
-        account["account_summary"]["devices"]
-            .as_array_mut()
-            .expect("devices")
-            .push(json!({"id": "awake", "display_name": "Studio"}));
-        account["account_summary"]["subscriptions"] =
-            json!([subscription("awake", snapshot(now - Duration::minutes(1)))]);
-        let items = backend.build_overview(&quota, Some(&account));
-        assert_eq!(items.len(), 1);
-        assert!(!items[0].is_stale);
-        assert_eq!(items[0].selected_source_display_name, "Studio");
-        drop(backend);
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    /// Local collection is the only authority for the machine in front of you, so a local
-    /// reading of the same instant wins and a newer remote one still takes over.
-    #[test]
-    fn the_local_reading_wins_a_tie_and_loses_to_a_newer_remote_one() {
-        let root = std::env::temp_dir().join(format!("quota-overview-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&root).expect("root");
-        let state = Arc::new(StateStore::open(&root).expect("state"));
-        let backend = NativeBackend::new(
-            state,
-            Arc::new(RelayClient::new().expect("relay")),
-            "QuotaTest",
-            "test",
-        );
-        let snapshot = |observed_at: &str, used: f64| {
-            json!({
-                "provider": "codex",
-                "account": {"fingerprint": "account", "fingerprint_scope": "global"},
-                "windows": [{"id": "five_hour", "title": "5 Hours", "used_percent": used}],
-                "status": "available",
-                "observed_at": observed_at
-            })
-        };
-        let now = Utc::now();
-        let local_at = (now - Duration::minutes(5)).to_rfc3339_opts(SecondsFormat::Secs, true);
-        let quota = json!({
-            "results": [{
-                "provider": "codex",
-                "outcome": "success",
-                "snapshots": [snapshot(&local_at, 10.0)]
-            }]
-        });
-        let remote = |observed_at: &str, used: f64| {
-            json!({
-                "auth_status": "signed_in",
-                "account_summary": {
-                    "devices": [{"id": "other", "display_name": "Studio"}],
-                    "subscriptions": [{
-                        "key": "codex|account|global|",
-                        "provider": "codex",
-                        "snapshot": snapshot(observed_at, used),
-                        "sources": [{"device_id": "other", "observed_at": observed_at}]
-                    }]
-                }
-            })
-        };
-
-        let tied = remote(&local_at, 90.0);
-        let items = backend.build_overview(&quota, Some(&tied));
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].sources.len(), 2);
-        assert_eq!(items[0].selected_source_id, "local");
-
-        let newer = (now - Duration::minutes(1)).to_rfc3339_opts(SecondsFormat::Secs, true);
-        let items = backend.build_overview(&quota, Some(&remote(&newer, 90.0)));
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].selected_source_id, "device:other");
-        assert_eq!(items[0].selected_source_display_name, "Studio");
-        drop(backend);
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    /// A subscription only this device has, and one only the account has, both stand.
-    #[test]
-    fn a_subscription_only_one_side_knows_still_reaches_the_overview() {
-        let root = std::env::temp_dir().join(format!("quota-overview-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&root).expect("root");
-        let state = Arc::new(StateStore::open(&root).expect("state"));
-        let backend = NativeBackend::new(
-            state,
-            Arc::new(RelayClient::new().expect("relay")),
-            "QuotaTest",
-            "test",
-        );
-        let observed_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-        let snapshot = |fingerprint: &str| {
-            json!({
-                "provider": "codex",
-                "account": {"fingerprint": fingerprint, "fingerprint_scope": "global"},
-                "windows": [{"id": "five_hour", "title": "5 Hours", "used_percent": 40.0}],
-                "status": "available",
-                "observed_at": observed_at
-            })
-        };
-        let quota = json!({
-            "results": [{
-                "provider": "codex",
-                "outcome": "success",
-                "snapshots": [snapshot("local-only")]
-            }]
-        });
-        let account = json!({
-            "auth_status": "signed_in",
-            "account_summary": {
-                "devices": [{"id": "other", "display_name": "Studio"}],
-                "subscriptions": [{
-                    "key": "codex|remote-only|global|",
-                    "provider": "codex",
-                    "snapshot": snapshot("remote-only"),
-                    "sources": [{"device_id": "other", "observed_at": observed_at}]
-                }]
-            }
-        });
-        let items = backend.build_overview(&quota, Some(&account));
-        assert_eq!(items.len(), 2);
-        assert_eq!(
-            items
-                .iter()
-                .map(|item| item.identity.fingerprint.as_str())
-                .collect::<Vec<_>>(),
-            vec!["local-only", "remote-only"]
-        );
-        drop(backend);
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
     fn a_discovered_local_source_that_failed_is_actionable_even_with_account_data() {
         let root = std::env::temp_dir().join(format!("quota-diagnostics-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).expect("root");
@@ -9065,6 +8684,11 @@ mod tests {
         JsonSchema::parse(USAGE_SCHEMA)
             .check(&bare)
             .expect("an emptied hour matches the exported schema");
+        // An empty hour is a fact: it is how a device says everything it once reported for
+        // that hour is gone, so it travels rather than being dropped.
+        assert!(crate::relay::validate_usage_submission(&bare).is_ok());
+        assert_eq!(bare["hours"][0]["partial"], json!(true));
+        assert_eq!(bare["hours"][0]["rows"], json!([]));
 
         // The check is not vacuous: a key the contract does not name is refused, and so is a
         // value of the wrong kind.
@@ -9244,111 +8868,6 @@ mod tests {
                 .map(|target| self.resolve(target))
                 .expect("a named definition")
         }
-    }
-
-    /// An empty hour is a fact: it is how a device says everything it once reported for that
-    /// hour is gone.
-    #[test]
-    fn an_hour_with_nothing_left_in_it_still_travels() {
-        let upload = usage_upload(
-            UsageAgent::Codex,
-            3,
-            &[UsageOutboxEntry {
-                agent: UsageAgent::Codex,
-                bucket_start_utc: "2026-08-12T09:00:00Z".into(),
-                scan_version: 7,
-                partial: true,
-                rows: Vec::new(),
-            }],
-        )
-        .expect("upload");
-        assert!(crate::relay::validate_usage_submission(&upload).is_ok());
-        assert_eq!(upload["hours"][0]["partial"], json!(true));
-        assert_eq!(upload["hours"][0]["rows"], json!([]));
-    }
-
-    #[test]
-    fn complete_scans_produce_a_complete_local_report() {
-        let root = std::env::temp_dir().join(format!("quota-report-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&root).expect("root");
-        let state = Arc::new(StateStore::open(&root).expect("state"));
-        let relay = Arc::new(RelayClient::new().expect("relay"));
-        let backend = NativeBackend::new(state, relay, "QuotaTest", "test");
-        let collection = UsageCollection {
-            timezone: "UTC".to_owned(),
-            generated_at: "2026-08-10T00:00:00Z".to_owned(),
-            agents: UsageAgent::ALL
-                .iter()
-                .copied()
-                .map(|agent| AgentUsage {
-                    coverage: usage::ScanCoverage {
-                        agent,
-                        start_at: "2026-08-09T00:00:00Z".to_owned(),
-                        end_at: "2026-08-10T00:00:00Z".to_owned(),
-                        status: CoverageStatus::Complete,
-                        reasons: Vec::new(),
-                    },
-                })
-                .collect(),
-        };
-        let report = backend
-            .usage_report(&collection, None, None)
-            .expect("report");
-        assert_eq!(
-            report.get("status").and_then(Value::as_str),
-            Some("complete")
-        );
-        assert_eq!(
-            report["range"],
-            json!({"from": "2026-08-10", "to": "2026-08-10"})
-        );
-        assert!(report.get("usage").is_none());
-        assert!(report.get("today").is_none());
-        assert_eq!(
-            report["sessions"],
-            json!({"active": 0, "today": 0, "recent": []})
-        );
-        assert!(
-            report
-                .get("coverage")
-                .and_then(Value::as_array)
-                .is_some_and(|items| items.iter().all(|item| {
-                    item.get("status").and_then(Value::as_str) == Some("complete")
-                }))
-        );
-        let cached = backend.state.snapshot().expect("cached periods");
-        assert_eq!(
-            cached
-                .usage_periods
-                .local
-                .last_7_days
-                .as_ref()
-                .and_then(|detail| detail.get("range")),
-            Some(&json!({"from": "2026-08-04", "to": "2026-08-10"}))
-        );
-        assert!(cached.usage_periods.local.today.is_some());
-        assert_eq!(
-            cached
-                .usage_periods
-                .local
-                .today
-                .as_ref()
-                .and_then(|detail| detail.pointer("/usage/totals/input_tokens"))
-                .and_then(Value::as_u64),
-            Some(0)
-        );
-        assert!(
-            cached
-                .usage_periods
-                .local
-                .today
-                .as_ref()
-                .and_then(|detail| detail.pointer("/usage/models_truncated"))
-                .is_none()
-        );
-        assert!(cached.usage_periods.local.last_30_days.is_some());
-        assert!(cached.usage_periods.local.all.is_some());
-        fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]

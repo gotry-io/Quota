@@ -167,6 +167,52 @@ mod tests {
         );
     }
 
+    /// The ladder in docs/provider-collection.md › Browser session, walked through each
+    /// provider's own `discover`: a Mac with no credential of that provider's and nothing stored
+    /// has nothing to try, and a stored session alone is discovered as the browser rung.
+    #[test]
+    fn every_browser_provider_discovers_a_stored_session_only_as_the_last_rung() {
+        let browser_providers: Vec<_> = crate::catalog::PROVIDER_CATALOG
+            .iter()
+            .filter_map(|entry| entry.browser_session.map(|config| (entry.id, config)))
+            .collect();
+        assert_eq!(
+            browser_providers.len(),
+            5,
+            "the five providers the ladder names"
+        );
+        for (provider, config) in browser_providers {
+            let mut context = CollectionContext {
+                home_directory: std::path::PathBuf::from("/tmp/quota-browser-ladder-missing-home"),
+                environment: std::collections::HashMap::new(),
+                config_path: None,
+                browser_sessions: std::collections::HashMap::new(),
+                client_name: "QuotaTest".to_owned(),
+                client_version: "test".to_owned(),
+                now: Some("2026-08-10T00:00:00Z".to_owned()),
+                cancel: None,
+                keychain: Default::default(),
+                cli_versions: Default::default(),
+                proven_credentials: Default::default(),
+            };
+            assert!(!context.allows_host_keychain(), "{provider:?}");
+            assert!(discover(provider, &context).is_empty(), "{provider:?}");
+            context.browser_sessions.insert(
+                provider,
+                vec![format!(
+                    "{}=eyJhbGciOiJIUzI1NiJ9.e30.ok",
+                    config.cookie_names[0]
+                )],
+            );
+            let sessions = discover(provider, &context);
+            assert_eq!(sessions.len(), 1, "{provider:?}");
+            assert_eq!(
+                sessions[0].credential_source, BROWSER_SESSION_SOURCE,
+                "{provider:?}"
+            );
+        }
+    }
+
     use std::collections::BTreeMap;
     use std::path::Path;
 

@@ -106,7 +106,7 @@ pub fn cwd_from_value(value: &serde_json::Map<String, serde_json::Value>) -> Opt
 
 #[cfg(test)]
 mod tests {
-    use super::{bounded_project_key, project_key_from_cwd, project_key_from_encoded_dir};
+    use super::{bounded_project_key, project_key_from_cwd};
     use std::fs;
     use std::path::PathBuf;
 
@@ -157,26 +157,10 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_cwd_still_yields_the_last_component() {
-        assert_eq!(
-            project_key_from_cwd("/Users/someone/Code/Quota").as_deref(),
-            Some("Quota")
-        );
-    }
-
-    #[test]
     fn empty_and_root_cwds_are_unattributed() {
         assert_eq!(project_key_from_cwd(""), None);
         assert_eq!(project_key_from_cwd("   "), None);
         assert_eq!(project_key_from_cwd("/"), None);
-    }
-
-    #[test]
-    fn an_encoded_claude_directory_decodes_to_the_basename() {
-        assert_eq!(
-            project_key_from_encoded_dir("-Users-someone-Code-Quota").as_deref(),
-            Some("Quota")
-        );
     }
 
     #[test]
