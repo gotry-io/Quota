@@ -10,7 +10,6 @@ import Testing
   @MainActor
   struct UsagePeriodBudgetTests {
     @Test
-    @Test
     func aCustomRangeInUTCPlus8CanEndOnTheLocalTodayBeforeTheUTCDayTurns() throws {
       var calendar = Calendar(identifier: .gregorian)
       calendar.timeZone = try #require(TimeZone(identifier: "Asia/Shanghai"))
