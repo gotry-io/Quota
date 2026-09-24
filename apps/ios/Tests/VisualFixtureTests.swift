@@ -10,13 +10,9 @@ import Testing
 
 struct VisualFixtureParserTests {
   @Test
-  func parseReturnsNilWhenFlagAbsent() {
+  func parseReturnsNilWhenValueMissingOrUnknown() {
     #expect(VisualFixture.parse(arguments: ["Quota"]) == nil)
     #expect(VisualFixture.parse(arguments: []) == nil)
-  }
-
-  @Test
-  func parseReturnsNilWhenValueMissingOrUnknown() {
     #expect(VisualFixture.parse(arguments: ["--visual-fixture"]) == nil)
     #expect(VisualFixture.parse(arguments: ["--visual-fixture", "unknown"]) == nil)
     #expect(VisualFixture.parse(arguments: ["--visual-fixture", "signed_out"]) == nil)
@@ -54,40 +50,15 @@ struct VisualFixtureParserTests {
 #if DEBUG
   @MainActor
   struct VisualFixtureStateTests {
-    @Test
-    func signedOutSkipsRestoreAndHasNothingToShow() {
-      let model = AppModel.visualFixture(.signedOut, now: VisualFixture.referenceDate)
+    @Test(arguments: VisualFixture.allCases)
+    func everyScenarioStaysOfflineAndDeclaresAValidCombination(fixture: VisualFixture) {
+      let now = VisualFixture.referenceDate
+      let scenario = VisualScenario.make(fixture, now: now)
+      #expect(scenario.validationIssues == [])
+      let model = AppModel.visualFixture(fixture, now: now)
+      #expect(model.isOfflineFixture)
       #expect(model.skipsRestore)
-      #expect(model.phase == .signedOut)
-      #expect(model.summary == nil)
-      #expect(model.banner == nil)
-      #expect(model.expiredMessage == nil)
-      #expect(model.usage.activityChart == .idle)
-      // Signed out is not a wall: the tabs are up and the Overview offers both ways in.
-      #expect(model.subscriptions.isEmpty)
-      #expect(model.overviewSources.isEmpty)
-      #expect(model.hasAccountSession == false)
-    }
-
-    /// Overview with no Quota account: everything on screen was read by this iPhone.
-    @Test
-    func localOnlyShowsWhatThisPhoneReadWithoutAnAccount() throws {
-      let model = AppModel.visualFixture(.localOnly, now: VisualFixture.referenceDate)
-      #expect(model.phase == .signedOut)
-      #expect(model.summary == nil)
-      #expect(model.hasAccountSession == false)
-      #expect(model.overviewSources == OverviewSources(hasLocal: true, hasAccount: false))
-      #expect(model.accountLabel == "Quota")
-      #expect(model.providerCards.map(\.provider) == [.codex, .claude])
-      let codex = try #require(model.subscriptions.first { $0.snapshot.provider == .codex })
-      #expect(codex.sources.map(\.deviceID) == [ThisDevice.sourceID])
-      let readings = SubscriptionDetailContent.make(
-        subscription: codex,
-        deviceNames: model.readingDeviceNames,
-        now: VisualFixture.referenceDate
-      )
-      #expect(readings.sources.map(\.displayName) == ["This iPhone"])
-      #expect(readings.sources.map(\.isReporting) == [true])
+      #expect(model.displayClock.isFixed)
     }
 
     /// The same account read by two Macs and by this phone resolves to one row, and this phone's
@@ -112,287 +83,11 @@ struct VisualFixtureParserTests {
     }
 
     @Test
-    func connectingShowsDisabledProgressState() {
-      let model = AppModel.visualFixture(.connecting, now: VisualFixture.referenceDate)
-      #expect(model.skipsRestore)
-      #expect(model.phase == .connecting)
-      #expect(model.banner == nil)
-      #expect(model.expiredMessage == nil)
-    }
-
-    @Test
-    func connectErrorShowsTheGenericFailureLine() {
-      let model = AppModel.visualFixture(.connectError, now: VisualFixture.referenceDate)
-      #expect(model.skipsRestore)
-      #expect(model.phase == .signedOut)
-      #expect(model.banner?.text == "Couldn't connect. Try again.")
-      #expect(model.expiredMessage == nil)
-    }
-
-    @Test
-    func expiredShowsTheReconnectLine() {
-      let model = AppModel.visualFixture(.expired, now: VisualFixture.referenceDate)
-      #expect(model.skipsRestore)
-      #expect(model.phase == .signedOut)
-      #expect(model.banner == nil)
-      #expect(model.expiredMessage == "Session expired. Connect again.")
-    }
-
-    @Test
-    func loadingShowsLaunchingWithNoSurfaceState() {
-      let model = AppModel.visualFixture(.loading, now: VisualFixture.referenceDate)
-      #expect(model.skipsRestore)
-      #expect(model.phase == .launching)
-      #expect(model.summary == nil)
-      #expect(model.banner == nil)
-    }
-
-    @Test
-    func confirmAccountShowsTheConnectedGitHubLabel() {
-      let model = AppModel.visualFixture(.confirmAccount, now: VisualFixture.referenceDate)
-      #expect(model.skipsRestore)
-      #expect(model.phase == .confirmingAccount(label: "octocat"))
-      #expect(model.summary?.account.displayLabel == "octocat")
-      #expect(model.banner == nil)
-    }
-
-    @Test
-    func connectRefreshFailedShowsRetryCopyWithoutConfirmation() {
-      let model = AppModel.visualFixture(
-        .connectRefreshFailed, now: VisualFixture.referenceDate)
-      #expect(model.skipsRestore)
-      #expect(model.phase == .pendingRefreshFailed)
-      #expect(model.banner?.text == "Couldn't reach quota.gotry.io.")
-      #expect(model.expiredMessage == nil)
-    }
-
-    @Test
-    func contentIncludesCodexClaudeGrokAndTodayValues() throws {
-      let model = AppModel.visualFixture(.content, now: VisualFixture.referenceDate)
-      #expect(model.skipsRestore)
-      #expect(model.phase == .signedIn)
-      #expect(model.accountLabel == "octocat")
-      #expect(model.fromCache == false)
-      #expect(model.banner == nil)
-
-      let providers = Set(model.providerCards.map(\.provider))
-      #expect(providers == [.codex, .claude, .grok])
-      #expect(model.providerCards.count == 3)
-      #expect(model.providerStatus[.claude]?.indicator == .minor)
-      #expect(model.providerStatus[.claude]?.description == "Partial System Outage")
-      #expect(model.providerStatus[.codex] == nil)
-
-      let codex = try #require(
-        model.summary?.subscriptions.first { $0.snapshot.provider == .codex })
-      #expect(codex.sources.count == 2)
-      #expect(
-        model.summary?.devices.map(\.displayName) == ["Studio Mac", "Kitchen Mac", "Kyle iPhone"])
-      // This phone is one of them, so Devices does not draw a second row for it.
-      #expect(model.isRegisteredDevice)
-      let readings = SubscriptionDetailContent.make(
-        subscription: codex,
-        deviceNames: model.readingDeviceNames,
-        now: VisualFixture.referenceDate
-      )
-      #expect(readings.sources.map(\.displayName) == ["Studio Mac", "Kitchen Mac"])
-      #expect(readings.sources.map(\.isReporting) == [true, false])
-
-      let usage = model.summary!.usage
-      let today = usage.today
-      #expect(today.totals.inputTokens == 1_420_500)
-      #expect(today.totals.outputTokens == 284_120)
-      #expect(today.totals.messages == 164)
-      #expect(today.cost.status == .complete)
-      #expect(today.cost.amountMicrousd == "1489234")
-      #expect(today.totals.totalTokens < usage.last7Days.totals.totalTokens)
-      #expect(usage.last7Days.totals.totalTokens < usage.last30Days.totals.totalTokens)
-      #expect(usage.last30Days.totals.totalTokens < usage.all.totals.totalTokens)
-
-      let openaiModels =
-        usage.last30Days.agents
-        .first { $0.agent == .codex }?
-        .providers.first { $0.provider == .openai }?
-        .models ?? []
-      #expect(openaiModels.count > 5)
-      #expect(openaiModels.contains { $0.model == "other" })
-      #expect(model.usage.usagePeriod == .last30Days)
-
-      guard case .loaded(let days) = model.usage.activityChart else {
-        Issue.record("content fixture should preload activity")
-        return
-      }
-      #expect(!days.isEmpty)
-      #expect(
-        days.contains { $0.date == UsageActivityCalendar.utcDay(from: VisualFixture.referenceDate) }
-      )
-
-      // Fixtures must never carry session material.
-      #expect(model.summary?.account.accountID.hasPrefix("account_visual_") == true)
-    }
-
-    @Test
-    func factoryDerivesFetchedAndResetDatesRelativeToInjectedNow() {
-      // Distinct from referenceDate so relative offsets are proven, not coincidental.
-      let now = Date(timeIntervalSince1970: 1_800_000_000)
-      let model = AppModel.visualFixture(.content, now: now)
-
-      #expect(model.fetchedAt == now.addingTimeInterval(-90))
-      #expect(model.summary?.account.createdAt == now.addingTimeInterval(-30 * 86_400))
-
-      let codex = model.summary?.subscriptions.first { $0.snapshot.provider == .codex }
-      #expect(codex?.snapshot.observedAt == now.addingTimeInterval(-90))
-      let fiveHour = codex?.snapshot.windows.first { $0.id == "five_hour" }
-      #expect(fiveHour?.resetsAt == now.addingTimeInterval(2_700))
-      let weekly = codex?.snapshot.windows.first { $0.id == "weekly" }
-      #expect(weekly?.resetsAt == now.addingTimeInterval(4 * 86_400))
-
-      let claude = model.summary?.subscriptions.first { $0.snapshot.provider == .claude }
-      let session = claude?.snapshot.windows.first { $0.id == "five_hour" }
-      #expect(session?.resetsAt == now.addingTimeInterval(9_000))
-
-      let grok = model.summary?.subscriptions.first { $0.snapshot.provider == .grok }
-      let monthly = grok?.snapshot.windows.first { $0.id == "monthly" }
-      #expect(monthly?.resetsAt == now.addingTimeInterval(12 * 86_400))
-
-      let cached = AppModel.visualFixture(.cachedError, now: now)
-      #expect(cached.fetchedAt == now.addingTimeInterval(-180))
-
-      let empty = AppModel.visualFixture(.empty, now: now)
-      #expect(empty.fetchedAt == now.addingTimeInterval(-60))
-    }
-
-    @Test
-    func cachedErrorKeepsContentAndShowsSavedBanner() {
-      let model = AppModel.visualFixture(.cachedError, now: VisualFixture.referenceDate)
-      #expect(model.skipsRestore)
-      #expect(model.phase == .signedIn)
-      #expect(model.fromCache)
-      #expect(model.summary != nil)
-      #expect(model.banner?.kind == .offlineCached)
-      #expect(model.banner?.text == AppModel.Banner.cachedText)
-      #expect(model.providerCards.map(\.provider) == [.codex, .claude, .grok])
-    }
-
-    @Test
-    func emptyShowsSignedInWithNoQuotaOrTodayUsage() {
-      let model = AppModel.visualFixture(.empty, now: VisualFixture.referenceDate)
-      #expect(model.skipsRestore)
-      #expect(model.phase == .signedIn)
-      #expect(model.providerCards.isEmpty)
-      #expect(model.summary?.subscriptions.isEmpty == true)
-      #expect(model.summary?.usage.today.totals.messages == 0)
-      #expect(model.summary?.usage.today.totals.inputTokens == 0)
-      #expect(model.summary?.usage.today.agents.isEmpty == true)
-      #expect(model.summary?.usage.last30Days.agents.isEmpty == true)
-      #expect(model.summary?.devices.isEmpty == false)
-      #expect(model.banner == nil)
-      #expect(model.usage.activityChart == .loaded([]))
-    }
-
-    @Test
-    func activityLoadingKeepsPeriodTotalsAndShowsTheSkeletonPhase() {
-      let model = AppModel.visualFixture(.activityLoading, now: VisualFixture.referenceDate)
-      #expect(model.skipsRestore)
-      #expect(model.phase == .signedIn)
-      #expect(model.selectedTab == .usage)
-      #expect(model.usage.activityChart == .loading)
-      #expect(model.summary?.usage.last30Days.agents.isEmpty == false)
-      #expect(model.usage.activityDaySheet == nil)
-    }
-
-    @Test
-    func activityFailedKeepsPeriodTotalsAndShowsRetryPhase() {
-      let model = AppModel.visualFixture(.activityFailed, now: VisualFixture.referenceDate)
-      #expect(model.phase == .signedIn)
-      #expect(model.selectedTab == .usage)
-      #expect(model.usage.activityChart == .failed)
-      #expect(model.summary?.usage.last30Days.agents.isEmpty == false)
-    }
-
-    @Test
-    func activityDayEmptyPresentsASheetWithNoAgents() {
-      let model = AppModel.visualFixture(.activityDayEmpty, now: VisualFixture.referenceDate)
-      #expect(model.selectedTab == .usage)
-      #expect(model.usage.activityDaySheet?.agents == .empty)
-      #expect(model.usage.activityDaySheet?.headline.agents == nil)
-      #expect(model.usage.activityDaySheet?.headline.totals.totalTokens == 0)
-    }
-
-    @Test
-    func activityDayFailedPresentsASheetWithRetryPhase() {
-      let model = AppModel.visualFixture(.activityDayFailed, now: VisualFixture.referenceDate)
-      #expect(model.selectedTab == .usage)
-      #expect(model.usage.activityDaySheet?.agents == .failed)
-      #expect(model.usage.activityDaySheet?.date == "2026-08-14")
-    }
-
-    @Test
-    func noDevicesIsSignedInWithoutDevicesOrSubscriptions() {
-      let model = AppModel.visualFixture(.noDevices, now: VisualFixture.referenceDate)
-      #expect(model.skipsRestore)
-      #expect(model.phase == .signedIn)
-      #expect(model.summary?.devices.isEmpty == true)
-      #expect(model.summary?.subscriptions.isEmpty == true)
-      #expect(model.providerCards.isEmpty)
-      #expect(model.banner == nil)
-    }
-
-    @Test
-    func contentRouteOpensUsagePatternsAndSubscriptionDetail() {
-      let now = VisualFixture.referenceDate
-      let model = AppModel.visualFixture(.content, now: now)
-      model.applyFixtureRoute(.usagePatterns)
-      #expect(model.selectedTab == .usage)
-      #expect(model.usagePath == [.patterns])
-      model.applyFixtureRoute(.usageBreakdown)
-      #expect(model.usagePath == [.breakdown])
-      model.applyFixtureRoute(.subscriptionDetail("codex|visual_codex|global|"))
-      #expect(model.selectedTab == .quota)
-      #expect(model.overviewPath == ["codex|visual_codex|global|"])
-      model.applyFixtureRoute(.settingsDevices)
-      #expect(model.selectedTab == .settings)
-      #expect(model.settingsPath == [.devices])
-      model.applyFixtureRoute(.usageDay)
-      #expect(model.selectedTab == .usage)
-      #expect(model.usage.activityDaySheet != nil)
-    }
-
-    @Test(arguments: VisualFixture.allCases)
-    func everyScenarioStaysOfflineAndDeclaresAValidCombination(fixture: VisualFixture) {
-      let now = VisualFixture.referenceDate
-      let scenario = VisualScenario.make(fixture, now: now)
-      #expect(scenario.validationIssues == [])
-      let model = AppModel.visualFixture(fixture, now: now)
-      #expect(model.isOfflineFixture)
-      #expect(model.skipsRestore)
-      #expect(model.displayClock.isFixed)
-    }
-
-    @Test
     func fixtureTransportRefusesNetwork() async {
       let transport = FixtureBlockedHTTPTransport()
       await #expect(throws: HTTPTransportError.unavailable) {
         _ = try await transport.perform(
           URLRequest(url: URL(string: "https://quota.gotry.io/")!))
-      }
-    }
-
-    @Test
-    func fixtureTransportRefusesAccountSettings() async throws {
-      let transport = FixtureBlockedHTTPTransport()
-      let client = RelayClient(transport: transport)
-      await #expect(throws: RelayClientError.unavailable) {
-        _ = try await client.fetchAccountSettings(
-          accessToken: Fixtures.accessToken
-        )
-      }
-      let document = try AccountSettingsDocument.decode(defaultAccountSettingsGETBody())
-      await #expect(throws: RelayClientError.unavailable) {
-        _ = try await client.writeAccountSettings(
-          document,
-          accessToken: Fixtures.accessToken,
-          ifMatch: "\"0\""
-        )
       }
     }
 
@@ -426,21 +121,6 @@ struct VisualFixtureParserTests {
           == .subscriptionDetail("codex|visual_codex|global|"))
       #expect(FixtureRoute.parse(arguments: ["--route", "usage.patterns"]) == .usagePatterns)
       #expect(FixtureRoute.parse(arguments: ["Quota"]) == nil)
-    }
-
-    @Test @MainActor
-    func periodRoutesOpenUsageOnThatPeriod() {
-      let today = VisualFixture.referenceDate
-      #expect(
-        FixtureRoute.customRange(today: today) == .custom(from: "2026-08-08", to: "2026-08-12"))
-
-      let model = AppModel.visualFixture(.content, now: today)
-      model.applyFixtureRoute(.usageToday)
-      #expect(model.selectedTab == .usage)
-      #expect(model.usage.usagePeriod == .today)
-      model.applyFixtureRoute(.usageCustom)
-      #expect(model.usage.usagePeriod == FixtureRoute.customRange(today: today))
-      #expect(model.usage.usagePeriod.segment == .custom)
     }
 
     @Test

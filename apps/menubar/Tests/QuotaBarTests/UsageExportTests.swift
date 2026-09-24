@@ -37,17 +37,6 @@ struct UsageExportTests {
     }
   }
 
-  @Test func namesTheFileFromTheAskedLocalDates() {
-    #expect(
-      UsageExport.filename(from: "2026-08-10", to: "2026-08-12", format: .csv)
-        == "quota-usage-2026-08-10-2026-08-12.csv"
-    )
-    #expect(
-      UsageExport.filename(from: "2026-08-10", to: "2026-08-12", format: .json)
-        == "quota-usage-2026-08-10-2026-08-12.json"
-    )
-  }
-
   @Test func mapsTheOnScreenDetailAndOmitsAPeriodWithoutDays() throws {
     let day = LocalUsageDay(
       date: "2026-08-26",

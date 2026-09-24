@@ -335,9 +335,22 @@ impl AccountManager {
                             lost = lost_series(&record, chunk, &answer, &answered_at);
                         }
                         remember_chunk(&mut record, chunk, &answered_at);
-                        apply_answer(&mut record, &answer);
+                        apply_answer(&mut record, chunk, &answer);
                         for key in &lost {
-                            record.series.remove(key);
+                            // The adopted duration is about the window, not the lost rows.
+                            let adopted = record
+                                .series
+                                .remove(key)
+                                .and_then(|slot| slot.adopted_duration_seconds);
+                            if adopted.is_some() {
+                                record.series.insert(
+                                    key.clone(),
+                                    QuotaHistorySeriesRecord {
+                                        adopted_duration_seconds: adopted,
+                                        ..QuotaHistorySeriesRecord::default()
+                                    },
+                                );
+                            }
                         }
                         record.last_upload_at = Some(answered_at);
                         record.last_error = None;
@@ -456,6 +469,11 @@ pub(super) fn series_inputs(
         };
         let key = quota_history_series_key(&provider, &fingerprint, &window_id);
         let progress = record.series.get(&key);
+        // A shorter duration another device declared, adopted so the two stop rewriting each
+        // other's expiry (ADR 0062, amendment 2026-09-24).
+        let duration_seconds = progress
+            .and_then(|progress| progress.adopted_duration_seconds)
+            .map_or(duration_seconds, |adopted| adopted.min(duration_seconds));
         series.push(QuotaHistorySeriesInput {
             provider,
             fingerprint,
@@ -679,9 +697,10 @@ fn lost_series(
                     && candidate.get("window_id").and_then(Value::as_str) == Some(window_id)
             })
             .map_or(QuotaHistoryUploadAnswer::Absent, |candidate| {
-                QuotaHistoryUploadAnswer::Oldest(
-                    candidate.get("oldest_bucket_start").and_then(Value::as_str),
-                )
+                QuotaHistoryUploadAnswer::Answered {
+                    oldest: candidate.get("oldest_bucket_start").and_then(Value::as_str),
+                    duration_seconds: candidate.get("duration_seconds").and_then(Value::as_i64),
+                }
             });
         let duration_seconds = series
             .get("duration_seconds")
@@ -701,9 +720,25 @@ fn lost_series(
     lost
 }
 
-fn apply_answer(record: &mut QuotaHistorySyncRecord, answer: &Value) {
+/// Moves each answered series' watermark forward, and its adopted duration: a duration the
+/// answer names shorter than the one this chunk declared is adopted; a longer one ends an
+/// adoption, so this device declares its collector's again.
+fn apply_answer(record: &mut QuotaHistorySyncRecord, chunk: &Value, answer: &Value) {
     let Some(series) = answer.get("series").and_then(Value::as_array) else {
         return;
+    };
+    let declared = |provider: &str, fingerprint: &str, window_id: &str| {
+        chunk
+            .get("series")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .find(|sent| {
+                sent.get("provider").and_then(Value::as_str) == Some(provider)
+                    && sent.get("fingerprint").and_then(Value::as_str) == Some(fingerprint)
+                    && sent.get("window_id").and_then(Value::as_str) == Some(window_id)
+            })
+            .and_then(|sent| sent.get("duration_seconds").and_then(Value::as_i64))
     };
     for series in series {
         let Some(provider) = series.get("provider").and_then(Value::as_str) else {
@@ -720,6 +755,16 @@ fn apply_answer(record: &mut QuotaHistorySyncRecord, answer: &Value) {
         };
         let key = quota_history_series_key(provider, fingerprint, window_id);
         let slot = record.series.entry(key).or_default();
+        if let (Some(held), Some(declared)) = (
+            series.get("duration_seconds").and_then(Value::as_i64),
+            declared(provider, fingerprint, window_id),
+        ) {
+            if held < declared {
+                slot.adopted_duration_seconds = Some(held);
+            } else if held > declared {
+                slot.adopted_duration_seconds = None;
+            }
+        }
         let replace = slot
             .watermark
             .as_deref()
@@ -774,11 +819,16 @@ pub(super) fn validate_quota_history_upload_response(value: &Value) -> Result<()
                 .as_str()
                 .is_some_and(|value| chrono::DateTime::parse_from_rfc3339(value).is_ok()),
         };
+        // Optional on read: a Relay before the 2026-09-24 amendment does not send it.
+        let duration_is_valid = series
+            .get("duration_seconds")
+            .is_none_or(|value| value.as_i64().is_some_and(|seconds| seconds >= 0));
         if ProviderId::parse(provider).is_none()
             || !is_opaque_id(fingerprint)
             || !is_window_id(window_id)
             || chrono::DateTime::parse_from_rfc3339(bucket_start).is_err()
             || !oldest_is_valid
+            || !duration_is_valid
         {
             return Err(RelayError::InvalidResponse);
         }

@@ -17,19 +17,13 @@ struct CompactCountFormatTests {
     #expect(!CompactCountFormat.accessible(1_234_567).contains("k"))
   }
 
+  /// A share rounds half up to a whole percent, the whole is exactly 100%, and a share of
+  /// nothing is no share at all rather than a division by zero.
   @Test
-  func shareOfNothingIsNil() {
-    #expect(CompactCountFormat.share(1, of: 0) == nil)
-  }
-
-  @Test
-  func shareRoundsHalfUpToWholePercent() {
+  func aShareRoundsHalfUpAndAShareOfNothingIsNone() {
     #expect(CompactCountFormat.share(1, of: 200) == "1%")
     #expect(CompactCountFormat.share(1, of: 201) == "0%")
-  }
-
-  @Test
-  func shareOfTheWholeIsOneHundredPercent() {
     #expect(CompactCountFormat.share(7, of: 7) == "100%")
+    #expect(CompactCountFormat.share(1, of: 0) == nil)
   }
 }

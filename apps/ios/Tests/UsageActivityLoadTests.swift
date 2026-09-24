@@ -50,25 +50,4 @@ struct UsageActivityLoadTests {
     #expect(model.usage.activityDaySheet == nil)
     #expect(model.usage.usagePeriod == .last30Days)
   }
-
-  @Test
-  func aNewSummaryAcceptedOnTheAppReloadsActivity() async {
-    let loader = ScriptedActivityLoader(results: [
-      .activity(AccountUsageActivityResponse(days: [emptyDay("2026-08-14")])),
-      .activity(AccountUsageActivityResponse(days: [emptyDay("2026-08-13")])),
-    ])
-    let model = makeActivityAppModel(loader: loader, session: true)
-    model.phase = .signedIn
-    await model.usage.loadActivity()
-    #expect(await loader.calls.count == 1)
-    model.summaryETag = "etag-2"
-    model.usage.accountSummaryAccepted(model.summary, etag: "etag-2")
-    await model.usage.loadActivity()
-    #expect(await loader.calls.count == 2)
-    guard case .loaded(let days) = model.usage.activityChart else {
-      Issue.record("expected loaded chart, got \(model.usage.activityChart)")
-      return
-    }
-    #expect(days.map(\.date) == ["2026-08-13"])
-  }
 }

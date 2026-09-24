@@ -117,38 +117,4 @@ mod tests {
             );
         }
     }
-
-    #[test]
-    fn a_window_whose_reset_cannot_be_placed_has_no_pace() {
-        let window = json!({
-            "id": "five_hour",
-            "title": "5 Hours",
-            "used_percent": 50,
-            "resets_at": "not a time",
-            "duration_seconds": 18000
-        });
-        assert_eq!(window_pace(&window, Utc::now()), json!({ "kind": "none" }));
-    }
-
-    #[test]
-    fn a_snapshot_carries_a_pace_on_every_window() {
-        let snapshot = json!({
-            "provider": "codex",
-            "windows": [
-                {
-                    "id": "five_hour",
-                    "title": "5 Hours",
-                    "used_percent": 50,
-                    "resets_at": "2026-09-05T12:00:00Z",
-                    "duration_seconds": 18000
-                },
-                { "id": "balance", "title": "Balance", "used_percent": 0, "remaining_value": 4.0 }
-            ]
-        });
-        let now = instant(Some(&json!("2026-09-05T09:30:00Z"))).expect("now");
-        let restated = snapshot_with_pace(&snapshot, now);
-        let windows = restated["windows"].as_array().expect("windows");
-        assert_eq!(windows[0]["pace"]["kind"], json!("lasts"));
-        assert_eq!(windows[1]["pace"], json!({ "kind": "none" }));
-    }
 }

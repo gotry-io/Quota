@@ -140,6 +140,18 @@ FROM quota_history
 WHERE device_id = ?1 AND account_id = ?2
 GROUP BY provider, fingerprint, window_id`;
 
+/**
+ * The duration a window's rows carry before an upload's declaration rewrites them: the one they
+ * expired by since the uploading device's last upload, which another device may have shortened.
+ * A search of `quota_history_read_idx` on `(account_id, provider, fingerprint)`, stopped at the
+ * first row of the window. The answer names it so the device judges liveness by it (ADR 0062,
+ * amendment 2026-09-24).
+ */
+export const quotaHistoryHeldDurationSql = `SELECT duration_seconds
+FROM quota_history
+WHERE account_id = ?1 AND provider = ?2 AND fingerprint = ?3 AND window_id = ?4
+LIMIT 1`;
+
 function quotaHistoryInSpanSql(column: string, nowPlaceholder: string): string {
   return `${sqliteEpochSql(column)} >= ${sqliteEpochSql(nowPlaceholder)} - ${quotaHistorySpanSql}`;
 }
@@ -1332,7 +1344,16 @@ export class D1AccountState implements AccountState {
          AND window_id = ?4
          AND duration_seconds != ?5`,
     );
+    const heldDuration = this.database.prepare(quotaHistoryHeldDurationSql);
     const statements = [
+      ...upload.series.map((series) =>
+        heldDuration.bind(
+          principal.account_id,
+          series.provider,
+          series.fingerprint,
+          series.window_id,
+        ),
+      ),
       this.database.prepare(
         `CREATE TEMP TABLE IF NOT EXISTS quota_history_ceiling (
            n INTEGER NOT NULL,
@@ -1378,8 +1399,14 @@ export class D1AccountState implements AccountState {
         }),
       ),
     ];
+    const held = new Map<string, number>();
     try {
-      await this.database.batch(statements);
+      const results = await this.database.batch<{ duration_seconds: number }>(statements);
+      for (const [index, series] of upload.series.entries()) {
+        const key = `${series.provider}\0${series.fingerprint}\0${series.window_id}`;
+        if (held.has(key)) continue;
+        held.set(key, results[index]?.results[0]?.duration_seconds ?? series.duration_seconds);
+      }
     } catch (error) {
       if (isQuotaHistoryFull(error)) return { outcome: "quota_history_full" };
       throw error;
@@ -1387,11 +1414,6 @@ export class D1AccountState implements AccountState {
     if (!(await this.isQuotaHistorySyncOn(principal.account_id))) {
       return { outcome: "history_sync_off" };
     }
-    const wanted = new Set(
-      upload.series.map(
-        (series) => `${series.provider}\0${series.fingerprint}\0${series.window_id}`,
-      ),
-    );
     const watermarks = await this.database
       .prepare(quotaHistoryUploadAnswerSql)
       .bind(principal.device_id, principal.account_id)
@@ -1404,9 +1426,10 @@ export class D1AccountState implements AccountState {
       }>();
     return {
       outcome: "written",
-      series: watermarks.results.filter((row) =>
-        wanted.has(`${row.provider}\0${row.fingerprint}\0${row.window_id}`),
-      ),
+      series: watermarks.results.flatMap((row) => {
+        const duration = held.get(`${row.provider}\0${row.fingerprint}\0${row.window_id}`);
+        return duration === undefined ? [] : [{ ...row, duration_seconds: duration }];
+      }),
     };
   }
 

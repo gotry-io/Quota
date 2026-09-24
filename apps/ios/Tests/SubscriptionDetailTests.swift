@@ -16,22 +16,22 @@ struct QuotaResetCountdownTests {
     #expect(QuotaFormat.countdown(resetsAt: now.addingTimeInterval(-1), now: now) == nil)
   }
 
+  /// The row ticks while the reset is under a day away; at exactly a day it becomes the shared
+  /// reset copy, whose words `reset-copy-conformance.json` owns.
   @Test
-  func underADayIsALiveTimer() {
+  func aResetUnderADayIsALiveTimerAndADayAwayIsCopy() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = utc
     let end = now.addingTimeInterval(2_700)
     #expect(QuotaFormat.countdown(resetsAt: end, now: now) == .live(end: end))
     let justUnderADay = now.addingTimeInterval(86_400 - 1)
     #expect(QuotaFormat.countdown(resetsAt: justUnderADay, now: now) == .live(end: justUnderADay))
-  }
-
-  @Test
-  func aDayOrMoreUsesSharedResetCopy() {
-    var calendar = Calendar(identifier: .gregorian)
-    calendar.timeZone = utc
-    let end = now.addingTimeInterval(86_400)
-    let copy = QuotaFormat.countdown(
-      resetsAt: end, now: now, timeZone: utc, calendar: calendar)
-    #expect(copy == .copy("Resets Sat 16:00"))
+    let aDay = QuotaFormat.countdown(
+      resetsAt: now.addingTimeInterval(86_400), now: now, timeZone: utc, calendar: calendar)
+    guard case .copy = aDay else {
+      Issue.record("a reset a day away is copy, got \(String(describing: aDay))")
+      return
+    }
   }
 }
 
@@ -56,16 +56,6 @@ struct SubscriptionDetailContentTests {
   }
 
   @Test
-  func missingDeviceNameIsDevice() {
-    let content = SubscriptionDetailContent.make(
-      subscription: subscription(sources: kitchenThenStudio()),
-      deviceNames: [studioID: "Studio Mac"],
-      now: now
-    )
-    #expect(content.sources.map(\.displayName) == ["Studio Mac", "Device"])
-  }
-
-  @Test
   func displayedStringsOmitDeviceIdFingerprintAndKey() {
     let content = SubscriptionDetailContent.make(
       subscription: subscription(sources: kitchenThenStudio()),
@@ -83,48 +73,15 @@ struct SubscriptionDetailContentTests {
     #expect(content.displayedStrings.contains("Studio Mac"))
     #expect(content.displayedStrings.contains("Kitchen Mac"))
     #expect(content.providerName == "Codex")
-  }
 
-  @Test
-  func emptySourcesPrintNoDeviceReadingsYet() {
-    let content = SubscriptionDetailContent.make(
-      subscription: QuotaSubscription(
-        key: key,
-        provider: .codex,
-        snapshot: snapshot(usedPercent: 32, observedAt: now),
-        sources: []
-      ),
-      deviceNames: deviceNames(),
+    // A device the summary does not name is "Device", never its id.
+    let unnamed = SubscriptionDetailContent.make(
+      subscription: subscription(sources: kitchenThenStudio()),
+      deviceNames: [studioID: "Studio Mac"],
       now: now
     )
-    #expect(content.sources.isEmpty)
-    #expect(content.displayedStrings.contains("No device readings yet."))
-    #expect(!content.displayedStrings.contains("Reporting"))
-  }
-
-  @Test
-  func emptyWindowsPrintNoQuotaWindowsYet() {
-    let empty = QuotaSnapshot(
-      provider: .codex,
-      account: QuotaAccount(
-        fingerprint: fingerprint,
-        label: "pe***@example.com",
-        plan: "Plus",
-        fingerprintScope: .global
-      ),
-      windows: [],
-      status: .available,
-      observedAt: now
-    )
-    let content = SubscriptionDetailContent.make(
-      subscription: QuotaSubscription(
-        key: key, provider: .codex, snapshot: empty, sources: []),
-      deviceNames: deviceNames(),
-      now: now
-    )
-    #expect(content.windows.isEmpty)
-    #expect(content.displayedStrings.contains("No quota windows yet."))
-    #expect(content.displayedStrings.contains("No device readings yet."))
+    #expect(unnamed.sources.map(\.displayName) == ["Studio Mac", "Device"])
+    #expect(!unnamed.displayedStrings.joined(separator: "\n").contains(kitchenID))
   }
 
   @Test

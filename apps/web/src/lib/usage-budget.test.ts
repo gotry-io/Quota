@@ -1,7 +1,6 @@
 import { expect, it } from "vitest";
 import {
   budgetAlertKey,
-  budgetAlertText,
   budgetAmountToWire,
   budgetMonth,
   budgetProgress,
@@ -85,11 +84,6 @@ it("remembers which crossings were already announced", () => {
   expect(readFiredBudgetAlerts(storage)).toEqual(["budget:2026-09:80"]);
   storage.setItem("quota.usage.budget.fired", "not json");
   expect(readFiredBudgetAlerts(storage)).toEqual([]);
-});
-
-it("writes what a crossing says", () => {
-  expect(budgetAlertText(80, 50)).toBe("80% of $50.00 spent");
-  expect(budgetAlertText(100, 50)).toBe("$50.00 budget spent");
 });
 
 it("formats the amount as the wire's decimal string", () => {

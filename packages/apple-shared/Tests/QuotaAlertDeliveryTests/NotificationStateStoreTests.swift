@@ -5,7 +5,7 @@ import Testing
 @testable import QuotaAlertDelivery
 
 struct NotificationStateStoreTests {
-  @Test func writtenFileIsOwnerReadWriteOnlyAndClearRemovesIt() throws {
+  @Test func theStateFileIsOwnerOnlyReadsBackEveryKeyAndClearRemovesIt() throws {
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent("QuotaAlertDeliveryTests.state.\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -23,7 +23,14 @@ struct NotificationStateStoreTests {
           windowID: "weekly",
           resetsAt: resetsAt,
           threshold: 20
-        )
+        ),
+        AlertDedupKey(
+          kind: .pace,
+          selector: "codex_acct",
+          windowID: "weekly",
+          resetsAt: resetsAt,
+          threshold: nil
+        ),
       ],
       readings: [
         AlertStoredReading(
@@ -45,22 +52,6 @@ struct NotificationStateStoreTests {
 
     try store.clear()
     #expect(!FileManager.default.fileExists(atPath: store.fileURL.path))
-    #expect(try store.load() == .empty)
-  }
-
-  @Test func memoryStoreRoundTripsAndClearEmpties() throws {
-    let store = InMemoryAlertStateStore()
-    let state = AlertDedupState(
-      fired: [
-        AlertDedupKey(
-          kind: .threshold,
-          selector: "codex_acct", windowID: "weekly", resetsAt: nil, threshold: 10)
-      ],
-      readings: []
-    )
-    try store.save(state)
-    #expect(try store.load() == state)
-    try store.clear()
     #expect(try store.load() == .empty)
   }
 }

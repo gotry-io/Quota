@@ -88,19 +88,15 @@ struct ProviderSessionStoreTests {
     #expect(try store.list().count == 1)
   }
 
+  /// Nothing stored lists nothing; a Keychain that refuses the read is not an empty list.
   @Test
-  func anEmptyKeychainListsNothing() throws {
-    let store = KeychainProviderSessionStore(
-      service: "io.gotry.quota.test-provider-session", keychain: ProviderSessionFakeKeychain())
-    #expect(try store.list().isEmpty)
-  }
-
-  @Test
-  func aRefusedReadIsNotAnEmptyList() {
+  func aRefusedReadIsNotAnEmptyList() throws {
     let keychain = ProviderSessionFakeKeychain()
-    keychain.listStatus = errSecInteractionNotAllowed
     let store = KeychainProviderSessionStore(
       service: "io.gotry.quota.test-provider-session", keychain: keychain)
+    #expect(try store.list().isEmpty)
+
+    keychain.listStatus = errSecInteractionNotAllowed
     #expect(throws: ProviderSessionStoreError.unreadable) { try store.list() }
   }
 
@@ -114,16 +110,6 @@ struct ProviderSessionStoreTests {
     try store.upsert(Self.session())
     keychain.items["io.gotry.quota.test-provider-session|claude:broken"] = Data("{".utf8)
 
-    #expect(try store.list().map(\.provider) == [.codex])
-  }
-
-  @Test
-  func theMemoryStoreAnswersTheSameWay() throws {
-    let store = MemoryProviderSessionStore(sessions: [Self.session()])
-    try store.upsert(Self.session(provider: .claude, fingerprint: "fingerprint_claude"))
-    #expect(try store.list().map(\.provider) == [.claude, .codex])
-
-    try store.remove(provider: .claude, accountFingerprint: "fingerprint_claude")
     #expect(try store.list().map(\.provider) == [.codex])
   }
 }

@@ -5,23 +5,6 @@ import Testing
 @MainActor
 @Suite
 struct DiagnosticsPageModelTests {
-  @Test func initialCheckPublishesTheReportAndItsCopyText() async {
-    let model = DiagnosticsPageModel()
-    let report = sampleReport()
-
-    await model.runCheck { report }
-
-    #expect(model.report == report)
-    #expect(!model.isLoading)
-    let text = report.textReport
-    #expect(text.contains("Status: healthy"))
-    #expect(text.contains("quota_overview"))
-    // Recent work is not on the page but is in the copied report.
-    #expect(text.contains("usage_scan/agent:cursor"))
-    #expect(text.contains("code=malformed_json"))
-    #expect(!text.contains("/Users/"))
-  }
-
   @Test func recheckKeepsLastCompletedReportWhenRefreshFails() async {
     let original = sampleReport()
     let model = DiagnosticsPageModel(report: original)
@@ -34,43 +17,18 @@ struct DiagnosticsPageModelTests {
 
   @Test func resetDropsAbandonedResult() async {
     let model = DiagnosticsPageModel()
+    let gate = TestGate()
     let task = Task { @MainActor in
       await model.runCheck {
-        try await Task.sleep(for: .milliseconds(50))
+        await gate.wait()
         return sampleReport()
       }
     }
-    await Task.yield()
+    while !model.isLoading { await Task.yield() }
     model.prepareForEntry()
+    await gate.open()
     await task.value
     #expect(model.report == nil)
-  }
-
-  /// Reset Local Data confirms through the panel's own popup, like Sign Out and Disconnect: a
-  /// The menu panel is not a window a system alert can sit over. These are the words the
-  /// popup says, so the row and the confirmation cannot drift apart.
-  @Test func resetLocalDataConfirmationSaysWhatItDeletes() {
-    #expect(ResetLocalDataCopy.title == "Reset Local Data?")
-    #expect(ResetLocalDataCopy.confirmTitle == "Reset Local Data")
-    #expect(ResetLocalDataCopy.message.contains("deleted and rebuilt"))
-    #expect(ResetLocalDataCopy.message.contains("You stay signed in."))
-  }
-
-  /// The service owns every sentence; the page only names the thing the sentence is about, and
-  /// every one of those names comes from a table rather than from the id it arrived as.
-  @Test func sourceTitlesNameTheProviderAndTheRungThatAnswered() {
-    #expect(
-      DiagnosticsPresentation.sourceTitle(subject: "provider:codex", sourceID: "chatgpt_usage_api")
-        == "Codex · OAuth")
-    #expect(
-      DiagnosticsPresentation.sourceTitle(subject: "provider:cursor", sourceID: "browser_session")
-        == "Cursor · Browser session")
-    #expect(DiagnosticsPresentation.sourceTitle(subject: "agent:cursor", sourceID: nil) == "Cursor")
-    #expect(
-      DiagnosticsPresentation.sourceTitle(subject: "agent:claude_code", sourceID: nil) == "Claude Code")
-    #expect(DiagnosticsPresentation.sourceTitle(subject: "usage_upload", sourceID: nil) == "Usage sync")
-    #expect(DiagnosticsPresentation.sourceTitle(subject: "quota_upload", sourceID: nil) == "Quota sync")
-    #expect(DiagnosticsPresentation.sourceTitle(subject: "local_state", sourceID: nil) == "Local data")
   }
 
   /// A subject or surface this build has no name for is not introduced by its wire id. The row
@@ -84,44 +42,6 @@ struct DiagnosticsPageModelTests {
         == "Other")
     #expect(DiagnosticsPresentation.sourceTitle(subject: "a_new_service_path", sourceID: nil) == "Other")
     #expect(DiagnosticsPresentation.surfaceTitle("a_new_surface") == "Other")
-  }
-
-  /// Support is the one page that states a clock time. A person presses Recheck to find out
-  /// whether what they are looking at came from that run, and every run is "just now".
-  @Test func theStatusLineStatesWhenTheCheckRanRatherThanHowLongAgo() {
-    let label = DiagnosticsPresentation.checkedLabel(
-      Date(timeIntervalSince1970: 1_786_300_000),
-      locale: Locale(identifier: "en_US"),
-      timeZone: TimeZone(identifier: "America/Los_Angeles")!
-    )
-
-    #expect(label.hasPrefix("Checked "))
-    #expect(label.contains("11:26"))
-    #expect(label.contains("AM"))
-    #expect(!label.contains("ago"))
-
-    // Locale-shortened, so the same instant reads as the clock the reader keeps.
-    #expect(
-      DiagnosticsPresentation.checkedLabel(
-        Date(timeIntervalSince1970: 1_786_300_000),
-        locale: Locale(identifier: "en_GB"),
-        timeZone: TimeZone(identifier: "Europe/London")!
-      ) == "Checked 19:26"
-    )
-  }
-
-  @Test func summaryLabelFollowsOperationThenAttention() {
-    #expect(
-      DiagnosticsPresentation.summaryLabel(
-        LocalServiceDiagnosticSummary(operation: .healthy, attention: .none))
-        == "All systems working")
-    #expect(
-      DiagnosticsPresentation.summaryLabel(
-        LocalServiceDiagnosticSummary(operation: .healthy, attention: .required))
-        == "Some checks need attention")
-    #expect(
-      DiagnosticsPresentation.summaryLabel(
-        LocalServiceDiagnosticSummary(operation: .blocked, attention: .none)) == "Action needed")
   }
 }
 

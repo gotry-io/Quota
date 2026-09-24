@@ -115,6 +115,13 @@ struct ContrastTokenTests {
         minimum: Self.largeTextAndGraphics
       )
     }
+    // The Usage chart draws a cached day's bar in its own fill.
+    env.expect(
+      "cached chart bar on card",
+      UIColor(QuotaTheme.cachedFill),
+      on: env.card,
+      minimum: Self.largeTextAndGraphics
+    )
   }
 
   @Test(arguments: [UIUserInterfaceStyle.light, .dark])
@@ -183,23 +190,6 @@ struct ContrastTokenTests {
     env.expect(
       "selected-day stroke on card",
       UIColor(QuotaTheme.emerald),
-      on: env.card,
-      minimum: Self.largeTextAndGraphics
-    )
-  }
-
-  @Test(arguments: [UIUserInterfaceStyle.light, .dark])
-  func chartBarsOnCard(_ style: UIUserInterfaceStyle) {
-    let env = Environment(style)
-    env.expect(
-      "fresh chart bar on card",
-      UIColor(QuotaTheme.emerald),
-      on: env.card,
-      minimum: Self.largeTextAndGraphics
-    )
-    env.expect(
-      "cached chart bar on card",
-      UIColor(QuotaTheme.cachedFill),
       on: env.card,
       minimum: Self.largeTextAndGraphics
     )

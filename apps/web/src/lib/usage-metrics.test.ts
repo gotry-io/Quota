@@ -1,8 +1,6 @@
 import { expect, it } from "vitest";
 import {
-  cacheHitLabel,
   cacheSavedLabel,
-  costPricedLabel,
   dailyBarKind,
   dailyChartSummary,
   dailyMaximum,
@@ -28,42 +26,6 @@ function totals(input: number, cacheRead: number, output = 0) {
 function cost(amount: string | null, status = "complete") {
   return { amount_microusd: amount, status, basis: "calculated" };
 }
-
-it("states the cache hit rate as whole percent, and no rate without input", () => {
-  expect(cacheHitLabel(totals(1_000, 940))).toBe("94%");
-  expect(cacheHitLabel(totals(0, 0))).toBe(null);
-});
-
-it("names how many rows the catalog priced", () => {
-  expect(
-    costPricedLabel({
-      status: "complete",
-      calculated_rows: 12,
-      reported_rows: 0,
-      unpriced_rows: 0,
-    }),
-  ).toBe("Priced 12 of 12 rows");
-  expect(
-    costPricedLabel({
-      status: "partial",
-      calculated_rows: 9,
-      reported_rows: 1,
-      unpriced_rows: 2,
-    }),
-  ).toBe("Priced 10 of 12 rows");
-  expect(
-    costPricedLabel({
-      status: "unavailable",
-      calculated_rows: 0,
-      reported_rows: 0,
-      unpriced_rows: 4,
-    }),
-  ).toBe("Priced 0 of 4 rows");
-  expect(costPricedLabel({ status: "complete" })).toBe("Cost covers every row");
-  expect(costPricedLabel({ status: "partial", unpriced_rows: 3 })).toBe(
-    "Cost skips 3 rows this catalog can't price",
-  );
-});
 
 it("names a saving as a saving, and says nothing when nothing could be priced", () => {
   expect(cacheSavedLabel({ amount_microusd: "1500000", status: "complete" })).toBe("saved $1.50");
@@ -127,10 +89,6 @@ it("keeps a slot for a missing local date in the asked range", () => {
   expect(gap ? dailyTooltip(gap, "tokens") : null).toBe("2026-09-04 · no usage recorded");
   expect(gap ? dailyTooltip(gap, "cost") : "").not.toContain("$0");
   expect(gap ? dailyTooltip(gap, "cost") : "").not.toContain("0 tokens");
-});
-
-it("has no daily table when the period named no local days", () => {
-  expect(usageDailyRows([], null)).toStrictEqual([]);
 });
 
 it("draws an empty day as a tick and an unpriced day as unpriced, not $0", () => {

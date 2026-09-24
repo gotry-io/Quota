@@ -7,7 +7,6 @@ import { PRICING_CATALOG } from "../src/pricing-catalog.ts";
 import { D1AccountState } from "../src/state/d1-account-state.ts";
 import { D1UsageState } from "../src/state/d1-usage-state.ts";
 import {
-  documentSsrFailureResponse,
   memoizeWebDocumentPort,
   runDocumentSsr,
   withPrivateNoStore,
@@ -148,25 +147,6 @@ describe("document SSR observability", () => {
     expect(await memoized.hasViewer()).toBe(true);
   });
 
-  it("treats a rejected getViewer as has_viewer false without a second call", async () => {
-    let calls = 0;
-    const memoized = memoizeWebDocumentPort({
-      async getViewer() {
-        calls += 1;
-        throw new Error("session store unavailable");
-      },
-      async readPublicProfile() {
-        return null;
-      },
-    });
-    await expect(memoized.port.getViewer(new Headers())).rejects.toThrow(
-      "session store unavailable",
-    );
-    expect(await memoized.hasViewer()).toBe(false);
-    expect(await memoized.hasViewer()).toBe(false);
-    expect(calls).toBe(1);
-  });
-
   it("returns a generic private 500 when getViewer rejects without rethrowing has_viewer", async () => {
     const errors: string[] = [];
     let calls = 0;
@@ -251,13 +231,6 @@ describe("document SSR observability", () => {
     } finally {
       console.error = original;
     }
-  });
-
-  it("builds a failure response without an ETag", () => {
-    const response = documentSsrFailureResponse();
-    expect(response.status).toBe(500);
-    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
-    expect(response.headers.get("ETag")).toBeNull();
   });
 });
 

@@ -67,9 +67,13 @@ The v6 data contract is seven routes
   declared for a window rewrites every row of that window. `409 history_sync_off` while the
   switch is false. `413 quota_history_full` at 50 000 rows. The answer names, per series the
   upload sent, the newest (`bucket_start`) and oldest (`oldest_bucket_start`) bucket Relay now
-  holds from this device, in one query that searches the primary key on `device_id`. A device
-  that uploaded an older bucket in its current on-period learns the switch went off and on
-  behind it and backfills that series again.
+  holds from this device, in one query that searches the primary key on `device_id`, and
+  `duration_seconds`: the duration the window's rows carried when the upload arrived, before
+  its own declaration rewrote them (one `LIMIT 1` search of `quota_history_read_idx` per
+  series, in the write transaction). A device that uploaded an older bucket in its current
+  on-period learns the switch went off and on behind it and backfills that series again; it
+  judges liveness with the shorter of its own duration and the answered one, and adopts a
+  shorter one, so two devices that declare different durations converge.
 - `GET /api/v6/account/quota-history?provider=&fingerprint=&since=` answers one global-scope
   subscription's merged buckets, `MAX(used_percent)` in SQL, oldest first, `since` clamped per
   window to that window's span (`min(30 d, max(48 h, 4 × duration_seconds))`: 48 h for a

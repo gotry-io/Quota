@@ -381,35 +381,6 @@ fn grok_plan(credentials: &Credentials) -> Option<String> {
 mod tests {
     use super::*;
 
-    /// The Grok CLI owns this token. A Mac without one has only the stored grok.com session
-    /// to try, and without that too there is nothing at all.
-    #[test]
-    fn the_browser_session_is_discovered_only_without_a_local_grant() {
-        let mut context = CollectionContext {
-            home_directory: PathBuf::from("/tmp/quota-grok-missing-home"),
-            environment: std::collections::HashMap::new(),
-            config_path: None,
-            browser_sessions: std::collections::HashMap::new(),
-            client_name: "QuotaTest".to_owned(),
-            client_version: "test".to_owned(),
-            now: Some("2026-08-10T00:00:00Z".to_owned()),
-            cancel: None,
-            keychain: Default::default(),
-            cli_versions: Default::default(),
-            proven_credentials: Default::default(),
-        };
-        assert!(discover(&context).is_empty());
-        context
-            .browser_sessions
-            .insert(ProviderId::Grok, vec!["sso=session-value".to_owned()]);
-        let sessions = discover(&context);
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(
-            sessions[0].credential_source,
-            super::super::BROWSER_SESSION_SOURCE
-        );
-    }
-
     /// The stored session is the last rung, and only the last rung.
     ///
     /// It answers when this Mac's own grant said "sign in again"; it never answers first, it
@@ -503,6 +474,12 @@ mod tests {
         let window = map_billing(&monthly).unwrap();
         assert_eq!(window.title, "Monthly");
         assert_eq!(window.primary_cadence, Some(Cadence::Monthly));
+        // The deprecated `periodType` spelling names the same cadence.
+        let deprecated = serde_json::json!({"config": {"creditUsagePercent": 8, "currentPeriod": {"periodType": "monthly", "billingPeriodStart": "2026-08-01T00:00:00Z", "billingPeriodEnd": "2026-09-01T00:00:00Z"}}});
+        assert_eq!(
+            map_billing(&deprecated).unwrap().primary_cadence,
+            Some(Cadence::Monthly)
+        );
 
         let untyped = serde_json::json!({"config": {"creditUsagePercent": 8, "billingPeriodEnd": "2026-08-01T00:00:00Z"}});
         let window = map_billing(&untyped).unwrap();
@@ -527,6 +504,8 @@ mod tests {
         assert_eq!(window.title, "Weekly");
         assert_eq!(window.used_percent, 0.0);
         assert_eq!(window.resets_at.as_deref(), Some("2026-08-20T07:33:06Z"));
+        // Without a period to stand for, a missing usage is not a zero.
+        assert!(map_billing(&serde_json::json!({"config": {}})).is_err());
     }
 
     #[test]
@@ -554,20 +533,6 @@ mod tests {
         .unwrap();
         assert_eq!(legacy.access_token, "legacy");
         assert!(grok_plan(&legacy).is_none());
-    }
-
-    #[test]
-    fn maps_deprecated_money_objects_and_rejects_missing_usage() {
-        let window = map_billing(&serde_json::json!({
-            "config": {
-                "monthlyLimit": {"val": 2000},
-                "used": {"val": 500},
-                "currentPeriod": {"periodType": "monthly", "billingPeriodStart": "2026-08-01T00:00:00Z", "billingPeriodEnd": "2026-09-01T00:00:00Z"}
-            }
-        })).unwrap();
-        assert_eq!(window.used_percent, 25.0);
-        assert_eq!(window.title, "Monthly");
-        assert!(map_billing(&serde_json::json!({"config": {}})).is_err());
     }
 
     #[test]

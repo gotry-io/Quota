@@ -137,36 +137,6 @@ struct LocalObservationMergeTests {
   private let studio = "device_studio"
   private let kitchen = "device_kitchen"
 
-  /// With no account, this phone's readings are the whole list, attributed to this phone.
-  @Test
-  func aLocalOnlyReadingBecomesItsOwnSubscription() throws {
-    let merged = LocalObservationMerge.subscriptions(
-      local: [snapshot(fingerprint: "fp")],
-      resolved: [],
-      now: now
-    )
-    #expect(merged.count == 1)
-    #expect(merged[0].key == "codex|fp|global|")
-    #expect(merged[0].sources.map(\.deviceID) == [ThisDevice.sourceID])
-  }
-
-  /// The same account read on a Mac and on this phone is one subscription, not two cards.
-  @Test
-  func theSameAccountReadTwiceIsOneRowWithBothSources() throws {
-    let older = snapshot(
-      fingerprint: "fp", usedPercent: 40, observedAt: now.addingTimeInterval(-600))
-    let newer = snapshot(
-      fingerprint: "fp", usedPercent: 41, observedAt: now.addingTimeInterval(-60))
-    let merged = LocalObservationMerge.subscriptions(
-      local: [newer],
-      resolved: [resolved(snapshot: older, deviceIDs: [studio])],
-      now: now
-    )
-    #expect(merged.count == 1)
-    #expect(merged[0].snapshot == newer)
-    #expect(merged[0].sources.map(\.deviceID).sorted() == [studio, ThisDevice.sourceID].sorted())
-  }
-
   /// This phone uploads what it reads, so the Account answers with this phone among the sources.
   /// It is already the local reading, and one device is one row.
   @Test

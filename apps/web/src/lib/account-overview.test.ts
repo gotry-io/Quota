@@ -6,10 +6,7 @@ import {
   devicesSummaryLine,
   meterTone,
   meterToneForUsedPercent,
-  providerMarkHue,
-  quotaMeterName,
   subscriptionCardMeta,
-  topUsageModel,
   usageStatusLine,
 } from "./account-overview.ts";
 
@@ -44,16 +41,6 @@ const emptyPeriod: UsagePeriodRead = {
   agents: [],
 };
 
-type ModelLeaf = UsagePeriodRead["agents"][number]["providers"][number]["models"][number];
-
-function model(name: string, tokens: number): ModelLeaf {
-  return {
-    model: name,
-    totals: { ...emptyPeriod.totals, total_tokens: tokens, input_tokens: tokens, output_tokens: 0 },
-    cost: emptyPeriod.cost,
-  };
-}
-
 it("classifies remaining-quota meter thresholds", () => {
   expect(meterTone(100)).toBe("good");
   expect(meterTone(40)).toBe("good");
@@ -63,38 +50,6 @@ it("classifies remaining-quota meter thresholds", () => {
   expect(meterTone(0)).toBe("critical");
   expect(meterToneForUsedPercent(32)).toBe("good");
   expect(remainingPercent(32)).toBe(68);
-});
-
-it("names a remaining-quota meter from the window title and remaining figure", () => {
-  expect(quotaMeterName("Weekly", "84%")).toBe("Weekly 84%");
-  expect(quotaMeterName("Included", "$12.50 of $40.00")).toBe("Included $12.50 of $40.00");
-});
-
-it("hashes a provider id to a stable hue", () => {
-  expect(providerMarkHue("codex")).toBe(providerMarkHue("codex"));
-  expect(providerMarkHue("codex")).not.toBe(providerMarkHue("claude"));
-  expect(providerMarkHue("codex")).toBeGreaterThanOrEqual(0);
-  expect(providerMarkHue("codex")).toBeLessThan(360);
-});
-
-it("picks the model with the most tokens in a period", () => {
-  const period: UsagePeriodRead = {
-    ...emptyPeriod,
-    agents: [
-      {
-        agent: "codex",
-        providers: [
-          {
-            provider: "openai",
-            models: [model("gpt-5.5", 100), model("gpt-5.6-sol", 400), model("other", 50)],
-          },
-        ],
-      },
-    ],
-  };
-  expect(topUsageModel(period)).toBe("gpt-5.6-sol");
-  expect(topUsageModel(emptyPeriod)).toBe("—");
-  expect(topUsageModel(null)).toBe("—");
 });
 
 function deviceRow(

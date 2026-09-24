@@ -234,53 +234,6 @@ fn is_chatgpt_session_cookie_name(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
-    use std::path::PathBuf;
-
-    fn context() -> CollectionContext {
-        CollectionContext {
-            home_directory: PathBuf::from("/tmp/quota-codex-web-missing-home"),
-            environment: HashMap::new(),
-            config_path: None,
-            browser_sessions: HashMap::new(),
-            client_name: "QuotaTest".to_owned(),
-            client_version: "test".to_owned(),
-            now: Some("2026-08-10T00:00:00Z".to_owned()),
-            cancel: None,
-            keychain: Default::default(),
-            cli_versions: Default::default(),
-            proven_credentials: Default::default(),
-        }
-    }
-
-    /// One request, one canned answer, and the request head handed back for inspection.
-    /// A queue of responses, over the shared stub.
-    fn serve(bodies: Vec<(u16, String)>) -> (String, std::thread::JoinHandle<Vec<String>>) {
-        crate::providers::common::serve_responses(
-            bodies
-                .into_iter()
-                .map(|(status, body)| (status, body.into_bytes()))
-                .collect(),
-        )
-    }
-
-    #[test]
-    fn the_catalog_names_the_chatgpt_session_cookies() {
-        let spec = ProviderId::Codex
-            .metadata()
-            .browser_session
-            .expect("codex browser session");
-        assert!(
-            spec.cookie_names
-                .contains(&"__Secure-next-auth.session-token")
-        );
-        assert!(has_chatgpt_session_cookie(
-            "__Secure-next-auth.session-token=abc; _account=acct"
-        ));
-        // A context cookie on its own is not a sign-in.
-        assert!(!has_chatgpt_session_cookie("_account=acct"));
-        assert!(!has_chatgpt_session_cookie("cf_clearance=bot"));
-    }
 
     /// Both runtimes answer the same cases, so a rule this collector starts reading differently
     /// fails here rather than resolving one account into two subscriptions.
@@ -300,54 +253,6 @@ mod tests {
     #[test]
     fn the_usage_path_is_the_usage_url() {
         assert_eq!(format!("{ORIGIN}{USAGE_PATH}"), super::super::USAGE_URL);
-    }
-
-    /// A cookie is stored only once ChatGPT has said whose it is.
-    #[test]
-    fn validate_keeps_only_a_session_that_names_an_account() {
-        let (address, server) = serve(vec![(
-            200,
-            r#"{"user":{"email":"ada@example.com"},"account":{"id":"acct_1","planType":"plus"}}"#
-                .to_owned(),
-        )]);
-        let validated = validate_at(
-            "__Secure-next-auth.session-token=abc",
-            &context(),
-            &format!("http://{address}"),
-        )
-        .expect("validated");
-        assert_eq!(
-            validated.account_label.as_deref(),
-            Some("ad***@example.com")
-        );
-        // The same account the OAuth rung reports, so falling through does not rename it.
-        let (oauth, scope) = account_identity("codex", "account_id", Some("acct_1"));
-        assert_eq!(validated.account_fingerprint, oauth);
-        assert_eq!(scope, "global");
-        assert!(!validated.account_fingerprint.contains("acct_1"));
-        let heads = server.join().expect("server");
-        assert!(heads[0].contains("cookie: __secure-next-auth.session-token=abc"));
-
-        // A signed-out jar answers with a document that names nobody: both documents are
-        // asked, and the cookie is still refused.
-        let (address, server) = serve(vec![(200, "{}".to_owned()), (200, "{}".to_owned())]);
-        let error = validate_at(
-            "__Secure-next-auth.session-token=abc",
-            &context(),
-            &format!("http://{address}"),
-        )
-        .expect_err("signed out");
-        assert_eq!(error.source_id, SOURCE);
-        assert_eq!(server.join().expect("server").len(), 2);
-    }
-
-    /// A header carrying no session cookie is rejected without a request at all.
-    #[test]
-    fn validate_rejects_a_header_with_no_session_cookie() {
-        let error = validate_at("_account=acct", &context(), "http://127.0.0.1:1")
-            .expect_err("no session cookie");
-        assert_eq!(error.category, ErrorCategory::Error);
-        assert_eq!(error.source_id, SOURCE);
     }
 
     #[test]

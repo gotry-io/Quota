@@ -505,8 +505,7 @@ final class QuotaScreenUITests: QuotaUITestCase {
       root: "settings.notifications.root",
       name: "settings-notifications"
     )
-    XCTAssertTrue(app.switches["Enable Notifications"].exists, "Enable Notifications")
-    XCTAssertTrue(app.switches["Reset Reminders"].exists, "Reset Reminders")
+    // Its switches are the journey's (`QuotaSmokeUITests.testSettingsDestinationsOpenAndReturn`).
     // Below the fold at accessibility sizes.
     let alertAt = app.staticTexts["Alert at"].firstMatch
     for _ in 0..<8 where !alertAt.exists {
@@ -516,16 +515,13 @@ final class QuotaScreenUITests: QuotaUITestCase {
     XCTAssertTrue(alertAt.exists, "Alert at")
   }
 
+  /// Its three options are the journey's (`QuotaSmokeUITests.testSettingsDestinationsOpenAndReturn`).
   func testSettingsAppearanceScreen() throws {
-    let app = try captureSettingsDestination(
+    try captureSettingsDestination(
       route: "settings.appearance",
       root: "settings.appearance.root",
       name: "settings-appearance"
     )
-    for option in ["system", "light", "dark"] {
-      XCTAssertTrue(
-        app.descendants(matching: .any)["settings.appearance.\(option)"].exists, option)
-    }
   }
 
   /// About's words and links, all of them: the product and privacy sentences, the version, and
@@ -610,17 +606,8 @@ final class QuotaScreenUITests: QuotaUITestCase {
         identifier
       )
     }
-    // The refused session in this fixture is the second Codex account.
-    let refused = app.descendants(matching: .any)["providers.signin-again.codex:codex_personal"]
-    if !refused.exists {
-      scrollToTop(app)
-      scrollToIdentifier(app, "providers.signin-again.codex:codex_personal", attempts: 12)
-    }
-    XCTAssertTrue(refused.waitForExistence(timeout: 5), "Sign in again affordance")
-    XCTAssertTrue(
-      app.staticTexts["Sign in again to keep reading this account."].exists,
-      "refused session says what to do"
-    )
+    // The refused session's Sign in again is the journey's
+    // (`QuotaSmokeUITests.testRefusedProviderSessionOffersSignInAgain`).
     // A provider with nothing connected offers Connect; one that already has an account offers
     // another.
     let grokConnect = app.descendants(matching: .any)["providers.connect.grok"]
@@ -812,10 +799,6 @@ final class QuotaScreenUITests: QuotaUITestCase {
     XCTAssertTrue(
       app.descendants(matching: .any)["settings.root"].waitForExistence(timeout: 10),
       "settings.root"
-    )
-    XCTAssertFalse(
-      app.descendants(matching: .any)["settings.devices"].exists,
-      "Devices row is absent when signed out"
     )
     settle(app)
     attachScreenshot(app, name: "settings-local-only")

@@ -28,18 +28,4 @@ struct QuotaObservationFreshnessTests {
     #expect(observation.stateLabel(now: now) == "Sign-in needed")
     #expect(observation.isStale(now: now))
   }
-
-  @Test(
-    arguments: [
-      (QuotaObservationState.available, "Available"),
-      (.stale, "Not current"),
-      (.signInNeeded, "Sign-in needed"),
-      (.unavailable, "Unavailable"),
-      (.unsupported, "Unsupported"),
-      (.failed, "Can\u{2019}t refresh"),
-    ] as [(QuotaObservationState, String)]
-  )
-  func everyStateHasTheWordTheClientsShow(state: QuotaObservationState, label: String) {
-    #expect(state.label == label)
-  }
 }

@@ -95,6 +95,14 @@ mod tests {
             first.0,
             account_identity("grok", "team_id", Some("owner")).0
         );
+        // A credential that names no owner is scoped to its source, and is not standing in
+        // for an account it never read.
+        let unowned = account_identity("kimi", "cli_credential", None);
+        assert_eq!(unowned.1, "source");
+        assert_ne!(
+            unowned.0,
+            account_identity("kimi", "cli_credential", Some("owner")).0
+        );
         assert_eq!(
             mask_email(Some("ada@example.com")).as_deref(),
             Some("ad***@example.com")

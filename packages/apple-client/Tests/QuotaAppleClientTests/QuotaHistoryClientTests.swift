@@ -4,51 +4,6 @@ import QuotaWire
 import Testing
 
 struct QuotaHistoryClientTests {
-  @Test func uploadSpeaksTheWireAndKeepsTheNewestBucketStart() async throws {
-    let transport = ScriptedTransport([
-      .init(
-        status: 200,
-        body: Data(
-          """
-          {"protocol_version":6,"series":[{"provider":"codex","fingerprint":"account_test",\
-          "window_id":"five_hour","bucket_start":"2026-09-21T10:15:00Z"}]}
-          """.utf8
-        )
-      )
-    ])
-    let client = RelayClient(transport: transport)
-    let response = try await client.uploadQuotaHistory(
-      accessToken: Fixtures.accessToken,
-      request: QuotaHistoryUploadRequest(
-        generation: 4,
-        series: [
-          QuotaHistoryUploadRequest.Series(
-            provider: .codex,
-            fingerprint: "account_test",
-            windowId: "five_hour",
-            durationSeconds: 18_000,
-            points: [
-              QuotaHistoryUploadRequest.Point(
-                resetsAt: Fixtures.date("2026-09-21T15:00:00Z"),
-                bucketStart: Fixtures.date("2026-09-21T10:15:00Z"),
-                usedPercent: 42.5
-              )
-            ]
-          )
-        ]
-      )
-    )
-    #expect(transport.recordedMethods == ["PUT"])
-    #expect(transport.recordedURLs.first?.path == "/api/v6/device/quota-history")
-    let body = String(decoding: transport.recordedBodies[0], as: UTF8.self)
-    #expect(body.contains("\"protocol_version\":6"))
-    #expect(body.contains("\"generation\":4"))
-    #expect(body.contains("\"bucket_start\":\"2026-09-21T10:15:00Z\""))
-    #expect(body.contains("\"used_percent\":42.5"))
-    #expect(response.series.first?.newestBucketStart == Fixtures.date("2026-09-21T10:15:00Z"))
-    #expect(response.series.first?.windowId == "five_hour")
-  }
-
   @Test func historySyncOffAndQuotaHistoryFullAreTheirOwnErrors() async throws {
     let off = Data(
       """

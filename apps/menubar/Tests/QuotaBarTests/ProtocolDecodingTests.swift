@@ -1,220 +1,9 @@
-import AppKit
 import Foundation
-import QuotaBrandIcons
 import QuotaPresentation
 import QuotaWire
 import Testing
 
 @testable import QuotaBar
-
-@Test @MainActor
-func loadsBundledProviderBrandMarks() throws {
-  for provider in ProviderID.allCases {
-    let mark = try #require(ProviderBrandAssets.mark(named: provider.brandIconAssetName))
-    #expect(mark.image.isTemplate)
-  }
-  for assetName in ["azureai", "bedrock", "vertexai", "opencode", "pi"] {
-    let mark = try #require(ProviderBrandAssets.mark(named: assetName))
-    #expect(mark.image.isTemplate)
-  }
-}
-
-@Test @MainActor
-func loadsBundledQuotaBrandMark() throws {
-  let image = try #require(QuotaBrandAssets.menuBarTemplateImage())
-  #expect(image.isTemplate)
-  #expect(image.size == NSSize(width: 18, height: 18))
-}
-
-private func usagePeriodJSON(cost: String) -> String {
-  """
-  {
-    "totals": {
-      "total_tokens": 1200,
-      "input_tokens": 1000,
-      "output_tokens": 200,
-      "cache_read_input_tokens": 100,
-      "cache_write_input_tokens": 0,
-      "reasoning_tokens": 50,
-      "messages": 1
-    },
-    "cost": \(cost),
-    "cache_saved": {
-      "amount_microusd": "190",
-      "status": "complete",
-      "unpriced_rows": 0
-    },
-    "partial": false,
-    "agents": []
-  }
-  """
-}
-
-private let completeCostJSON = """
-  {
-    "mode": "calculate",
-    "basis": "calculated",
-    "status": "complete",
-    "amount_microusd": "3138",
-    "catalog_revision": "pricing_1",
-    "calculated_rows": 1,
-    "reported_rows": 0,
-    "unpriced_rows": 0,
-    "assumptions": ["agent_default_channel"],
-    "unpriced": []
-  }
-  """
-
-private func accountSummaryJSON() -> Data {
-  Data(
-    """
-    {
-      "protocol_version": 6,
-      "account": {
-        "account_id": "account_01",
-        "display_label": "octocat",
-        "created_at": "2026-07-01T00:00:00Z"
-      },
-      "devices": [{
-        "id": "device_01",
-        "display_name": "Kitchen Mac",
-        "platform": "macos",
-        "last_seen_at": "2026-08-02T01:00:00Z",
-        "last_observed_at": "2026-08-02T00:30:00Z"
-      }],
-      "subscriptions": [],
-      "usage": {
-        "today": \(usagePeriodJSON(cost: completeCostJSON)),
-        "last_7_days": \(usagePeriodJSON(cost: completeCostJSON)),
-        "last_30_days": \(usagePeriodJSON(cost: completeCostJSON)),
-        "all": \(usagePeriodJSON(cost: completeCostJSON))
-      },
-      "pricing_revision": "pricing_1",
-      "model_catalog_revision": "models_1"
-    }
-    """.utf8
-  )
-}
-
-@Test
-func decodesAccountSummaryWithUsageCost() throws {
-  let data = accountSummaryJSON()
-  let summary = try QuotaWireCodec.makeDecoder().decode(AccountSummary.self, from: data)
-
-  #expect(summary.protocolVersion == WireCodec.managedDataProtocolVersion)
-  #expect(summary.devices.first?.id == "device_01")
-  #expect(summary.usage.today.cost.amountMicrousd == "3138")
-  #expect(summary.pricingRevision == "pricing_1")
-
-  var expandedObject = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-  var expandedUsage = try #require(expandedObject["usage"] as? [String: Any])
-  var today = try #require(expandedUsage["today"] as? [String: Any])
-  var expandedCost = try #require(today["cost"] as? [String: Any])
-  expandedCost["status"] = "partial"
-  expandedCost["unpriced_rows"] = 1
-  expandedCost["unpriced_truncated"] = true
-  today["cost"] = expandedCost
-  let structuredTotals: [String: Any] = [
-    "total_tokens": 1200,
-    "input_tokens": 1000,
-    "output_tokens": 200,
-    "cache_read_input_tokens": 100,
-    "cache_write_input_tokens": 0,
-    "reasoning_tokens": 50,
-    "messages": 1,
-  ]
-  today["agents"] = [
-    [
-      "agent": "codex",
-      "providers": [
-        [
-          "provider": "openai",
-          "models": [
-            ["model": "gpt-5.6-sol", "totals": structuredTotals, "cost": expandedCost]
-          ],
-        ]
-      ],
-    ]
-  ]
-  expandedUsage["today"] = today
-  expandedObject["usage"] = expandedUsage
-  let expandedData = try JSONSerialization.data(withJSONObject: expandedObject)
-  let expanded = try QuotaWireCodec.makeDecoder().decode(AccountSummary.self, from: expandedData)
-  #expect(expanded.usage.today.hasTruncatedDetails)
-  #expect(expanded.usage.today.cost.unpricedRows == 1)
-  #expect(
-    expanded.usage.today.agents.first?.providers.first?.models.first?.model == "gpt-5.6-sol")
-
-  var falseCostMarkerObject = expandedObject
-  var falseCostMarkerUsage = try #require(falseCostMarkerObject["usage"] as? [String: Any])
-  var falseCostMarkerToday = try #require(falseCostMarkerUsage["today"] as? [String: Any])
-  var falseCostMarker = try #require(falseCostMarkerToday["cost"] as? [String: Any])
-  falseCostMarker["unpriced_truncated"] = false
-  falseCostMarkerToday["cost"] = falseCostMarker
-  falseCostMarkerUsage["today"] = falseCostMarkerToday
-  falseCostMarkerObject["usage"] = falseCostMarkerUsage
-  let falseCostMarkerData = try JSONSerialization.data(withJSONObject: falseCostMarkerObject)
-  #expect(throws: DecodingError.self) {
-    _ = try QuotaWireCodec.makeDecoder().decode(AccountSummary.self, from: falseCostMarkerData)
-  }
-
-  let missingRequiredNull = Data(
-    String(decoding: data, as: UTF8.self).replacingOccurrences(
-      of: #""catalog_revision": "pricing_1","#,
-      with: ""
-    ).utf8)
-  #expect(throws: DecodingError.self) {
-    _ = try QuotaWireCodec.makeDecoder().decode(AccountSummary.self, from: missingRequiredNull)
-  }
-
-  // A Relay newer than this build can name a field anywhere in a read, at any depth.
-  var nestedExtraObject = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-  var nestedExtraUsage = try #require(nestedExtraObject["usage"] as? [String: Any])
-  nestedExtraUsage["settled_at"] = "2026-08-02T02:00:00Z"
-  nestedExtraObject["usage"] = nestedExtraUsage
-  let tolerated = try QuotaWireCodec.makeDecoder().decode(
-    AccountSummary.self,
-    from: try JSONSerialization.data(withJSONObject: nestedExtraObject)
-  )
-  #expect(tolerated.usage.today.cost.catalogRevision == "pricing_1")
-}
-
-@Test
-func accountDeviceActivityUsesTheNewerOfLastSeenAndLastReading() throws {
-  let now = try #require(ISO8601DateFormatter().date(from: "2026-08-15T08:10:00Z"))
-  func decodeDevice(
-    lastSeenAt: Any = "2026-08-15T08:00:05Z",
-    lastObservedAt: Any = NSNull(),
-    extra: [String: Any] = [:]
-  ) throws -> AccountDevice {
-    var value: [String: Any] = [
-      "id": "device_01",
-      "display_name": "Studio Mac",
-      "platform": "macos",
-      "last_seen_at": lastSeenAt,
-      "last_observed_at": lastObservedAt,
-    ]
-    for (key, item) in extra {
-      value[key] = item
-    }
-    return try QuotaWireCodec.makeDecoder().decode(
-      AccountDevice.self,
-      from: JSONSerialization.data(withJSONObject: value)
-    )
-  }
-
-  // A field the contract retired reads as any other field this build does not name: ignored.
-  let withRetiredField = try decodeDevice(extra: ["health": NSNull(), "status": "active"])
-  #expect(withRetiredField.id == "device_01")
-
-  // The verdict itself is `DeviceActivityTests`; what a decoded device owes it is both
-  // witnessed instants, so a device quiet for a day but reporting minutes ago is still active.
-  #expect(try decodeDevice().activity(now: now).status == .active)
-  #expect(
-    try decodeDevice(lastSeenAt: "2026-08-14T08:00:00Z", lastObservedAt: "2026-08-15T08:05:00Z")
-      .activity(now: now).status == .active)
-  #expect(try decodeDevice(lastSeenAt: NSNull()).activity(now: now).status == .notReporting)
-}
 
 @Test
 func decodesQuotaHistorySamplesAndRejectsUnknownKeys() throws {
@@ -250,104 +39,6 @@ func decodesQuotaHistorySamplesAndRejectsUnknownKeys() throws {
   #expect(throws: DecodingError.self) {
     _ = try QuotaWireCodec.makeDecoder().decode(LocalServiceQuotaHistory.self, from: extra)
   }
-}
-
-@Test
-func decodesAccountPeriodCoverageOnAUsageDetail() throws {
-  let data = Data(
-    #"""
-    {
-      "range": { "from": "2026-08-01", "to": "2026-08-03" },
-      "usage": {
-        "totals": {
-          "total_tokens": 12,
-          "input_tokens": 10,
-          "output_tokens": 2,
-          "cache_read_input_tokens": 0,
-          "cache_write_input_tokens": 0,
-          "reasoning_tokens": 0,
-          "messages": 1
-        },
-        "cost": {
-          "mode": "calculate",
-          "basis": "calculated",
-          "status": "complete",
-          "amount_microusd": "3138",
-          "catalog_revision": "pricing_1",
-          "calculated_rows": 1,
-          "reported_rows": 0,
-          "unpriced_rows": 0,
-          "assumptions": ["agent_default_channel"],
-          "unpriced": []
-        },
-        "cache_saved": {
-          "amount_microusd": "0",
-          "status": "complete",
-          "unpriced_rows": 0
-        },
-        "agents": [],
-        "days": [
-          {
-            "date": "2026-08-01",
-            "totals": {
-              "total_tokens": 12,
-              "input_tokens": 10,
-              "output_tokens": 2,
-              "cache_read_input_tokens": 0,
-              "cache_write_input_tokens": 0,
-              "reasoning_tokens": 0,
-              "messages": 1
-            },
-            "cost": {
-              "mode": "calculate",
-              "basis": "calculated",
-              "status": "complete",
-              "amount_microusd": "3138",
-              "catalog_revision": "pricing_1",
-              "calculated_rows": 1,
-              "reported_rows": 0,
-              "unpriced_rows": 0,
-              "assumptions": ["agent_default_channel"],
-              "unpriced": []
-            }
-          }
-        ]
-      },
-      "incomplete": true,
-      "details_truncated": false,
-      "coverage": {
-        "partial": true,
-        "daily_retained_from": "2026-07-01",
-        "hourly_retained_from": null,
-        "truncated_by_retention": true
-      },
-      "timezone": "Asia/Singapore",
-      "bounds": {
-        "start": "2026-07-31T16:00:00Z",
-        "end": "2026-08-03T16:00:00Z",
-        "grid": "first_whole_hour_of_local_date; fractional_midnight_to_previous_day; no_proration"
-      },
-      "revision": {
-        "usage_revision": 4,
-        "device_generation": 1,
-        "account_updated_at": "2026-08-03T10:00:00Z",
-        "pricing_revision": "pricing_1",
-        "model_catalog_revision": "models_1",
-        "fold_version": 1
-      }
-    }
-    """#.utf8
-  )
-  let detail = try QuotaWireCodec.makeDecoder().decode(LocalServiceUsageDetail.self, from: data)
-  #expect(detail.incomplete)
-  #expect(detail.coverage?.partial == true)
-  #expect(detail.coverage?.truncatedByRetention == true)
-  #expect(detail.coverage?.dailyRetainedFrom == "2026-07-01")
-  #expect(detail.timezone == "Asia/Singapore")
-  #expect(detail.bounds?.start == "2026-07-31T16:00:00Z")
-  #expect(detail.revision?.usageRevision == 4)
-  #expect(detail.usage.days?.count == 1)
-  #expect(detail.usage.days?.first?.date == "2026-08-01")
 }
 
 @Test
@@ -560,115 +251,6 @@ func decodesAccountSettingsWhenPresentAndIgnoresUnknownDocumentKeys() throws {
 }
 
 @Test
-func decodesAccountSettingsMutationWrittenAndConflict() throws {
-  let document = """
-    {
-      "protocol_version": 2,
-      "revision": 1,
-      "updated_at": "2026-09-21T10:00:00Z",
-      "alerts": {
-        "reset_reminders": true,
-        "pace_alerts": true,
-        "thresholds": { "a1b2c3d4e5f6": [20, 10] }
-      },
-      "budget": { "amount_usd": "250.00", "alerts": true }
-    }
-    """
-  let written = Data(
-    """
-    { "outcome": "written", "document": \(document), "revision": 1 }
-    """.utf8
-  )
-  let writtenResult = try QuotaWireCodec.makeDecoder().decode(
-    LocalServiceAccountSettingsMutationResult.self, from: written)
-  #expect(writtenResult.outcome == .written)
-  #expect(writtenResult.document.revision == 1)
-  if case .written(let decoded) = writtenResult.result {
-    #expect(decoded.budget.amountUSD == Decimal(250))
-  } else {
-    Issue.record("expected written")
-  }
-
-  let conflict = Data(
-    """
-    { "outcome": "conflict", "document": \(document), "revision": 1 }
-    """.utf8
-  )
-  let conflictResult = try QuotaWireCodec.makeDecoder().decode(
-    LocalServiceAccountSettingsMutationResult.self, from: conflict)
-  #expect(conflictResult.outcome == .conflict)
-}
-
-@Test
-func decodesProviderStatusReadings() throws {
-  let data = Data(
-    #"""
-    {
-      "ipc_version": 1,
-      "revision": 0,
-      "usage_upload_enabled": true,
-      "group_usage_by_project": true,
-      "quota_refresh_interval_seconds": 300,
-      "usage_periods": {"local": {}, "account": {}},
-      "quota": {
-        "status": "unavailable",
-        "value": null,
-        "updated_at": null,
-        "last_error": null,
-        "refreshing": false
-      },
-      "usage": {
-        "status": "unavailable",
-        "value": null,
-        "updated_at": null,
-        "last_error": null,
-        "refreshing": false
-      },
-      "account": {
-        "status": "signed_out",
-        "value": {
-          "auth_status": "signed_out",
-          "account_id": null,
-          "device_id": null,
-          "device_generation": null,
-          "account_summary": null
-        },
-        "updated_at": null,
-        "last_error": null,
-        "refreshing": false
-      },
-      "pricing": {
-        "status": "unavailable",
-        "value": null,
-        "updated_at": null,
-        "last_error": null,
-        "refreshing": false
-      },
-      "providers": [],
-      "provider_status": [
-        {
-          "provider": "claude",
-          "indicator": "minor",
-          "description": "Partial System Outage",
-          "checked_at": "2026-09-06T00:00:00Z"
-        }
-      ],
-      "provider_browser_sessions": [],
-      "browser_scan_enabled": [],
-      "overview": [],
-      "cache": { "rebuilding": false, "reset_at": null }
-    }
-    """#.utf8
-  )
-  let state = try QuotaWireCodec.makeDecoder().decode(LocalServiceState.self, from: data)
-  #expect(state.providerStatus.count == 1)
-  #expect(state.providerStatus[0].provider == .claude)
-  #expect(state.providerStatus[0].indicator == .minor)
-  #expect(state.providerStatus[0].description == "Partial System Outage")
-  #expect(state.providerStatus[0].settingsLine == "Degraded · Partial System Outage")
-}
-
-@Test
 func rejectsUnknownProviderStatusIndicators() {
   let data = Data(
     #"""
@@ -735,64 +317,6 @@ func rejectsUnknownProviderStatusIndicators() {
 }
 
 @Test
-func decodesOverviewItemSourcePinAndPerSourceSnapshot() throws {
-  let data = Data(
-    #"""
-    {
-      "identity": {
-        "provider": "codex",
-        "fingerprint": "account_test",
-        "scope": "global",
-        "source_id": null
-      },
-      "snapshot": {
-        "provider": "codex",
-        "account": {
-          "fingerprint": "account_test",
-          "fingerprint_scope": "global"
-        },
-        "windows": [{"id": "weekly", "title": "Weekly", "used_percent": 10}],
-        "status": "available",
-        "observed_at": "2026-08-24T09:00:00Z"
-      },
-      "sources": [{
-        "source_id": "local",
-        "kind": "local",
-        "device_id": null,
-        "display_name": "This Mac",
-        "observed_at": "2026-08-24T09:00:00Z",
-        "is_stale": false,
-        "snapshot": {
-          "provider": "codex",
-          "account": {
-            "fingerprint": "account_test",
-            "fingerprint_scope": "global"
-          },
-          "windows": [{"id": "weekly", "title": "Weekly", "used_percent": 10}],
-          "status": "available",
-          "observed_at": "2026-08-24T09:00:00Z"
-        }
-      }],
-      "selected_source_id": "local",
-      "selected_source_display_name": "This Mac",
-      "automatic_source_id": "local",
-      "automatic_source_display_name": "This Mac",
-      "is_stale": false,
-      "source_pin": "local"
-    }
-    """#.utf8
-  )
-
-  let item = try QuotaWireCodec.makeDecoder().decode(LocalServiceOverviewItem.self, from: data)
-  #expect(item.sourcePin == "local")
-  #expect(item.selectedSourceDisplayName == "This Mac")
-  #expect(item.automaticSourceID == "local")
-  #expect(item.automaticSourceDisplayName == "This Mac")
-  #expect(item.sources.first?.snapshot?.windows.first?.id == "weekly")
-  #expect(item.pinIdentityKey == "codex|account_test|global|")
-}
-
-@Test
 func decodesLoginResultIncludingAuthorizeURL() throws {
   let data = Data(
     #"""
@@ -843,55 +367,6 @@ func decodesCacheStateAndRejectsUnknownKeys() throws {
   #expect(throws: DecodingError.self) {
     _ = try QuotaWireCodec.makeDecoder().decode(LocalServiceCacheState.self, from: extra)
   }
-}
-
-@Test
-func decodesABlockedDiagnosticReport() throws {
-  let data = Data(
-    #"""
-    {
-      "schema_version": 3,
-      "generated_at": "2026-08-17T00:00:00Z",
-      "client": { "name": "QuotaBar", "version": "0.0.17" },
-      "summary": { "operation": "blocked", "attention": "required" },
-      "surfaces": [
-        { "id": "quota_overview", "status": "blocked", "data": "empty", "last_success_at": null,
-          "message": "No quota has been read yet.", "recovery": "reinstall" },
-        { "id": "usage_this_device", "status": "blocked", "data": "empty",
-          "last_success_at": null, "message": "No Usage records yet.", "recovery": "reinstall" },
-        { "id": "usage_account", "status": "inactive", "data": "empty", "last_success_at": null,
-          "message": "Usage sync is off.", "recovery": "none" },
-        { "id": "account", "status": "inactive", "data": "empty", "last_success_at": null,
-          "message": "Not signed in.", "recovery": "none" }
-      ],
-      "sources": [
-        {
-          "subject": "local_state",
-          "source_id": null,
-          "status": "blocked",
-          "last_attempt_at": "2026-08-17T00:00:00Z",
-          "last_success_at": null,
-          "code": "local_identity_reset",
-          "message": "Local identity could not be read and was reset. Sign in again.",
-          "recovery": "login"
-        }
-      ],
-      "recent": []
-    }
-    """#.utf8
-  )
-  let report = try QuotaWireCodec.makeDecoder().decode(
-    LocalServiceDiagnosticReport.self, from: data)
-  #expect(report.isValid)
-  #expect(report.summary.operation == .blocked)
-  #expect(report.summary.attention == .required)
-  #expect(
-    report.surfaces.map(\.id)
-      == ["quota_overview", "usage_this_device", "usage_account", "account"])
-  #expect(report.sources.count == 1)
-  #expect(report.sources[0].code == "local_identity_reset")
-  #expect(report.sources[0].recovery == .login)
-  #expect(report.textReport.contains("local_state"))
 }
 
 @Test
@@ -962,33 +437,6 @@ func decodesUnifiedDiagnosticsAndRejectsUnknownFields() throws {
       LocalServiceDiagnosticReport.self,
       from: JSONSerialization.data(withJSONObject: unsafe))
   }
-}
-
-@Test
-func decodesQuotaUploadAttemptKind() throws {
-  let data = Data(
-    #"""
-    {
-      "schema_version":3,
-      "generated_at":"2026-08-11T00:00:00Z",
-      "client":{"name":"QuotaBar","version":"0.0.7"},
-      "summary":{"operation":"healthy","attention":"none"},
-      "surfaces":[
-        {"id":"quota_overview","status":"ok","data":"current","last_success_at":"2026-08-11T00:00:00Z","message":"1 subscription shown.","recovery":"none"},
-        {"id":"usage_this_device","status":"ok","data":"empty","last_success_at":null,"message":"No Usage records.","recovery":"none"},
-        {"id":"usage_account","status":"ok","data":"empty","last_success_at":null,"message":"Usage from this Mac is part of your account totals.","recovery":"none"},
-        {"id":"account","status":"ok","data":"current","last_success_at":"2026-08-11T00:00:00Z","message":"Signed in.","recovery":"none"}
-      ],
-      "sources":[{"subject":"quota_upload","source_id":null,"status":"ok","last_attempt_at":"2026-08-11T00:00:00Z","last_success_at":"2026-08-11T00:00:00Z","code":null,"message":"Readings from this Mac are part of your account.","recovery":"none"}],
-      "recent":[{"kind":"quota_upload","subject":null,"started_at":"2026-08-11T00:00:00Z","duration_ms":12,"outcome":"success","code":null}]
-    }
-    """#.utf8
-  )
-  let report = try QuotaWireCodec.makeDecoder().decode(
-    LocalServiceDiagnosticReport.self, from: data)
-  #expect(report.recent[0].kind == .quotaUpload)
-  #expect(report.sources[0].subject == "quota_upload")
-  #expect(DiagnosticsPresentation.sourceTitle(subject: "quota_upload", sourceID: nil) == "Quota sync")
 }
 
 @Test
@@ -1228,15 +676,6 @@ func decodesLocalUsagePeriodClientProviderModelSummary() throws {
 }
 
 @Test
-func decodesCursorBillingAgent() throws {
-  let decoded = try QuotaWireCodec.makeDecoder().decode(
-    BillingAgent.self,
-    from: Data(#""cursor""#.utf8)
-  )
-  #expect(decoded == .cursor)
-}
-
-@Test
 func decodesCollectionReportAndCalculatesRemainingQuota() throws {
   let data = Data(
     #"""
@@ -1317,9 +756,10 @@ func rejectsCollectionResultWithoutSnapshots() {
   }
 }
 
-/// One agent's rescanned hours, as QuotaBar restates the contract it uploads.
+/// The cases every runtime answers are `wire-conformance.json` (`WireConformanceTests`); these
+/// are the two edges of QuotaBar's own restatement the fixture does not name.
 @Test
-func decodesUsageUploadAndConservesTokenSubsets() throws {
+func aModelNameOver128CharactersOrAnImpossibleHourIsRefused() throws {
   let data = Data(
     #"""
     {
@@ -1356,22 +796,6 @@ func decodesUsageUploadAndConservesTokenSubsets() throws {
     """#.utf8
   )
 
-  let upload = try QuotaWireCodec.makeDecoder().decode(UsageUpload.self, from: data)
-  #expect(upload.protocolVersion == WireCodec.managedDataProtocolVersion)
-  #expect(upload.hours.first?.scanVersion == 7)
-  #expect(upload.hours.first?.rows.first?.inputTokens == 1000)
-
-  // An hour with nothing left in it is how a device says a scan found none.
-  var emptyObject = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-  var emptyHours = try #require(emptyObject["hours"] as? [[String: Any]])
-  emptyHours[0]["rows"] = []
-  emptyHours[0]["partial"] = true
-  emptyObject["hours"] = emptyHours
-  let empty = try QuotaWireCodec.makeDecoder().decode(
-    UsageUpload.self, from: try JSONSerialization.data(withJSONObject: emptyObject))
-  #expect(empty.hours.first?.rows.isEmpty == true)
-  #expect(empty.hours.first?.partial == true)
-
   var modelBoundaryObject = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
   var boundaryHours = try #require(modelBoundaryObject["hours"] as? [[String: Any]])
   var boundaryRows = try #require(boundaryHours[0]["rows"] as? [[String: Any]])
@@ -1389,15 +813,6 @@ func decodesUsageUploadAndConservesTokenSubsets() throws {
       UsageUpload.self, from: try JSONSerialization.data(withJSONObject: modelBoundaryObject))
   }
 
-  let invalid = Data(
-    String(decoding: data, as: UTF8.self).replacingOccurrences(
-      of: #""cache_read_tokens": 100"#,
-      with: #""cache_read_tokens": 1001"#
-    ).utf8)
-  #expect(throws: DecodingError.self) {
-    _ = try QuotaWireCodec.makeDecoder().decode(UsageUpload.self, from: invalid)
-  }
-
   let invalidHour = Data(
     String(decoding: data, as: UTF8.self).replacingOccurrences(
       of: "2026-08-02T12:00:00Z",
@@ -1406,83 +821,6 @@ func decodesUsageUploadAndConservesTokenSubsets() throws {
   #expect(throws: DecodingError.self) {
     _ = try QuotaWireCodec.makeDecoder().decode(UsageUpload.self, from: invalidHour)
   }
-
-  // Two rows with one identity are two answers to the same question.
-  var duplicatedObject = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-  var duplicatedHours = try #require(duplicatedObject["hours"] as? [[String: Any]])
-  var duplicatedRows = try #require(duplicatedHours[0]["rows"] as? [[String: Any]])
-  duplicatedRows.append(try #require(duplicatedRows.first))
-  duplicatedHours[0]["rows"] = duplicatedRows
-  duplicatedObject["hours"] = duplicatedHours
-  #expect(throws: DecodingError.self) {
-    _ = try QuotaWireCodec.makeDecoder().decode(
-      UsageUpload.self, from: try JSONSerialization.data(withJSONObject: duplicatedObject))
-  }
-
-  // One hour named twice is not an hour this upload can replace.
-  var repeatedObject = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-  var repeatedHours = try #require(repeatedObject["hours"] as? [[String: Any]])
-  repeatedHours.append(try #require(repeatedHours.first))
-  repeatedObject["hours"] = repeatedHours
-  #expect(throws: DecodingError.self) {
-    _ = try QuotaWireCodec.makeDecoder().decode(
-      UsageUpload.self, from: try JSONSerialization.data(withJSONObject: repeatedObject))
-  }
-}
-
-@Test
-func decodesVersionedPricingCatalogWithoutRequiringBuiltInEntries() throws {
-  let emptyData = Data(
-    #"""
-    {
-      "protocol_version": 2,
-      "revision": "pricing_empty",
-      "published_at": "2026-08-02T00:00:00Z",
-      "entries": []
-    }
-    """#.utf8
-  )
-  let empty = try QuotaWireCodec.makeDecoder().decode(PricingCatalog.self, from: emptyData)
-  #expect(empty.entries.isEmpty)
-
-  let data = Data(
-    #"""
-    {
-      "protocol_version": 2,
-      "revision": "pricing_1",
-      "published_at": "2026-08-02T00:00:00Z",
-      "entries": [{
-        "entry_id": "openai_gpt_5_default",
-        "billing_channel": "openai_direct",
-        "model": "gpt-5",
-        "aliases": ["gpt-5-latest"],
-        "effective_from": "2026-08-01",
-        "effective_to": null,
-        "service_tier": "default",
-        "speed": "standard",
-        "inference_geo": "global",
-        "context_bucket": "le_128k",
-        "currency": "USD",
-        "rates": {
-          "uncached_input_per_million": "1.25",
-          "cache_read_per_million": "0.125",
-          "cache_write_5m_per_million": null,
-          "cache_write_1h_per_million": null,
-          "cache_write_inferred_per_million": null,
-          "output_per_million": "10",
-          "web_search_per_request": null,
-          "web_fetch_per_request": null
-        },
-        "source_url": "https://example.com/pricing",
-        "verified_at": "2026-08-02T00:00:00Z"
-      }]
-    }
-    """#.utf8
-  )
-
-  let catalog = try QuotaWireCodec.makeDecoder().decode(PricingCatalog.self, from: data)
-  #expect(catalog.entries.first?.rates.uncachedInputPerMillion == "1.25")
-  #expect(catalog.entries.first?.sourceURL.scheme == "https")
 }
 
 /// The Account read answers a period without `projects`: attribution stays on the Mac that made

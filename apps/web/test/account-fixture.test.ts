@@ -29,24 +29,12 @@ function asPeriod(body: unknown): PeriodBody {
   return body as PeriodBody;
 }
 
-test("period fixture parses for a preset and a custom range", () => {
-  const today = asPeriod(
-    accountUsagePeriod("2026-08-26", "2026-08-26", "Asia/Singapore", {
-      breakdown: true,
-    }),
-  );
-  assert.equal(today.request.from, "2026-08-26");
-  const week = asPeriod(
-    accountUsagePeriod("2026-08-20", "2026-08-26", "Asia/Singapore", {
-      breakdown: true,
-      summary: screenshotAccountSummary(),
-    }),
-  );
-  assert.ok(Array.isArray(week.days));
-});
-
 test("period fixture days sum to totals and omit one date in a week", () => {
   const visual = screenshotAccountSummary();
+  const preset = asPeriod(
+    accountUsagePeriod("2026-08-26", "2026-08-26", "Asia/Singapore", { breakdown: true }),
+  );
+  assert.equal(preset.request.from, "2026-08-26");
   const today = asPeriod(
     accountUsagePeriod("2026-09-19", "2026-09-19", "UTC", {
       breakdown: true,

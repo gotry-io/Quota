@@ -5,7 +5,7 @@ import Testing
 
 struct MenuBarSettingsFormTests {
   @Test
-  func theFormsCombinedControlIsDisabledWhenFourProvidersAreNamed() {
+  func combinedIsOfferedForTwoOrThreeNamedProvidersAndNotForFour() {
     let four: [ProviderID] = [.codex, .claude, .grok, .cursor]
     let layout = MenuBarLayout.resolve(
       selection: .providers(four),
@@ -17,10 +17,7 @@ struct MenuBarSettingsFormTests {
     #expect(!layout.isCombinedEnabled)
     #expect(layout == .items(four))
     #expect(layout.effectiveArrangement == .separate)
-  }
 
-  @Test
-  func combinedStaysAvailableForTwoOrThreeNamedProviders() {
     let three: [ProviderID] = [.codex, .claude, .grok]
     let packed = MenuBarLayout.resolve(
       selection: .providers(three),
@@ -54,11 +51,5 @@ struct MenuBarSettingsFormTests {
       visibleProviders: visible
     )
     #expect(alreadyNamed == .provider(.codex))
-  }
-
-  @Test
-  func stylePickerIsAMenuBecauseThereAreFiveStyles() {
-    #expect(MenuBarStylePreference.allCases.count == 5)
-    #expect(!MenuBarStylePreference.usesSegmentedPicker)
   }
 }

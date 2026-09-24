@@ -6,31 +6,19 @@ import Testing
 
 struct QuitDecisionTests {
   @Test
-  func windowAndPlainQuitClosesTheWindow() {
+  func onlyAPlainQuitWithTheWindowOpenClosesTheWindowInsteadOfQuitting() {
     #expect(
       QuitDecision.resolve(
         windowPresented: true, fullQuitRequested: false, systemQuit: false
       ) == .closeWindow)
-  }
-
-  @Test
-  func windowAndFullQuitTerminates() {
     #expect(
       QuitDecision.resolve(
         windowPresented: true, fullQuitRequested: true, systemQuit: false
       ) == .terminate)
-  }
-
-  @Test
-  func windowAndSystemQuitTerminates() {
     #expect(
       QuitDecision.resolve(
         windowPresented: true, fullQuitRequested: false, systemQuit: true
       ) == .terminate)
-  }
-
-  @Test
-  func noWindowTerminates() {
     #expect(
       QuitDecision.resolve(
         windowPresented: false, fullQuitRequested: false, systemQuit: false

@@ -44,7 +44,7 @@ const fixture = conformanceJson as unknown as {
     recorded_oldest: string | null;
     watermark: string | null;
     chunk_oldest: string;
-    answer: "absent" | { oldest_bucket_start?: string };
+    answer: "absent" | { oldest_bucket_start?: string; duration_seconds?: number };
   }[];
   reseed_oldest: {
     name: string;

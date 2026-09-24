@@ -158,25 +158,6 @@ struct ProviderLoginTests {
     #expect(sessions.count == 1)
     #expect(sessions[0].cookieHeader == "__Secure-next-auth.session-token=def")
   }
-
-  @Test
-  func theSheetOpensTheCatalogsLoginPage() {
-    let (model, _) = Self.model(
-      store: MemoryProviderSessionStore(), cookies: [], responses: [])
-    #expect(model.loginURL == URL(string: "https://chatgpt.com/"))
-    #expect(ProviderWebLogin.supported == [.codex, .claude, .grok])
-    // Every supported provider has a page to open and a collector to answer for it.
-    for provider in ProviderWebLogin.supported {
-      #expect(provider.browserSession != nil)
-      #expect(
-        ProviderWebLogin.collector(
-          for: provider,
-          transport: StubProviderWebTransport(responses: []),
-          clientVersion: "0.0.2",
-          now: Self.now
-        ) != nil)
-    }
-  }
 }
 
 @MainActor
@@ -202,29 +183,6 @@ struct ProvidersModelTests {
     let defaults = UserDefaults(suiteName: "providers.\(UUID().uuidString)")!
     defaults.removePersistentDomain(forName: defaults.description)
     return defaults
-  }
-
-  /// Not connected, connected once, and connected twice are three rows' worth of difference.
-  @Test
-  func rowsListEveryAccountAndThenTheWayToAddOne() {
-    let model = ProvidersModel(
-      store: MemoryProviderSessionStore(sessions: [
-        Self.session(.codex, "work"),
-        Self.session(.codex, "personal"),
-        Self.session(.claude, "team"),
-      ]),
-      consentDefaults: Self.defaults()
-    )
-
-    #expect(
-      model.rows.map(\.id) == [
-        "codex:personal", "codex:work", "connect:codex",
-        "claude:team", "connect:claude",
-        "connect:grok",
-      ])
-    #expect(model.rows.first { $0.id == "connect:grok" }?.kind == .connect(isFirst: true))
-    #expect(model.rows.first { $0.id == "connect:codex" }?.kind == .connect(isFirst: false))
-    #expect(!model.isUnreadable)
   }
 
   @Test

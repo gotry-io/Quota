@@ -5,21 +5,10 @@ import QuotaWire
 import Testing
 
 struct ProviderStatusClientTests {
+  /// A status page is read for its indicator and description; an indicator this build does not
+  /// name is no reading rather than a guessed one.
   @Test
-  func catalogEndpointsMatchTheFourStatuspageV2Providers() {
-    #expect(ProviderStatusPages.endpoints.map(\.0) == [.codex, .claude, .kimi, .cursor])
-    #expect(
-      ProviderStatusPages.endpoints.map(\.1.absoluteString) == [
-        "https://status.openai.com/api/v2/status.json",
-        "https://status.claude.com/api/v2/status.json",
-        "https://status.moonshot.cn/api/v2/status.json",
-        "https://status.cursor.com/api/v2/status.json",
-      ]
-    )
-  }
-
-  @Test
-  func parseTakesIndicatorAndDescriptionOnly() throws {
+  func aPageIsReadForItsIndicatorAndAnUnknownIndicatorIsNoReading() throws {
     let data = Data(
       #"{"page":{"id":"x"},"status":{"indicator":"minor","description":"Partial System Outage"}}"#
         .utf8)
@@ -29,12 +18,11 @@ struct ProviderStatusClientTests {
     #expect(reading.provider == .codex)
     #expect(reading.indicator == .minor)
     #expect(reading.description == "Partial System Outage")
-  }
 
-  @Test
-  func parseRejectsUnknownIndicators() {
-    let data = Data(#"{"status":{"indicator":"maintenance","description":"Scheduled"}}"#.utf8)
-    #expect(ProviderStatusClient.parse(data, provider: .codex, checkedAt: Date()) == nil)
+    let unknown = Data(#"{"status":{"indicator":"maintenance","description":"Scheduled"}}"#.utf8)
+    #expect(
+      ProviderStatusClient.parse(
+        unknown, provider: .codex, checkedAt: Date(timeIntervalSince1970: 0)) == nil)
   }
 
   @Test
@@ -109,29 +97,6 @@ struct ProviderStatusClientTests {
     let readings = await client.refresh()
     #expect(readings.contains { $0.provider == .claude && $0.indicator == .none })
     #expect(transport.callCount > 0)
-  }
-
-  @Test
-  func persistedReadingsSurviveANewClient() async throws {
-    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
-      UUID().uuidString, isDirectory: true)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let store = ProtectedFileProviderStatusStore(directory: directory)
-    let reading = ProviderStatusReading(
-      provider: .cursor,
-      indicator: .major,
-      description: "Outage",
-      checkedAt: Date(timeIntervalSince1970: 2)
-    )
-    try store.save([reading])
-    let client = ProviderStatusClient(
-      store: store,
-      userAgent: "Quota/test",
-      now: { Date(timeIntervalSince1970: 3) }
-    )
-    let persisted = await client.persistedReadings()
-    #expect(persisted.contains { $0.provider == .cursor && $0.indicator == .major })
   }
 }
 

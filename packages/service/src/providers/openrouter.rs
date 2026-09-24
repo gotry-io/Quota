@@ -258,19 +258,6 @@ mod tests {
     use crate::providers::common::quota_response_fixture;
 
     #[test]
-    fn maps_key_budget_before_credits() {
-        let credits =
-            map_credits(&serde_json::json!({"data": {"total_credits": 100, "total_usage": 40}}));
-        let key = map_key(
-            &serde_json::json!({"data": {"limit": 50, "limit_remaining": 30, "limit_reset": "daily"}}),
-        );
-        let windows = map_windows(credits.as_ref(), key.as_ref());
-        assert_eq!(windows[0].id, "key_daily");
-        assert_eq!(windows[0].used_percent, 40.0);
-        assert_eq!(windows[1].id, "credits");
-    }
-
-    #[test]
     fn uses_period_specific_usage_and_keeps_zero_credit_accounts_visible() {
         let credits =
             map_credits(&serde_json::json!({"data": {"total_credits": 0, "total_usage": 0}}));

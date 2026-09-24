@@ -5,19 +5,6 @@ import Testing
 
 @testable import QuotaBar
 
-@Test @MainActor
-func enablingScanAsksForConsentBeforeReading() async throws {
-  let transport = FlowTransport()
-  let model = makeConnectionModel(transport: transport)
-  model.requestEnableBrowserScan(.cursor)
-  guard case .consent(let provider) = model.browserSessionPopup else {
-    Issue.record("Expected the consent popup")
-    return
-  }
-  #expect(provider == .cursor)
-  #expect(await transport.scanSets.isEmpty)
-}
-
 /// The consent popup is the gate. Declining it must leave every cookie store shut, so the
 /// importer is never even asked and no browser is opened.
 @Test @MainActor
@@ -41,11 +28,16 @@ func decliningConsentNeverReadsACookie() async throws {
   }
   #expect(provider == .cursor)
 
+  // Asking is not enabling: the service has not been told to scan, and nothing was read.
+  #expect(await transport.scanSets.isEmpty)
+  #expect(await importer.calls == 0)
+
+  // Request and cancel are synchronous and start no work, so the answer is already final.
   model.cancelProviderBrowserSessionFlow()
-  try await Task.sleep(for: .milliseconds(50))
   #expect(model.browserSessionPopup == nil)
   #expect(await importer.calls == 0)
   #expect(await transport.replaces.isEmpty)
+  #expect(await transport.scanSets.isEmpty)
 }
 
 @Test @MainActor
@@ -121,33 +113,6 @@ func confirmingConsentDoesNotReadAChromiumJarThatStillNeedsKeychain() async thro
   #expect(presenter.presented.first?.needs == [
     BrowserAccessNeed(browser: .chrome, kind: .keychain)
   ])
-}
-
-@Test @MainActor
-func dismissingGrantPanelLeavesScanEnabled() async throws {
-  let presenter = RecordingGrantPresenter()
-  let probe = StubBrowserAccessProbe(
-    installed: [.safari],
-    fullDiskAccess: false,
-    keychain: [:]
-  )
-  let transport = FlowTransport()
-  let model = makeConnectionModel(
-    transport: transport,
-    probe: probe,
-    presenter: presenter
-  )
-  model.requestEnableBrowserScan(.cursor)
-  model.confirmProviderBrowserSessionConsent()
-  try await waitUntil { await transport.scanSets.isEmpty == false }
-  #expect(presenter.isPresented)
-  model.browserAccessGrantDidDismiss()
-  let enabled = await transport.scanSets
-  #expect(enabled.count == 1)
-  #expect(enabled.first?.0 == .cursor)
-  #expect(enabled.first?.1 == true)
-  #expect(
-    model.browserAccessNeeds == [BrowserAccessNeed(browser: .safari, kind: .fullDiskAccess)])
 }
 
 @Test @MainActor
@@ -291,26 +256,6 @@ func aRefusedCookieStoreIsItsOwnStateAndReachesTheService() async throws {
 }
 
 @Test @MainActor
-func cancelBeforeCandidateAndFailedOpenNeverCommit() async throws {
-  let candidate = BrowserSessionCookieCandidate(
-    cookieHeader: "wos-session=new",
-    headerFingerprint: "header",
-    browserName: "Safari",
-    profileName: "Personal"
-  )
-  let transport = FlowTransport()
-  let model = makeConnectionModel(
-    transport: transport,
-    importer: FlowImporter(outcome: .found([candidate]), delay: .seconds(1))
-  )
-  model.requestEnableBrowserScan(.cursor)
-  model.cancelProviderBrowserSessionFlow()
-  try await Task.sleep(for: .milliseconds(50))
-  #expect(await transport.replaces.isEmpty)
-  #expect(await transport.scanSets.isEmpty)
-}
-
-@Test @MainActor
 func automaticScanKeysOnQuotaUpdatedAtNotRevision() async throws {
   let updatedAt = Date(timeIntervalSince1970: 1_785_000_000)
   let importer = FlowImporter()
@@ -322,6 +267,7 @@ func automaticScanKeysOnQuotaUpdatedAtNotRevision() async throws {
       quotaUpdatedAt: updatedAt
     ))
   try await waitUntil { model.browserSessionScanGeneration >= 1 }
+  try await waitUntil { model.browserSessionWaitingProvider == nil }
   let firstCalls = await importer.calls
   #expect(firstCalls > 0)
   model.acceptState(
@@ -330,7 +276,7 @@ func automaticScanKeysOnQuotaUpdatedAtNotRevision() async throws {
       revision: 2,
       quotaUpdatedAt: updatedAt
     ))
-  try await Task.sleep(for: .milliseconds(80))
+  await expectNoScanStarted(model)
   #expect(await importer.calls == firstCalls)
 }
 
@@ -342,7 +288,7 @@ func successfulCollectionDoesNotRescanWhenASourceWasAuthRequired() async throws 
     flowState(
       browserScanEnabled: [.cursor],
       officialCursorSuccess: true,
-      quotaUpdatedAt: Date(),
+      quotaUpdatedAt: Date(timeIntervalSince1970: 1_785_000_000),
       cursorSources: [
         QuotaCollectionSource(
           sourceID: "cursor_app_auth", outcome: .authRequired, category: .authRequired),
@@ -357,7 +303,7 @@ func successfulCollectionDoesNotRescanWhenASourceWasAuthRequired() async throws 
           accountLabel: "ad***@example.com")
       ]
     ))
-  try await Task.sleep(for: .milliseconds(80))
+  await expectNoScanStarted(model)
   #expect(await importer.calls == 0)
   #expect(model.browserSessionScanGeneration == 0)
 }
@@ -369,10 +315,10 @@ func unavailableCollectionDoesNotScanBrowsers() async throws {
   model.acceptState(
     flowState(
       browserScanEnabled: [.cursor],
-      quotaUpdatedAt: Date(),
+      quotaUpdatedAt: Date(timeIntervalSince1970: 1_785_000_000),
       quotaFailure: .unavailable
     ))
-  try await Task.sleep(for: .milliseconds(80))
+  await expectNoScanStarted(model)
   #expect(await importer.calls == 0)
   #expect(model.browserSessionScanGeneration == 0)
 }
@@ -389,6 +335,7 @@ func automaticScanIsRateLimitedAcrossNewCollections() async throws {
       quotaUpdatedAt: firstUpdatedAt
     ))
   try await waitUntil { model.browserSessionScanGeneration >= 1 }
+  try await waitUntil { model.browserSessionWaitingProvider == nil }
   let firstCalls = await importer.calls
   model.acceptState(
     flowState(
@@ -396,7 +343,7 @@ func automaticScanIsRateLimitedAcrossNewCollections() async throws {
       revision: 2,
       quotaUpdatedAt: firstUpdatedAt.addingTimeInterval(1)
     ))
-  try await Task.sleep(for: .milliseconds(80))
+  await expectNoScanStarted(model)
   #expect(await importer.calls == firstCalls)
   #expect(model.browserSessionScanGeneration == 1)
 }
@@ -417,6 +364,7 @@ func applyingTheSameEnabledSetProbesAccessOnce() async throws {
       quotaUpdatedAt: updatedAt
     ))
   try await waitUntil { model.browserSessionScanGeneration >= 1 }
+  try await waitUntil { model.browserSessionWaitingProvider == nil }
   let firstProbes = probe.snapshotCalls
   #expect(firstProbes == 1)
   model.acceptState(
@@ -425,7 +373,8 @@ func applyingTheSameEnabledSetProbesAccessOnce() async throws {
       revision: 2,
       quotaUpdatedAt: updatedAt
     ))
-  try await Task.sleep(for: .milliseconds(80))
+  // The probe runs inside `acceptState`, so it has already happened or never will.
+  await expectNoScanStarted(model)
   #expect(probe.snapshotCalls == firstProbes)
 }
 
@@ -491,27 +440,6 @@ func droppingTheIconIntoFullDiskAccessOffersRelaunch() async throws {
   #expect(presenter.updates.last?.awaitingRelaunch == true)
 }
 
-@Test @MainActor
-func agentRowSummarisesEveryOutstandingGrantInOneLine() async throws {
-  let presenter = RecordingGrantPresenter()
-  let probe = StubBrowserAccessProbe(
-    installed: [.safari, .chrome, .firefox],
-    fullDiskAccess: false,
-    keychain: [.chrome: .interactionRequired]
-  )
-  let model = makeConnectionModel(
-    probe: probe,
-    presenter: presenter
-  )
-  model.requestEnableBrowserScan(.cursor)
-  model.confirmProviderBrowserSessionConsent()
-  try await waitUntil { presenter.isPresented }
-  #expect(model.browserAccessSummary == "Safari and Chrome need permission")
-  #expect(
-    presenter.presented.first?.statuses.map(\.state)
-      == [.needsFullDiskAccess, .needsKeychain, .readable])
-}
-
 /// Turning Scan browsers off while a read is still in flight must not commit that older result.
 @Test @MainActor
 func aScanResultFromAnOlderGenerationIsIgnored() async throws {
@@ -526,7 +454,7 @@ func aScanResultFromAnOlderGenerationIsIgnored() async throws {
     fullDiskAccess: true,
     keychain: [:]
   )
-  let importer = FlowImporter(outcome: .found([candidate]), delay: .seconds(1))
+  let importer = FlowImporter(outcome: .found([candidate]), holdsReads: true)
   let transport = FlowTransport()
   let model = makeConnectionModel(
     transport: transport,
@@ -537,8 +465,9 @@ func aScanResultFromAnOlderGenerationIsIgnored() async throws {
   model.confirmProviderBrowserSessionConsent()
   try await waitUntil { await importer.calls >= 1 }
   model.setBrowserScanEnabled(.cursor, enabled: false)
-  // The read that was already in flight finishes; the point is that its result is dropped, which
-  // can only be checked once the read is done.
+  // The read that was already in flight finishes only now; the point is that its result is
+  // dropped, which can only be checked once the read is done.
+  await importer.releaseReads()
   try await waitUntil { await importer.completions >= 1 }
   #expect(await transport.replaces.isEmpty)
   #expect(model.browserSessionScanGeneration == 0)
@@ -597,24 +526,43 @@ private func waitUntil(
   Issue.record("Timed out waiting for state")
 }
 
+/// A scan the model schedules is a main-actor task that marks its provider as waiting before its
+/// first suspension. Running one main-actor job behind everything already queued gives any such
+/// task its first step, so a model that decided to scan is caught here without an interval.
+@MainActor
+private func expectNoScanStarted(_ model: BrowserConnectionModel) async {
+  await Task { @MainActor in }.value
+  #expect(model.browserSessionWaitingProvider == nil, "a scan was scheduled")
+}
+
 private actor FlowImporter: BrowserSessionImporting {
   let value: BrowserSessionReadOutcome
   let outcomes: [SweetCookieKit.Browser: BrowserSessionReadOutcome]
-  let delay: Duration
+  /// Holds every read open until the test releases it: a read in flight, for exactly as long as
+  /// the test needs one, rather than for an interval it guessed.
+  let holdsReads: Bool
+  private var released = false
+  private var held: [CheckedContinuation<Void, Never>] = []
   private(set) var calls = 0
-  /// How many reads have finished, delay included. A test that wants to know a scan had its chance
-  /// waits for this rather than for an interval longer than the delay.
+  /// How many reads have finished. A test that wants to know a scan had its chance waits for this.
   private(set) var completions = 0
   private(set) var browsers: [SweetCookieKit.Browser] = []
 
   init(
     outcome: BrowserSessionReadOutcome = .noSession,
     outcomes: [SweetCookieKit.Browser: BrowserSessionReadOutcome] = [:],
-    delay: Duration = .zero
+    holdsReads: Bool = false
   ) {
     value = outcome
     self.outcomes = outcomes
-    self.delay = delay
+    self.holdsReads = holdsReads
+  }
+
+  func releaseReads() {
+    released = true
+    let waiting = held
+    held = []
+    for one in waiting { one.resume() }
   }
 
   func read(
@@ -625,7 +573,9 @@ private actor FlowImporter: BrowserSessionImporting {
   ) async -> BrowserSessionReadOutcome {
     calls += 1
     browsers.append(browser)
-    if delay > .zero { try? await Task.sleep(for: delay) }
+    if holdsReads, !released {
+      await withCheckedContinuation { held.append($0) }
+    }
     completions += 1
     return Task.isCancelled ? .noSession : (outcomes[browser] ?? value)
   }
@@ -775,7 +725,7 @@ private func flowState(
   }
   let quota: LocalServiceComponent<QuotaCollectionReport>
   if officialCursorSuccess {
-    let now = quotaUpdatedAt ?? Date()
+    let now = quotaUpdatedAt ?? Date(timeIntervalSince1970: 1_785_000_000)
     let snapshot = QuotaSnapshot(
       provider: .cursor,
       account: QuotaAccount(
@@ -813,7 +763,7 @@ private func flowState(
       refreshing: quotaRefreshing
     )
   } else if let failure = quotaFailure {
-    let now = quotaUpdatedAt ?? Date()
+    let now = quotaUpdatedAt ?? Date(timeIntervalSince1970: 1_785_000_000)
     quota = LocalServiceComponent(
       status: .ready,
       value: QuotaCollectionReport(

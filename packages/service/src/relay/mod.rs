@@ -3178,14 +3178,13 @@ mod tests {
             resolve_device_display_name([Some("\u{0007}Kitchen Mac".to_owned())], "QuotaBar"),
             "Kitchen Mac"
         );
-    }
-
-    #[test]
-    fn local_device_display_name_is_a_bounded_host_label() {
-        let name = local_device_display_name("QuotaBar");
-        assert!(!name.is_empty());
-        assert!(name.len() <= 128);
-        assert!(!name.chars().any(char::is_control));
+        // A display name is at most 128 characters: a longer host name is cut, not sent whole.
+        assert_eq!(
+            resolve_device_display_name([Some("M".repeat(200))], "QuotaBar")
+                .chars()
+                .count(),
+            128
+        );
     }
 
     #[test]
@@ -3197,17 +3196,6 @@ mod tests {
         });
         assert!(validate_device_profile_response(&response, Some("device_current")).is_ok());
         assert!(validate_device_profile_response(&response, Some("device_other")).is_err());
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn macos_prefers_computer_name_over_product_fallback() {
-        let Some(computer_name) =
-            macos_computer_name().and_then(|value| cleaned_device_name(&value))
-        else {
-            return;
-        };
-        assert_eq!(local_device_display_name("QuotaBar"), computer_name);
     }
 
     #[test]
@@ -3311,43 +3299,11 @@ mod tests {
         assert!(validate_upload_response(&response, &named).is_err());
     }
 
-    /// A truncation marker means one thing, so a payload that says otherwise is refused.
+    /// A cost read from Relay is refused when it contradicts itself: a basis that disagrees with
+    /// its amount, a repeated assumption, unpriced rows that do not add up, or a truncation
+    /// marker that says otherwise.
     #[test]
-    fn report_truncation_markers_are_strict() {
-        let mut cost = serde_json::json!({
-            "mode": "reported",
-            "basis": "reported",
-            "status": "partial",
-            "amount_microusd": "1",
-            "catalog_revision": null,
-            "calculated_rows": 0,
-            "reported_rows": 1,
-            "unpriced_rows": 2,
-            "assumptions": [],
-            "unpriced": [{
-                "billing_channel": "openai_direct",
-                "model": "model",
-                "reason": "missing_rate",
-                "rows": 1
-            }],
-            "unpriced_truncated": true
-        });
-        assert!(validate_usage_cost(&cost).is_ok());
-        // A model is provider-owned opaque text.
-        cost["unpriced"][0]["model"] = serde_json::json!("GPT-5.5[1m]");
-        assert!(validate_usage_cost(&cost).is_ok());
-        cost["unpriced"][0]["model"] = serde_json::json!("model\u{0001}");
-        assert!(validate_usage_cost(&cost).is_err());
-        cost["unpriced"][0]["model"] = serde_json::json!("model");
-        cost["unpriced"][0]["rows"] = serde_json::json!(3);
-        assert!(validate_usage_cost(&cost).is_err());
-        cost["unpriced"][0]["rows"] = serde_json::json!(1);
-        cost["unpriced_truncated"] = serde_json::json!(false);
-        assert!(validate_usage_cost(&cost).is_err());
-    }
-
-    #[test]
-    fn usage_cost_requires_consistent_basis_status_amount_and_assumptions() {
+    fn a_usage_cost_that_contradicts_itself_is_refused() {
         let mut cost = serde_json::json!({
             "mode": "reported",
             "basis": "reported",
@@ -3373,6 +3329,23 @@ mod tests {
         assert!(validate_usage_cost(&cost).is_err());
         cost["amount_microusd"] = serde_json::json!("1");
         cost["assumptions"] = serde_json::json!(["source_reported", "source_reported"]);
+        assert!(validate_usage_cost(&cost).is_err());
+        cost["assumptions"] = serde_json::json!([]);
+
+        // A truncated list names fewer rows than it counts, and says so.
+        cost["unpriced_rows"] = serde_json::json!(2);
+        cost["unpriced_truncated"] = serde_json::json!(true);
+        assert!(validate_usage_cost(&cost).is_ok());
+        // A model is provider-owned opaque text, but never control characters.
+        cost["unpriced"][0]["model"] = serde_json::json!("GPT-5.5[1m]");
+        assert!(validate_usage_cost(&cost).is_ok());
+        cost["unpriced"][0]["model"] = serde_json::json!("model\u{0001}");
+        assert!(validate_usage_cost(&cost).is_err());
+        cost["unpriced"][0]["model"] = serde_json::json!("model");
+        cost["unpriced"][0]["rows"] = serde_json::json!(3);
+        assert!(validate_usage_cost(&cost).is_err());
+        cost["unpriced"][0]["rows"] = serde_json::json!(1);
+        cost["unpriced_truncated"] = serde_json::json!(false);
         assert!(validate_usage_cost(&cost).is_err());
     }
 
@@ -4012,13 +3985,14 @@ mod tests {
         let mut summary = valid_summary(serde_json::json!([]));
         summary["account"]["display_label"] = serde_json::json!("octocat");
         let arrived = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+        let release = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
         let (origin, server) = spawn_gated_mock(
             vec![
                 http_json_with_etag(200, "\"stamp-one\"", &summary),
                 http_json_with_etag(200, "\"0\"", &default_account_settings_document()),
             ],
-            Duration::from_millis(150),
             arrived.clone(),
+            release.clone(),
         );
         let root = std::env::temp_dir().join(format!("quota-bookkeeping-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).expect("root");
@@ -4041,6 +4015,7 @@ mod tests {
         state
             .write_session_json(&fresh_session_json())
             .expect("bump epoch");
+        open_gate(&release);
         let result = reader.join().expect("reader");
         assert!(
             result.as_ref().ok().is_some()
@@ -4077,10 +4052,11 @@ mod tests {
             "ignored": []
         });
         let arrived = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+        let release = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
         let (origin, server) = spawn_gated_mock(
             vec![http_json(200, None, &response)],
-            Duration::from_millis(150),
             arrived.clone(),
+            release.clone(),
         );
         let root =
             std::env::temp_dir().join(format!("quota-upload-epoch-{}", uuid::Uuid::new_v4()));
@@ -4099,6 +4075,7 @@ mod tests {
         state
             .write_session_json(&fresh_session_json())
             .expect("bump epoch");
+        open_gate(&release);
         let result = uploader.join().expect("uploader");
         assert!(result.is_ok(), "{result:?}");
         let _ = server.join().expect("mock server");
@@ -4114,9 +4091,7 @@ mod tests {
         std::fs::create_dir_all(&root).expect("root");
         let state = Arc::new(crate::state::StateStore::open(&root).expect("state"));
         let mut session = fresh_session_json();
-        session["session"]["access_expires_at"] = serde_json::json!(
-            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-        );
+        session["session"]["access_expires_at"] = serde_json::json!("2000-01-01T00:00:00Z");
         state.write_session_json(&session).expect("session");
         let manager = Arc::new(AccountManager::new(
             Arc::new(RelayClient::for_test(&origin).expect("test client")),
@@ -4264,10 +4239,18 @@ mod tests {
         }
     }
 
+    fn open_gate(gate: &Arc<(Mutex<bool>, std::sync::Condvar)>) {
+        let (lock, cond) = gate.as_ref();
+        *lock.lock().expect("gate") = true;
+        cond.notify_all();
+    }
+
+    /// Signals `arrived` when a request is read, then holds every response until the test
+    /// opens `release`, so the test can change local state while Relay's answer is in flight.
     fn spawn_gated_mock(
         responses: Vec<String>,
-        delay: Duration,
         arrived: Arc<(Mutex<bool>, std::sync::Condvar)>,
+        release: Arc<(Mutex<bool>, std::sync::Condvar)>,
     ) -> (String, thread::JoinHandle<Vec<String>>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("mock listener");
         let address = listener.local_addr().expect("mock address");
@@ -4281,12 +4264,8 @@ mod tests {
                 let mut request = [0_u8; 8_192];
                 let read = stream.read(&mut request).unwrap_or(0);
                 recorded.push(String::from_utf8_lossy(&request[..read]).into_owned());
-                {
-                    let (lock, cond) = arrived.as_ref();
-                    *lock.lock().expect("gate") = true;
-                    cond.notify_all();
-                }
-                thread::sleep(delay);
+                open_gate(&arrived);
+                wait_gate(&release);
                 stream
                     .write_all(response.as_bytes())
                     .expect("mock response");
@@ -4548,104 +4527,41 @@ mod tests {
         );
     }
 
+    /// Signed out, an Account read is the typed refusal that asks for sign-in.
     #[test]
-    fn account_usage_period_encodes_timezone_and_returns_body_or_304() {
-        let body = valid_account_usage_period("2026-08-26", "2026-08-26", "Asia/Singapore");
-        let (origin, server) = spawn_mock_server(vec![
-            http_json_with_etag(200, "\"period-one\"", &body),
-            http_not_modified("\"period-one\""),
-            http_json(
-                400,
-                None,
-                &serde_json::json!({"error": {"code": "invalid_request"}}),
-            ),
-        ]);
-        let client = RelayClient::for_test(&origin).expect("test client");
-
-        let (etag, first) = client
-            .account_usage_period(
-                "2026-08-26",
-                "2026-08-26",
-                "Asia/Singapore",
-                true,
-                "account-token",
-                None,
-            )
-            .expect("first period");
-        assert_eq!(etag.as_deref(), Some("\"period-one\""));
-        assert_eq!(first.as_ref(), Some(&body));
-
-        let (_, second) = client
-            .account_usage_period(
-                "2026-08-26",
-                "2026-08-26",
-                "Asia/Singapore",
-                true,
-                "account-token",
-                Some("\"period-one\""),
-            )
-            .expect("304");
-        assert!(second.is_none());
-
-        let refused = client.account_usage_period(
-            "2026-08-26",
-            "2026-08-26",
-            "Asia/Singapore",
-            true,
-            "account-token",
-            None,
-        );
-        assert!(matches!(
-            refused,
-            Err(RelayError::Rejected { status: 400, .. })
-        ));
-
-        let sent = server.join().expect("mock server");
-        assert_eq!(sent.len(), 3, "{sent:?}");
-        assert!(
-            sent[0].contains(
-                "/api/v6/account/usage/period?from=2026-08-26&to=2026-08-26&timezone=Asia%2FSingapore&breakdown=1"
-            ),
-            "{}",
-            sent[0]
-        );
-        assert!(
-            sent[1]
-                .to_ascii_lowercase()
-                .contains("if-none-match: \"period-one\""),
-            "{}",
-            sent[1]
-        );
-    }
-
-    #[test]
-    fn account_usage_period_without_a_session_is_the_typed_refusal() {
+    fn a_signed_out_account_read_is_the_typed_refusal() {
         let (origin, server) = spawn_mock_server(vec![]);
-        let root = std::env::temp_dir().join(format!(
-            "quota-account-period-signed-out-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("quota-account-signed-out-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).expect("root");
         let state = Arc::new(crate::state::StateStore::open(&root).expect("state"));
-        let manager = AccountManager::new(
+        let manager = Arc::new(AccountManager::new(
             Arc::new(RelayClient::for_test(&origin).expect("test client")),
             state,
             "Test Mac".to_owned(),
-        );
+        ));
         let cancel = AtomicBool::new(false);
-        let error = manager
+        let period = manager
             .account_usage_period("2026-08-26", "2026-08-26", "UTC", true, &cancel)
-            .expect_err("signed out");
+            .expect_err("signed out period");
         assert_eq!(
-            error.error.code,
+            period.error.code,
+            crate::protocol::ErrorCode::AuthenticationRequired
+        );
+        let settings = manager
+            .refresh_account_settings(&cancel)
+            .expect_err("signed out settings");
+        assert_eq!(
+            settings.error.code,
             crate::protocol::ErrorCode::AuthenticationRequired
         );
         drop(server);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn an_unchanged_account_period_keeps_the_cached_body() {
-        let body = valid_account_usage_period("2026-08-01", "2026-08-03", "UTC");
+        let body = valid_account_usage_period("2026-08-01", "2026-08-03", "Asia/Singapore");
         let (origin, server) = spawn_mock_server(vec![
             http_json_with_etag(200, "\"period-one\"", &body),
             http_not_modified("\"period-one\""),
@@ -4678,15 +4594,23 @@ mod tests {
         );
         let cancel = AtomicBool::new(false);
         let first = manager
-            .account_usage_period("2026-08-01", "2026-08-03", "UTC", true, &cancel)
+            .account_usage_period("2026-08-01", "2026-08-03", "Asia/Singapore", true, &cancel)
             .expect("first");
         let second = manager
-            .account_usage_period("2026-08-01", "2026-08-03", "UTC", true, &cancel)
+            .account_usage_period("2026-08-01", "2026-08-03", "Asia/Singapore", true, &cancel)
             .expect("304");
         assert_eq!(first, second);
         assert_eq!(first["coverage"]["truncated_by_retention"], false);
         let sent = server.join().expect("mock server");
         assert_eq!(sent.len(), 2, "{sent:?}");
+        // The calendar is the device's zone, sent percent-encoded, with the breakdown it draws.
+        assert!(
+            sent[0].contains(
+                "/api/v6/account/usage/period?from=2026-08-01&to=2026-08-03&timezone=Asia%2FSingapore&breakdown=1"
+            ),
+            "{}",
+            sent[0]
+        );
         assert!(!sent[0].to_ascii_lowercase().contains("if-none-match"));
         assert!(
             sent[1]
@@ -4929,33 +4853,6 @@ mod tests {
     }
 
     #[test]
-    fn account_settings_without_a_session_is_the_typed_refusal() {
-        let (origin, server) = spawn_mock_server(vec![]);
-        let root = std::env::temp_dir().join(format!(
-            "quota-account-settings-signed-out-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&root).expect("root");
-        let state = Arc::new(crate::state::StateStore::open(&root).expect("state"));
-        let manager = AccountManager::new(
-            Arc::new(RelayClient::for_test(&origin).expect("test client")),
-            state,
-            "Test Mac".to_owned(),
-        );
-        let manager = Arc::new(manager);
-        let cancel = AtomicBool::new(false);
-        let error = manager
-            .refresh_account_settings(&cancel)
-            .expect_err("signed out");
-        assert_eq!(
-            error.error.code,
-            crate::protocol::ErrorCode::AuthenticationRequired
-        );
-        drop(server);
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
     fn account_settings_put_names_history_only_when_the_write_does() {
         let alerts = serde_json::json!({
             "reset_reminders": true,
@@ -5187,12 +5084,15 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// A signed-in state with `history.sync` on, one global five-hour subscription, and these
-    /// local samples (all with the same reset two hours after `now`).
+    /// A signed-in state with `history.sync` on, one global subscription with one window
+    /// `(id, duration_seconds)`, and these local samples (all with the same reset two hours
+    /// after `now`).
     fn history_gap_state(
         now: chrono::DateTime<chrono::Utc>,
+        window: (&str, i64),
         samples: &[(chrono::DateTime<chrono::Utc>, f64)],
     ) -> (std::path::PathBuf, Arc<crate::state::StateStore>, String) {
+        let (window_id, duration_seconds) = window;
         let stamp = |instant: chrono::DateTime<chrono::Utc>| {
             instant.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         };
@@ -5216,10 +5116,10 @@ mod tests {
                     "codex",
                     &stamp(*instant),
                     &[serde_json::json!({
-                        "id": "five_hour",
+                        "id": window_id,
                         "used_percent": used,
                         "resets_at": resets,
-                        "duration_seconds": 18000
+                        "duration_seconds": duration_seconds
                     })],
                     *instant,
                 )
@@ -5238,10 +5138,10 @@ mod tests {
                             "account": {"fingerprint": "account_test", "fingerprint_scope": "global"},
                             "observed_at": stamp(now),
                             "windows": [{
-                                "id": "five_hour",
+                                "id": window_id,
                                 "used_percent": 42.5,
                                 "resets_at": resets,
-                                "duration_seconds": 18000
+                                "duration_seconds": duration_seconds
                             }]
                         }]
                     }]
@@ -5292,7 +5192,8 @@ mod tests {
         let earlier = now - chrono::Duration::hours(2);
         let bucket = history_bucket;
         let series_key = "codex\u{0}account_test\u{0}five_hour";
-        let (root, state, resets) = history_gap_state(now, &[(earlier, 30.0), (now, 42.5)]);
+        let (root, state, resets) =
+            history_gap_state(now, ("five_hour", 18_000), &[(earlier, 30.0), (now, 42.5)]);
         // This on-period already uploaded the earlier bucket. The switch then went off and on
         // on the website, so Relay holds nothing older than what this collection sends.
         let mut record = crate::state::QuotaHistorySyncRecord {
@@ -5306,6 +5207,7 @@ mod tests {
                 watermark: Some(bucket(now)),
                 oldest: Some(bucket(earlier)),
                 previous: Vec::new(),
+                adopted_duration_seconds: None,
             },
         );
         state
@@ -5383,8 +5285,11 @@ mod tests {
         let confirmed = now - chrono::Duration::hours(2);
         let bucket = history_bucket;
         let series_key = "codex\u{0}account_test\u{0}five_hour";
-        let (root, state, resets) =
-            history_gap_state(now, &[(first, 30.0), (confirmed, 35.0), (now, 42.5)]);
+        let (root, state, resets) = history_gap_state(
+            now,
+            ("five_hour", 18_000),
+            &[(first, 30.0), (confirmed, 35.0), (now, 42.5)],
+        );
         // The recorded oldest is past its span (a backfill seeds it near now − span), so only
         // the watermark Relay confirmed can say the rows went. The confirmed bucket's value is
         // already uploaded, so this collection sends only the newer one.
@@ -5403,6 +5308,7 @@ mod tests {
                     bucket_start: bucket(confirmed),
                     used_percent: 35.0,
                 }],
+                adopted_duration_seconds: None,
             },
         );
         state
@@ -5427,6 +5333,139 @@ mod tests {
         let record = state.quota_history_sync("account_1").expect("record");
         let series = record.series.get(series_key).expect("series");
         assert_eq!(series.oldest.as_deref(), Some(bucket(first).as_str()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A peer declares a weekly window one day long: Relay expires this device's rows older
+    /// than that span, and this device's own 28-day record would call it a loss on every upload,
+    /// backfill, rewrite the duration back, and the peer would shorten it again. Judged by the
+    /// duration Relay answers, it is not a loss; this device adopts the shorter duration, and the
+    /// next upload declares it and is quiet.
+    #[test]
+    fn quota_history_adopts_a_shorter_answered_duration_instead_of_backfilling_again() {
+        let now = chrono::Utc::now();
+        let old = now - chrono::Duration::days(10);
+        let confirmed = now - chrono::Duration::hours(2);
+        let weekly = |instant: chrono::DateTime<chrono::Utc>| {
+            crate::history::quota_history_bucket_start_utc(
+                &instant.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                604_800,
+            )
+            .expect("bucket")
+        };
+        let series_key = "codex\u{0}account_test\u{0}weekly";
+        let (root, state, resets) = history_gap_state(
+            now,
+            ("weekly", 604_800),
+            &[(old, 10.0), (confirmed, 20.0), (now, 30.0)],
+        );
+        let mut record = crate::state::QuotaHistorySyncRecord {
+            sync: true,
+            backfill_done: true,
+            ..Default::default()
+        };
+        record.series.insert(
+            series_key.to_owned(),
+            crate::state::QuotaHistorySeriesRecord {
+                watermark: Some(weekly(confirmed)),
+                oldest: Some(weekly(old)),
+                previous: vec![crate::history::QuotaHistorySyncedPoint {
+                    resets_at: resets.clone(),
+                    bucket_start: weekly(confirmed),
+                    used_percent: 20.0,
+                }],
+                adopted_duration_seconds: None,
+            },
+        );
+        state
+            .set_quota_history_sync("account_1", &record)
+            .expect("record");
+        let answer = |newest: &str| {
+            serde_json::json!({
+                "protocol_version": MANAGED_DATA_PROTOCOL,
+                "series": [{
+                    "provider": "codex",
+                    "fingerprint": "account_test",
+                    "window_id": "weekly",
+                    "bucket_start": newest,
+                    "oldest_bucket_start": weekly(confirmed),
+                    "duration_seconds": 86_400
+                }]
+            })
+        };
+        let cancel = AtomicBool::new(false);
+        let (origin, server) =
+            spawn_bounded_mock_server(vec![http_json(200, None, &answer(&weekly(now)))]);
+        AccountManager::new(
+            Arc::new(RelayClient::for_test(&origin).expect("client")),
+            state.clone(),
+            "Test Mac".to_owned(),
+        )
+        .sync_quota_history_after_collection(&cancel);
+        let sent = server.join().expect("server");
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert!(
+            sent[0].contains("\"duration_seconds\":604800"),
+            "{}",
+            sent[0]
+        );
+        let stored = state.quota_history_sync("account_1").expect("record");
+        assert_eq!(stored.last_error, None);
+        let series = stored.series.get(series_key).expect("series");
+        assert_eq!(series.adopted_duration_seconds, Some(86_400));
+        assert_eq!(series.oldest.as_deref(), Some(weekly(old).as_str()));
+
+        // The next collection declares the adopted duration, and the answer is quiet.
+        let later = now + chrono::Duration::seconds(1);
+        state
+            .record_quota_samples(
+                &crate::protocol::QuotaOverviewIdentity::selector_for(
+                    "codex",
+                    "account_test",
+                    "global",
+                    None,
+                ),
+                "codex",
+                &later.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                &[serde_json::json!({
+                    "id": "weekly",
+                    "used_percent": 40,
+                    "resets_at": resets,
+                    "duration_seconds": 604_800
+                })],
+                later,
+            )
+            .expect("sample");
+        let newest = crate::history::quota_history_bucket_start_utc(
+            &later.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            86_400,
+        )
+        .expect("bucket");
+        let (origin, server) =
+            spawn_bounded_mock_server(vec![http_json(200, None, &answer(&newest))]);
+        AccountManager::new(
+            Arc::new(RelayClient::for_test(&origin).expect("client")),
+            state.clone(),
+            "Test Mac".to_owned(),
+        )
+        .sync_quota_history_after_collection(&cancel);
+        let sent = server.join().expect("server");
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert!(
+            sent[0].contains("\"duration_seconds\":86400"),
+            "{}",
+            sent[0]
+        );
+        let stored = state.quota_history_sync("account_1").expect("record");
+        assert_eq!(stored.last_error, None);
+        assert_eq!(
+            stored
+                .series
+                .get(series_key)
+                .expect("series")
+                .adopted_duration_seconds,
+            Some(86_400)
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

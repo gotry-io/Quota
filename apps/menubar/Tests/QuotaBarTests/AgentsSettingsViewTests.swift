@@ -6,31 +6,6 @@ import Testing
 @MainActor
 struct AgentsSettingsViewTests {
   @Test
-  func sidebarBadgeNamesHowManyAreShownAndWhoNeedsSignIn() throws {
-    let shownKey = MainPage.storageKey
-    let previousPage = UserDefaults.standard.object(forKey: shownKey)
-    defer {
-      if let previousPage {
-        UserDefaults.standard.set(previousPage, forKey: shownKey)
-      } else {
-        UserDefaults.standard.removeObject(forKey: shownKey)
-      }
-    }
-
-    let content = try #require(
-      VisualTestConfiguration(arguments: ["QuotaBar", "--fixture", "content"])
-    )
-    content.prepareEnvironment()
-    #expect(content.makeModel().agentsSidebarBadge() == "3 shown")
-
-    let signedOut = try #require(
-      VisualTestConfiguration(arguments: ["QuotaBar", "--fixture", "empty"])
-    )
-    signedOut.prepareEnvironment()
-    #expect(signedOut.makeModel().agentsSidebarBadge() == "3 shown · 3 need sign-in")
-  }
-
-  @Test
   func reorderTargetUsesHysteresisAroundRowBoundary() {
     let rowHeight = QuotaDesign.Layout.settingsRowHeight
 
@@ -58,15 +33,12 @@ struct AgentsSettingsViewTests {
         count: 3
       ) == 1
     )
-  }
-
-  @Test
-  func reorderTargetCanCrossMultipleRowsInOneUpdate() {
+    // One update may cross several rows; the target is not held to one step.
     #expect(
       AgentsSettingsView.reorderTargetIndex(
         originIndex: 3,
         currentIndex: 3,
-        translation: -QuotaDesign.Layout.settingsRowHeight * 3,
+        translation: -rowHeight * 3,
         count: 4
       ) == 0
     )

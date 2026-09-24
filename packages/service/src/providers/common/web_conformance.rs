@@ -143,8 +143,8 @@ where
     }
 }
 
-/// Every request a case made answered the exchange at its own position, and no request carried
-/// the stored session anywhere but the `Cookie` header.
+/// Every request a case made answered the exchange at its own position and carried the stored
+/// session in the `Cookie` header, and no request carried it anywhere else.
 fn assert_requests(case: &WebCase, heads: &[String]) {
     assert!(
         heads.len() <= case.exchanges.len(),
@@ -162,6 +162,11 @@ fn assert_requests(case: &WebCase, heads: &[String]) {
             "{}: expected {expected}, sent {}",
             case.name,
             head.lines().next().unwrap_or_default()
+        );
+        assert!(
+            head.contains("\r\ncookie: "),
+            "{}: the stored session was not sent as the Cookie header",
+            case.name
         );
         assert!(
             !head.contains("authorization:"),

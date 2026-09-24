@@ -209,12 +209,12 @@ that range's; Settings opens Notifications, Appearance and About and returns, wi
 the hub; Settings › Devices is its own journey; the Overview's **Sign in to Quota** opens the sign-in
 sheet with every way in, and pulling the sheet down returns to the same Overview; the connecting,
 pending-refresh, confirm-account and local-only states assert the controls they offer, the local-only
-reading opens its detail and comes back, and a refused provider session offers **Sign in again**
-(the affordance — the provider login it starts leaves the fixture). It also asserts the seven
-essential values — Overview remaining, Today tokens, cost and the combined Today label, Usage
-headline tokens and cost, subscription remaining — at the standard size and at
-`accessibilityExtraLarge`: each exists, is hittable, carries its whole accessibility label and sits
-on screen.
+reading opens its detail and comes back and its Settings has no Devices row, and a refused provider
+session offers **Sign in again** (the affordance — the provider login it starts leaves the
+fixture). It also asserts the seven essential values — Overview remaining, Today tokens, cost and
+the combined Today label, Usage headline tokens and cost, subscription remaining — at
+`accessibilityExtraLarge`, the size that truncates first: each exists, is hittable, carries its
+whole accessibility label and sits on screen.
 
 A journey taps a control only when it is ready, the way a person could: it exists, is enabled, is
 hittable, has held the same frame across two samples, and lies inside the viewport the navigation
@@ -232,8 +232,8 @@ journey fails the job even when the count still looks right.
 check, nightly on main and on iOS-touching pull requests). One screen or state per test, launched
 straight onto it with `--route` or a fixture whose first screen it is — no census test taps through
 one screen to reach another, so a finding on one cannot hide the next one's evidence. It also owns
-what each screen says: About's copy and links, the Notifications and Appearance options, the full
-Providers matrix (Remove, Sign in again, Connect, Add Account) at every profile's size, and the
+what each screen says: About's copy and links, the Providers matrix (Remove, Connect, Add Account;
+Sign in again is the journey's) at every profile's size, and the
 local-only and merged details' history and sources. The same identity check runs on its
 `QuotaScreenUITests.swift` methods. Screens are captured light/large, dark/large and
 light/`accessibilityExtraLarge` (nightly adds dark/large-type), and audited with the app-owned
@@ -313,8 +313,10 @@ display clock is `VisualFixture.referenceDate` so period titles and activity day
 `--visual-clock wall` keeps today's clock for marketing captures.
 
 To add a scenario: add a `VisualFixture` case, a `VisualScenario.make` branch (phase, session,
-summary, usage, local readings), content in `VisualFixtureContent` if the data is new, a parser
-test, and a state test that the combination is valid and stays offline. A census test for a single screen goes in
+summary, usage, local readings), content in `VisualFixtureContent` if the data is new, and its
+launch string in the parser test's table. The state test walks every case and refuses a scenario
+that goes online or that `VisualScenario.validationIssues` rejects, so a combination the scenario
+must hold goes there, not in a test that restates the scenario's contents. A census test for a single screen goes in
 `QuotaScreenUITests` and passes `--route` (add a route rather than tap through to a second screen); a journey or an interaction contract goes in
 `QuotaSmokeUITests`, which is the required check, so add there only what a merge must not break.
 

@@ -249,8 +249,18 @@ struct UsageRangeEditor: View {
   }
 
   private var bounds: ClosedRange<Date> {
-    let earliest = UsageDateText.date(from: model.usage.usageEarliestDay) ?? displayClock.now()
-    let latest = UsageDateText.date(from: model.usage.activityToday) ?? displayClock.now()
+    Self.bounds(earliestDay: model.usage.usageEarliestDay, now: displayClock.now())
+  }
+
+  /// From the earliest day the activity read answers to today in the local calendar: the day
+  /// the Today title and the period read name, not the UTC day the activity grid is keyed on.
+  static func bounds(
+    earliestDay: String,
+    now: Date,
+    calendar: Calendar = .current
+  ) -> ClosedRange<Date> {
+    let latest = calendar.startOfDay(for: now)
+    let earliest = UsageDateText.date(from: earliestDay, calendar) ?? latest
     return earliest...max(earliest, latest)
   }
 }

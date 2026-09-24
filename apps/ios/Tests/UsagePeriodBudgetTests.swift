@@ -10,18 +10,13 @@ import Testing
   @MainActor
   struct UsagePeriodBudgetTests {
     @Test
-    func fixtureUsageOwnerMeasuresThisMonthFromThePeriodRead() async {
-      let model = AppModel.visualFixture(
-        .content,
-        now: VisualFixture.referenceDate,
-        budgetStore: VisualFixtureContent.budgetStore(amountUSD: 50)
-      )
-      await model.usage.loadBudgetPeriod(force: true)
-      guard let progress = model.usage.budgetProgress else {
-        Issue.record("A budget of $50 has progress")
-        return
-      }
-      #expect(progress.budgetUSD == 50)
+    func aCustomRangeInUTCPlus8CanEndOnTheLocalTodayBeforeTheUTCDayTurns() throws {
+      var calendar = Calendar(identifier: .gregorian)
+      calendar.timeZone = try #require(TimeZone(identifier: "Asia/Shanghai"))
+      // 07:30 on 24 September in Shanghai is still 23 September in UTC.
+      let now = Fixtures.date("2026-09-23T23:30:00Z")
+      let bounds = UsageRangeEditor.bounds(earliestDay: "2025-09-24", now: now, calendar: calendar)
+      #expect(UsageDateText.date(bounds.upperBound, calendar) == "2026-09-24")
     }
 
     @Test

@@ -1,5 +1,5 @@
 {
-  "$comment": "How a device downsamples local remaining-quota samples into uploadable buckets (`bucket`) and how several devices' buckets merge into the one series an Account read draws (`merge`). Bucket size is 900 s when the window's duration_seconds is at most 86 400, otherwise 3 600 s; bucket_start is floor(observed_at / size) × size in UTC; a bucket's value is the maximum used_percent in it for that resets_at; a bucket whose value equals the previous uploaded bucket of the same (window, resets_at) is not sent; a new resets_at is a new series. The span of a window is min(30 d, max(48 h, 4 × duration_seconds)): five-hour → 48 h, weekly → 28 d, monthly → 30 d. Points older than that span are not uploaded; a series with no duration_seconds is refused. Merge takes the maximum used_percent per (window_id, resets_at, bucket_start), oldest first. `rows_lost` is the upload-answer check of the 2026-09-23 amendment: a device's evidence is the oldest bucket it uploaded in this on-period when that is live (bucket + span > now + 1 h), otherwise the watermark from before this chunk when that is live and every point of the chunk is later than it; rows are lost when the answer leaves the series out (always), or names an oldest_bucket_start later than the evidence. An answer without oldest_bucket_start judges nothing. `reseed_oldest` is how the record moves after an accepted chunk: the older of a live record and the chunk's oldest point, else the chunk's oldest point. Shape is JSON only: TypeScript (`packages/quota-model`), Swift, and Rust each answer this file. See ADR 0062. The fold a surface draws is still quota-history-conformance.json.",
+  "$comment": "How a device downsamples local remaining-quota samples into uploadable buckets (`bucket`) and how several devices' buckets merge into the one series an Account read draws (`merge`). Bucket size is 900 s when the window's duration_seconds is at most 86 400, otherwise 3 600 s; bucket_start is floor(observed_at / size) × size in UTC; a bucket's value is the maximum used_percent in it for that resets_at; a bucket whose value equals the previous uploaded bucket of the same (window, resets_at) is not sent; a new resets_at is a new series. The span of a window is min(30 d, max(48 h, 4 × duration_seconds)): five-hour → 48 h, weekly → 28 d, monthly → 30 d. Points older than that span are not uploaded; a series with no duration_seconds is refused. Merge takes the maximum used_percent per (window_id, resets_at, bucket_start), oldest first. `rows_lost` is the upload-answer check of the 2026-09-23 amendment: a device's evidence is the oldest bucket it uploaded in this on-period when that is live (bucket + span > now + 1 h), otherwise the watermark from before this chunk when that is live and every point of the chunk is later than it; rows are lost when the answer leaves the series out (always), or names an oldest_bucket_start later than the evidence. An answer without oldest_bucket_start judges nothing. Liveness is judged with the shorter of the device's own duration_seconds and the answer's duration_seconds (the duration Relay held for the window when the upload arrived, which another device may have shortened); an answer without duration_seconds (an older Relay) judges with the device's own. `reseed_oldest` is how the record moves after an accepted chunk: the older of a live record and the chunk's oldest point, else the chunk's oldest point. Shape is JSON only: TypeScript (`packages/quota-model`), Swift, and Rust each answer this file. See ADR 0062. The fold a surface draws is still quota-history-conformance.json.",
   "now": "2026-09-21T12:00:00Z",
   "short_window_bucket_seconds": 900,
   "long_window_bucket_seconds": 3600,
@@ -589,6 +589,44 @@
         "oldest_bucket_start": "2026-09-23T11:45:00Z"
       },
       "expected": false
+    },
+    {
+      "name": "a shorter answered duration (another device declared it) judges by its span, so rows it expired are not a loss",
+      "now": "2026-09-23T12:00:00Z",
+      "duration_seconds": 604800,
+      "recorded_oldest": "2026-09-05T12:00:00Z",
+      "watermark": "2026-09-23T10:00:00Z",
+      "chunk_oldest": "2026-09-23T11:00:00Z",
+      "answer": {
+        "oldest_bucket_start": "2026-09-19T13:00:00Z",
+        "duration_seconds": 86400
+      },
+      "expected": false
+    },
+    {
+      "name": "a longer answered duration judges by this device's own",
+      "now": "2026-09-23T12:00:00Z",
+      "duration_seconds": 604800,
+      "recorded_oldest": "2026-09-05T12:00:00Z",
+      "watermark": "2026-09-23T10:00:00Z",
+      "chunk_oldest": "2026-09-23T11:00:00Z",
+      "answer": {
+        "oldest_bucket_start": "2026-09-19T13:00:00Z",
+        "duration_seconds": 2592000
+      },
+      "expected": true
+    },
+    {
+      "name": "an answer without duration_seconds (an older Relay) judges by this device's own",
+      "now": "2026-09-23T12:00:00Z",
+      "duration_seconds": 604800,
+      "recorded_oldest": "2026-09-05T12:00:00Z",
+      "watermark": "2026-09-23T10:00:00Z",
+      "chunk_oldest": "2026-09-23T11:00:00Z",
+      "answer": {
+        "oldest_bucket_start": "2026-09-19T13:00:00Z"
+      },
+      "expected": true
     }
   ],
   "reseed_oldest": [

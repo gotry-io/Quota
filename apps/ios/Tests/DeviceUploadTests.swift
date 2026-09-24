@@ -89,27 +89,36 @@ struct DeviceUploadTests {
     #expect(model.localCollection?.snapshots.count == 1)
   }
 
-  @Test
+  /// The Device sync is held until the test lets it go, so what `restore()` and `refresh()` wait
+  /// for is decided by events rather than by a delay. A launch that awaited the upload would hang
+  /// on the held sync, which the time limit turns into a failure.
+  @Test(.timeLimit(.minutes(1)))
   func aForegroundLaunchDetachesUploadAndABackgroundRefreshAwaitsIt() async throws {
+    let launchGate = TransportGate()
     let delayed = RecordingHTTPTransport([
       .init(status: 200, body: try Fixtures.accountSummaryJSON()),
-      .init(status: 200, body: try deviceSyncJSON(generation: 4), delayNanoseconds: 200_000_000),
+      .init(status: 200, body: try deviceSyncJSON(generation: 4), gate: launchGate),
       .init(status: 200, body: try uploadResponseJSON(generation: 4)),
     ])
     let launched = collectingModel(transport: delayed, deviceID: "device_phone")
     await launched.restore()
     #expect(!delayed.requests.map(\.path).contains("/api/v6/device/snapshots"))
+    launchGate.open()
     await launched.waitForDetachedLaunchWork()
     #expect(delayed.requests.map(\.path).contains("/api/v6/device/snapshots"))
 
+    let backgroundGate = TransportGate()
     let awaited = RecordingHTTPTransport([
       .init(status: 200, body: try Fixtures.accountSummaryJSON()),
-      .init(status: 200, body: try deviceSyncJSON(generation: 4), delayNanoseconds: 50_000_000),
+      .init(status: 200, body: try deviceSyncJSON(generation: 4), gate: backgroundGate),
       .init(status: 200, body: try uploadResponseJSON(generation: 4)),
     ])
     let background = collectingModel(transport: awaited, deviceID: "device_phone")
     background.poseSession(activation: .active, deviceID: "device_phone")
-    #expect(await background.refresh(awaitUpload: true))
+    let refreshing = Task { await background.refresh(awaitUpload: true) }
+    await waitUntil { awaited.requests.contains { $0.path == "/api/v2/device/sync" } }
+    backgroundGate.open()
+    #expect(await refreshing.value)
     #expect(awaited.requests.map(\.path).contains("/api/v6/device/snapshots"))
   }
 
@@ -331,11 +340,13 @@ final class RecordingHTTPTransport: HTTPTransport, @unchecked Sendable {
     var status: Int
     var body: Data
     var delayNanoseconds: UInt64
+    var gate: TransportGate?
 
-    init(status: Int, body: Data, delayNanoseconds: UInt64 = 0) {
+    init(status: Int, body: Data, delayNanoseconds: UInt64 = 0, gate: TransportGate? = nil) {
       self.status = status
       self.body = body
       self.delayNanoseconds = delayNanoseconds
+      self.gate = gate
     }
   }
 
@@ -410,6 +421,9 @@ final class RecordingHTTPTransport: HTTPTransport, @unchecked Sendable {
         endSync()
       }
     }
+    if let gate = exchange.gate {
+      await gate.wait()
+    }
     if exchange.delayNanoseconds > 0 {
       try await Task.sleep(nanoseconds: exchange.delayNanoseconds)
     }
@@ -465,6 +479,35 @@ final class RecordingHTTPTransport: HTTPTransport, @unchecked Sendable {
     lock.lock()
     inFlightSync -= 1
     lock.unlock()
+  }
+}
+
+/// Holds a response until the test opens it.
+final class TransportGate: @unchecked Sendable {
+  private let lock = NSLock()
+  private var isOpen = false
+  private var waiting: [CheckedContinuation<Void, Never>] = []
+
+  func open() {
+    lock.lock()
+    isOpen = true
+    let released = waiting
+    waiting = []
+    lock.unlock()
+    released.forEach { $0.resume() }
+  }
+
+  func wait() async {
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+      lock.lock()
+      if isOpen {
+        lock.unlock()
+        continuation.resume()
+      } else {
+        waiting.append(continuation)
+        lock.unlock()
+      }
+    }
   }
 }
 

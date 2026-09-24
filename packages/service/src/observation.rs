@@ -92,6 +92,7 @@ mod tests {
     fn a_reading_without_a_placeable_observation_time_is_not_current() {
         let snapshot = json!({"status": "available", "windows": [], "observed_at": "not a time"});
         assert_eq!(snapshot_valid_until(&snapshot), None);
-        assert!(!snapshot_is_current(&snapshot, Utc::now()));
+        let now = instant(Some(&json!("2026-08-24T10:00:00Z"))).expect("now");
+        assert!(!snapshot_is_current(&snapshot, now));
     }
 }

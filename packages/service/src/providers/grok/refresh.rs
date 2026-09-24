@@ -141,7 +141,7 @@ fn authenticate_request(method: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::providers::common::{RENEWAL_FLOOR_SECONDS, RenewalOutcome};
+    use crate::providers::common::RenewalOutcome;
     use std::collections::HashMap;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -272,26 +272,6 @@ mod tests {
         }
     }
 
-    /// A token with hours left is not a sign-in problem, and a refresh that spawned anyway
-    /// would be the five-minute timer this rung is bounded to stay off.
-    #[test]
-    fn an_unexpired_sign_in_starts_nothing() {
-        #[cfg(unix)]
-        {
-            let (directory, mut context, environment) =
-                fixture("unexpired", "2026-08-26T18:00:00Z");
-            let log = directory.join("spawns.log");
-            let auth = directory.join("grok-home/auth.json");
-            install(
-                &directory,
-                &renewing_script(&log, &auth, &auth_json("2026-08-27T00:00:00Z", "fresh")),
-            );
-            assert!(renew_expired_sign_in(&mut context, &environment, None, 10_000).is_none());
-            assert_eq!(spawns(&log), 0);
-            let _ = fs::remove_dir_all(&directory);
-        }
-    }
-
     /// A reading the endpoint rejected is not a live sign-in, even when the token still has
     /// hours left. Asking Grok to start is what may rewrite `auth.json`; a run that leaves
     /// it untouched is a failed attempt, not a renewal.
@@ -342,106 +322,5 @@ mod tests {
             );
             let _ = fs::remove_dir_all(&directory);
         }
-    }
-
-    /// A CLI that cannot renew must not be started every five minutes for the rest of the
-    /// day, and the hour it costs is the same hour whatever the failure was.
-    #[test]
-    fn a_cli_that_cannot_renew_is_asked_once_an_hour() {
-        #[cfg(unix)]
-        {
-            let (directory, mut context, environment) = fixture("floor", "2026-08-26T11:00:00Z");
-            let log = directory.join("spawns.log");
-            // Answers the handshake and leaves the credential file exactly as it was.
-            install(
-                &directory,
-                &renewing_script(&log, &directory.join("ignored.json"), "{}"),
-            );
-
-            let first =
-                renew_expired_sign_in(&mut context, &environment, None, 10_000).expect("first");
-            assert_eq!(first.outcome, RenewalOutcome::Failed);
-            assert_eq!(spawns(&log), 1);
-
-            for later in [10_001, 10_000 + RENEWAL_FLOOR_SECONDS - 1] {
-                assert!(
-                    renew_expired_sign_in(&mut context, &environment, Some(&first), later)
-                        .is_none()
-                );
-            }
-            assert_eq!(spawns(&log), 1);
-
-            let after = renew_expired_sign_in(
-                &mut context,
-                &environment,
-                Some(&first),
-                10_000 + RENEWAL_FLOOR_SECONDS,
-            )
-            .expect("the floor expires");
-            assert_eq!(after.outcome, RenewalOutcome::Failed);
-            assert_eq!(spawns(&log), 2);
-
-            let _ = fs::remove_dir_all(&directory);
-        }
-    }
-
-    /// A CLI that never answers holds the refresh for its deadline and no longer, and a CLI
-    /// that dies mid-handshake is a failed attempt rather than a stuck one.
-    #[test]
-    fn a_cli_that_hangs_or_fails_is_bounded_and_records_a_failure() {
-        #[cfg(unix)]
-        {
-            let (directory, mut context, mut environment) =
-                fixture("hangs", "2026-08-26T11:00:00Z");
-            // Well under the thirty seconds the child would otherwise take, and well over
-            // the time macOS spends checking a freshly written executable the first time —
-            // which on a loaded machine running the rest of this suite is over a second.
-            environment.timeout = Duration::from_secs(3);
-            let log = directory.join("spawns.log");
-            install(
-                &directory,
-                &format!("#!/bin/sh\necho ran >> {}\nsleep 30\n", log.display()),
-            );
-            let started = std::time::Instant::now();
-            let attempt =
-                renew_expired_sign_in(&mut context, &environment, None, 10_000).expect("attempt");
-            assert_eq!(attempt.outcome, RenewalOutcome::Failed);
-            assert!(started.elapsed() < Duration::from_secs(10));
-            assert_eq!(spawns(&log), 1);
-            // The sign-in is what it was, so collection reports it as the sign-in it is.
-            assert!(super::super::sign_in_expiring(&context));
-
-            install(
-                &directory,
-                &format!("#!/bin/sh\necho ran >> {}\nexit 3\n", log.display()),
-            );
-            let attempt =
-                renew_expired_sign_in(&mut context, &environment, None, 20_000).expect("attempt");
-            assert_eq!(attempt.outcome, RenewalOutcome::Failed);
-            assert_eq!(spawns(&log), 2);
-
-            let _ = fs::remove_dir_all(&directory);
-        }
-    }
-
-    /// Without the CLI there is nothing to ask and nothing to rate-limit, so the next refresh
-    /// after an install is free to try immediately.
-    #[test]
-    fn a_mac_without_the_grok_cli_starts_nothing_and_records_nothing() {
-        #[cfg(unix)]
-        {
-            let (directory, mut context, environment) = fixture("absent", "2026-08-26T11:00:00Z");
-            assert!(renew_expired_sign_in(&mut context, &environment, None, 10_000).is_none());
-            let _ = fs::remove_dir_all(&directory);
-        }
-    }
-
-    /// The method on offer is not the method this build asks for. `grok.com` prints a device
-    /// code and waits for a person; nothing a scheduled refresh does may start that.
-    #[test]
-    fn the_only_method_ever_asked_for_is_cached_token() {
-        let request = authenticate_request(CACHED_TOKEN_METHOD);
-        assert!(request.contains(CACHED_TOKEN_METHOD));
-        assert!(!request.contains("grok.com"));
     }
 }

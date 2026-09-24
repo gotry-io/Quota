@@ -7,6 +7,8 @@
   `expires_at`. One duration per window. 50 000-row ceiling. Future points refused.
 - Amended: 2026-09-23: the upload answer names each series' `oldest_bucket_start`, and a
   device that uploaded an older bucket in the current on-period backfills that series again.
+- Amended: 2026-09-24: the upload answer names the duration the window held when the upload
+  arrived; a device judges liveness by the shorter of it and its own, and adopts a shorter one.
 - Supersedes the "never leaves" sentence of
   [ADR 0042](0042-quota-history-is-local-samples.md)
 - Amends [ADR 0035](0035-quota-pace-is-derived-from-the-reading.md),
@@ -122,8 +124,8 @@ upload only newer points, and the Account would miss the span for good. So:
   oldest point, else the chunk's oldest point. Off, sign-out, and `409 history_sync_off` clear
   it with the watermark.
 - A bucket is **live** while `bucket_start + span > now + 1 h`. Relay never sweeps a row
-  before its `expires_at`; the hour covers a device clock behind Relay's and an `expires_at`
-  that another device shortened by declaring a shorter `duration_seconds` for the window.
+  before its `expires_at`; the hour covers a device clock behind Relay's. (An `expires_at`
+  another device shortened is the 2026-09-24 amendment.)
 - The **evidence** for a series is the recorded oldest while it is live; otherwise the
   watermark from before this chunk (the newest bucket Relay confirmed) while it is live and
   every point of the chunk is later than it. The fallback matters: a backfill seeds the record
@@ -143,3 +145,39 @@ The contract is the `rows_lost` and `reseed_oldest` sections of
 `quotaHistoryRowsLost` in `packages/quota-model`, `quota_history_rows_lost` in
 `packages/service`, and `QuotaHistorySync.rowsLost` in `packages/apple-shared`. QuotaBar's
 helper and the iOS coordinator apply it.
+
+## Amendment 2026-09-24
+
+One duration per window means the latest declaration rewrites every row's `expires_at`. When two
+devices declare different durations for one weekly window (a stale catalog, a provider's shape
+variant), the shorter declaration expires the other device's older rows. That device still
+counts its recorded oldest as live by its own, longer span, reads the later
+`oldest_bucket_start` as a loss, and backfills; its upload rewrites the duration back, and the
+other device does the same. The hour of slack does not cover a span that shrank by days.
+
+- The upload answer names, per series, **`duration_seconds`: the duration Relay held for that
+  window when the upload arrived, before this upload's declaration rewrote it** — the one the
+  window's rows expired by since the device's last upload. With no stored row of the window it
+  is the upload's own. Relay reads it inside the write transaction, before the rewrite, with one
+  `LIMIT 1` search of `quota_history_read_idx` per series. The value after the rewrite would
+  always be the uploader's own and say nothing.
+- A device judges liveness (both the record and the watermark fallback) with
+  **`min(own declared, answered)`**. A client reads `duration_seconds` as optional (ADR 0023):
+  an answer without it (an older Relay) judges with the device's own.
+- When the answered duration is **shorter** than the one the upload declared, the device adopts
+  it and declares it for that window from then on (and buckets and trims its span by it). An
+  answer naming a **longer** duration than the declared one ends the adoption, so the device
+  declares its collector's again. The collector naming a shorter duration than the adopted one
+  wins. A loss that clears a series' record keeps its adoption; off, sign-out, and
+  `409 history_sync_off` clear it with the record. Two devices that disagree therefore converge
+  on the shorter duration after at most one re-backfill instead of alternating.
+- Still not seen: a loss when every row of the window is gone before the upload (nothing to read
+  the held duration from, so the answer is the upload's own), and a shorter declaration that a
+  third device's longer one replaced before this device's next upload. Each costs at most one
+  re-backfill.
+
+The contract is the `rows_lost` cases of
+`packages/protocol/fixtures/quota-history-sync-conformance.json` whose answer carries
+`duration_seconds` (shorter, longer, absent), answered by `quotaHistoryRowsLost`,
+`quota_history_rows_lost`, and `QuotaHistorySync.rowsLost`. QuotaBar's helper and the iOS
+coordinator keep the adopted duration beside each series' watermark.

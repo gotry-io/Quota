@@ -3,21 +3,16 @@ import Testing
 
 struct ContrastTokenTests {
   private static let bodyText: Double = 4.5
-  private static let largeTextAndGraphics: Double = 3.0
 
+  /// Primary and secondary text and every tone, drawn as text or as a meter, reach body-text
+  /// contrast on the card fill in both appearances.
   @Test(arguments: ["light", "dark"])
-  func primaryAndSecondaryOnCardFill(_ appearance: String) {
+  func everyTextAndTonePairingOnTheCardFillReachesBodyTextContrast(_ appearance: String) {
     let env = Environment(appearance)
     env.expect("primary on card", env.primary, on: env.card, minimum: Self.bodyText)
     env.expect("secondary on card", env.secondary, on: env.card, minimum: Self.bodyText)
-  }
-
-  @Test(arguments: ["light", "dark"])
-  func toneMetersOnCardFill(_ appearance: String) {
-    let env = Environment(appearance)
     for (name, color) in env.tones {
-      env.expect("\(name) as text on card", color, on: env.card, minimum: Self.bodyText)
-      env.expect("\(name) meter on card", color, on: env.card, minimum: Self.largeTextAndGraphics)
+      env.expect("\(name) on card", color, on: env.card, minimum: Self.bodyText)
     }
   }
 }

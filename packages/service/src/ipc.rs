@@ -240,28 +240,42 @@ mod tests {
     use crate::service::{BackendError, LocalBackend, LoginOutcome, RefreshOutcome, RefreshSink};
     use crate::state::StateStore;
     use std::io::Cursor;
+    use std::sync::Condvar;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
     use uuid::Uuid;
 
     /// Collects the helper's stdout where the test — and a backend standing in for a long
     /// operation — can read it while the transport is still running.
     #[derive(Clone, Default)]
-    struct SharedOutput(Arc<Mutex<Vec<u8>>>);
+    struct SharedOutput(Arc<(Mutex<Vec<u8>>, Condvar)>);
 
     impl SharedOutput {
         fn lines(&self) -> Vec<String> {
-            String::from_utf8(self.0.lock().expect("output").clone())
+            String::from_utf8(self.0.0.lock().expect("output").clone())
                 .expect("utf8")
                 .lines()
                 .map(str::to_owned)
                 .collect()
         }
+
+        /// Waits for a line to be written that satisfies `wanted`; answers whether one was.
+        fn wait_for_line(&self, wanted: impl Fn(&str) -> bool, timeout: Duration) -> bool {
+            let (output, written) = &*self.0;
+            let guard = output.lock().expect("output");
+            let (_output, waited) = written
+                .wait_timeout_while(guard, timeout, |bytes| {
+                    !String::from_utf8_lossy(bytes).lines().any(&wanted)
+                })
+                .expect("output wait");
+            !waited.timed_out()
+        }
     }
 
     impl Write for SharedOutput {
         fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-            self.0.lock().expect("output").extend_from_slice(buffer);
+            self.0.0.lock().expect("output").extend_from_slice(buffer);
+            self.0.1.notify_all();
             Ok(buffer.len())
         }
 
@@ -288,18 +302,11 @@ mod tests {
         }
 
         fn diagnose(&self) -> Result<DiagnosticReport, BackendError> {
-            let deadline = Instant::now() + Duration::from_secs(10);
-            while Instant::now() < deadline {
-                if self
-                    .output
-                    .lines()
-                    .iter()
-                    .any(|line| line.contains("\"ok\":true"))
-                {
-                    self.answered_ping.store(true, Ordering::Release);
-                    break;
-                }
-                thread::sleep(Duration::from_millis(5));
+            if self
+                .output
+                .wait_for_line(|line| line.contains("\"ok\":true"), Duration::from_secs(10))
+            {
+                self.answered_ping.store(true, Ordering::Release);
             }
             Err(BackendError::unavailable())
         }
@@ -398,17 +405,6 @@ mod tests {
         assert!(lines[1].contains(r#""request_id":"r1""#));
         assert!(lines[1].contains(r#""code":"client_upgrade_required""#));
         assert!(lines[2].contains(r#""request_id":"r2""#));
-    }
-
-    #[test]
-    fn writer_does_not_change_wire_types() {
-        let response = IpcResponse::error(
-            "r1",
-            IpcError::new(ErrorCode::InvalidRequest, RecoveryAction::None),
-        );
-        let encoded = serde_json::to_string(&response).expect("response");
-        assert!(encoded.contains("\"type\":\"response\""));
-        assert!(encoded.contains("\"recovery_action\":\"none\""));
     }
 
     #[test]

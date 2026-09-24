@@ -13,18 +13,16 @@ struct UsageDailyBarTests {
     #expect(UsageDailyFold.quantitativeMaximum([empty], metric: .tokens) == 0)
   }
 
+  /// An unpriced day is its own mark in Cost, not a $0 bar, and it does not pull the scale down:
+  /// the axis is set by the days that were priced.
   @Test
   func anUnpricedCostDayIsDistinctFromZero() {
     let unpriced = row(date: "2026-08-11", tokens: 40, cost: unpricedCost())
     #expect(UsageDailyFold.barKind(unpriced, metric: .tokens) == .amount(40))
     #expect(UsageDailyFold.barKind(unpriced, metric: .cost) == .unpriced)
     #expect(UsageDailyFold.quantitativeMaximum([unpriced], metric: .cost) == 0)
-  }
 
-  @Test
-  func aPricedDayIsABarAndDoesNotTurnUnavailableIntoZero() {
     let priced = row(date: "2026-08-12", tokens: 100, cost: pricedCost("2500000"))
-    let unpriced = row(date: "2026-08-13", tokens: 20, cost: unpricedCost())
     let empty = row(date: "2026-08-14", tokens: 0, cost: UsageActivityChart.emptyCost())
     #expect(UsageDailyFold.barKind(priced, metric: .cost) == .amount(2_500_000))
     #expect(
@@ -60,20 +58,16 @@ struct UsageDailyBarTests {
   }
 
   @Test
-  func valueTicksAreTwoOrThreeAndIncludeZero() {
-    #expect(UsageDailyAxis.valueTicks(maximum: 100) == [0, 50, 100])
-    let millions = UsageDailyAxis.valueTicks(maximum: 11_400_000)
-    #expect(millions.first == 0)
-    #expect(millions.count == 2 || millions.count == 3)
-    #expect(millions.last ?? 0 >= 11_400_000)
-  }
-
-  @Test
   func theYAxisCeilingIsTheTightNiceStepAtOrAboveTheMax() {
     #expect(UsageDailyAxis.niceCeiling(240_000) == 250_000)
     #expect(UsageDailyAxis.valueTicks(maximum: 240_000) == [0, 125_000, 250_000])
     #expect(UsageDailyAxis.niceCeiling(1_100_000) == 1_200_000)
     #expect(UsageDailyAxis.valueTicks(maximum: 1_100_000) == [0, 600_000, 1_200_000])
+    #expect(UsageDailyAxis.valueTicks(maximum: 100) == [0, 50, 100])
+    let millions = UsageDailyAxis.valueTicks(maximum: 11_400_000)
+    #expect(millions.first == 0)
+    #expect(millions.count == 2 || millions.count == 3)
+    #expect(millions.last ?? 0 >= 11_400_000)
     let emptyCeiling = UsageDailyAxis.niceCeiling(0)
     #expect(emptyCeiling > 0)
     let emptyTicks = UsageDailyAxis.valueTicks(maximum: 0)
@@ -92,21 +86,8 @@ struct UsageDailyBarTests {
     #expect(ticks.first == "2026-09-01")
     #expect(ticks.last == "2026-09-30")
     #expect(UsageDailyAxis.dateTicks(dates: ["2026-09-19"]) == ["2026-09-19"])
-  }
-
-  @Test
-  func theLastDateTickLabelIsTheFullMonthAndDay() {
-    var calendar = Calendar(identifier: .gregorian)
-    calendar.locale = Locale(identifier: "en_US")
-    calendar.timeZone = TimeZone(identifier: "UTC")!
-    let month = (1...30).map { String(format: "2026-09-%02d", $0) }
-    let ticks = UsageDailyAxis.dateTicks(dates: month)
-    #expect(ticks.last == "2026-09-30")
-    #expect(UsageDailyAxis.dateLabel(ticks.last!, calendar: calendar) == "Sep 30")
-    #expect(UsageDailyAxis.dateLabel("2026-09-20", calendar: calendar) == "Sep 20")
-    #expect(
-      UsageDailyAxis.dateTickAnchor(index: ticks.count - 1, count: ticks.count) == .trailing
-    )
+    // The end labels anchor inward so neither is clipped at the plot's edge.
+    #expect(UsageDailyAxis.dateTickAnchor(index: ticks.count - 1, count: ticks.count) == .trailing)
     #expect(UsageDailyAxis.dateTickAnchor(index: 0, count: ticks.count) == .leading)
   }
 

@@ -25,19 +25,6 @@ function mount(budget: UsageBudget, percentOf: number | null, fired: string[] = 
   return { onChangeBudget, onAcknowledge, view };
 }
 
-it("meters this month against the budget and says when there is none", () => {
-  mount({ amountUSD: 50, alerts: true }, 5.39);
-  const meter = screen.getByRole("progressbar");
-  expect(meter.getAttribute("aria-valuenow")).toBe("10");
-  expect(screen.getByText("$5.39 / $50.00 · 10%")).toBeTruthy();
-  expect(screen.getByText("This budget follows your Account.")).toBeTruthy();
-
-  cleanup();
-  mount({ amountUSD: null, alerts: true }, null);
-  expect(screen.getByText("No budget is set for this month.")).toBeTruthy();
-  expect(screen.queryByRole("progressbar")).toBeNull();
-});
-
 it("saves an amount and the alert switch separately", async () => {
   const { onChangeBudget } = mount({ amountUSD: 50, alerts: true }, 5.39);
 

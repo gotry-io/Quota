@@ -69,9 +69,9 @@ export function quotaHistoryExpiresAt(bucketStart: string, durationSeconds: numb
 
 /**
  * How long before its expiry a bucket stops counting as one Relay must still hold. Relay never
- * sweeps a row before its `expires_at`, but a device clock behind Relay's, or an `expires_at`
- * another device shortened by declaring a shorter duration, can make a row go earlier than
- * this device expects.
+ * sweeps a row before its `expires_at`, but a device clock behind Relay's can make a row go
+ * earlier than this device expects. A duration another device shortened is the answer's
+ * `duration_seconds`, not this slack.
  */
 export const QUOTA_HISTORY_OLDEST_SLACK_SECONDS = 3_600;
 
@@ -88,7 +88,9 @@ export function quotaHistoryOldestIsLive(
 }
 
 /** What an upload answer says about one series the upload sent. */
-export type QuotaHistoryUploadAnswer = "absent" | { oldest_bucket_start?: string };
+export type QuotaHistoryUploadAnswer =
+  | "absent"
+  | { oldest_bucket_start?: string; duration_seconds?: number };
 
 /**
  * Relay lost rows of a series this device uploaded (ADR 0062, amendment 2026-09-23).
@@ -96,7 +98,9 @@ export type QuotaHistoryUploadAnswer = "absent" | { oldest_bucket_start?: string
  * The evidence is the oldest bucket uploaded in this on-period while it is live, otherwise the
  * watermark from before this chunk while it is live and every point of the chunk is later than
  * it. A series the answer leaves out is always a loss: the answer names every series sent. An
- * answer without `oldest_bucket_start` (an older Relay) judges nothing.
+ * answer without `oldest_bucket_start` (an older Relay) judges nothing. Liveness uses the
+ * shorter of this device's duration and the answer's `duration_seconds` — the one the window's
+ * rows expired by, which another device may have shortened (ADR 0062, amendment 2026-09-24).
  */
 export function quotaHistoryRowsLost(input: {
   recordedOldest: string | null;
@@ -109,15 +113,19 @@ export function quotaHistoryRowsLost(input: {
   if (input.answer === "absent") return true;
   const answered = input.answer.oldest_bucket_start;
   if (answered === undefined) return false;
+  const durationSeconds = Math.min(
+    input.durationSeconds,
+    input.answer.duration_seconds ?? input.durationSeconds,
+  );
   let evidence: string | null = null;
   if (
     input.recordedOldest !== null &&
-    quotaHistoryOldestIsLive(input.recordedOldest, input.durationSeconds, input.now)
+    quotaHistoryOldestIsLive(input.recordedOldest, durationSeconds, input.now)
   ) {
     evidence = input.recordedOldest;
   } else if (
     input.watermark !== null &&
-    quotaHistoryOldestIsLive(input.watermark, input.durationSeconds, input.now) &&
+    quotaHistoryOldestIsLive(input.watermark, durationSeconds, input.now) &&
     Date.parse(input.chunkOldest) > Date.parse(input.watermark)
   ) {
     evidence = input.watermark;

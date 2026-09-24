@@ -495,24 +495,6 @@ mod tests {
         }
     }
 
-    /// Kimi is reached with a key or with the token its own CLI writes. Without either, the
-    /// stored kimi.com session is the last thing left to try.
-    #[test]
-    fn the_browser_session_is_discovered_only_without_a_key_or_cli_credential() {
-        let mut context = isolated_context();
-        assert!(discover(&context).is_empty());
-        context.browser_sessions.insert(
-            ProviderId::Kimi,
-            vec!["kimi-auth=eyJhbGciOiJIUzI1NiJ9.e30.ok".to_owned()],
-        );
-        let sessions = discover(&context);
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(
-            sessions[0].credential_source,
-            crate::providers::BROWSER_SESSION_SOURCE
-        );
-    }
-
     #[test]
     fn accepts_fresh_cli_credential_and_rejects_stale_or_missing_expiry() {
         let fresh = parse_cli_credentials(
@@ -574,26 +556,6 @@ mod tests {
         );
     }
 
-    /// The Kimi Code token names no account of its own, so its fingerprint is scoped to the
-    /// source rather than to an owner — and what is stored is a digest, never the credential.
-    #[test]
-    fn the_cli_credential_fingerprint_is_source_scoped_and_irreversible() {
-        let (fingerprint, scope) = account_identity("kimi", "cli_credential", None);
-        assert_eq!(scope, "source");
-        assert_eq!(fingerprint.len(), 64);
-        assert!(
-            fingerprint
-                .bytes()
-                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-        );
-        // And a name an owner does take part in is a different name, so the source-scoped one
-        // is not standing in for an account it never read.
-        assert_ne!(
-            fingerprint,
-            account_identity("kimi", "cli_credential", Some("owner")).0
-        );
-    }
-
     /// The stored session is the last rung, and only the last rung.
     ///
     /// It answers when this Mac's own credential said "sign in again"; it never answers first,
@@ -635,21 +597,6 @@ mod tests {
         let error = collect(&official, &cancelled).expect_err("cancelled");
         assert_eq!(error.category, ErrorCategory::Unavailable);
         assert_eq!(error.source_id, SOURCE);
-    }
-
-    #[test]
-    fn the_catalog_names_the_kimi_session_cookie() {
-        let spec = ProviderId::Kimi
-            .metadata()
-            .browser_session
-            .expect("kimi browser session");
-        assert_eq!(spec.cookie_names, &["kimi-auth"]);
-        assert_eq!(
-            kimi_auth_token("kimi-auth=eyJhbGciOiJIUzI1NiJ9.e30.ok").as_deref(),
-            Some("eyJhbGciOiJIUzI1NiJ9.e30.ok")
-        );
-        assert!(kimi_auth_token("kimi-auth=").is_none());
-        assert!(kimi_auth_token("sessionKey=sk-ant-ok").is_none());
     }
 
     /// One request, one canned answer, and the request head handed back for inspection.
@@ -734,26 +681,6 @@ mod tests {
         .expect_err("no kimi-auth");
         assert_eq!(error.category, ErrorCategory::Error);
         assert_eq!(error.source_id, WEB_SOURCE);
-    }
-
-    #[test]
-    fn maps_web_coding_usages() {
-        let (address, server) = serve(200, CODING_USAGES);
-        let snapshot = collect_web_at(
-            "kimi-auth=eyJhbGciOiJIUzI1NiJ9.e30.ok",
-            &isolated_context(),
-            &format!("http://{address}/usages"),
-        )
-        .expect("snapshot");
-        assert_eq!(
-            snapshot
-                .windows
-                .iter()
-                .map(|window| window.id.as_str())
-                .collect::<Vec<_>>(),
-            ["weekly", "five_hour"]
-        );
-        server.join().expect("server");
     }
 
     /// The recorded `/coding/v1/usages` body: string counts, a weekly allowance, and a

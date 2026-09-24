@@ -4,8 +4,10 @@ import QuotaWidgetData
 import Testing
 
 struct WidgetSnapshotTests {
+  /// The widget file is non-secret (ADR 0014): it round-trips the rows it draws, pace included,
+  /// names no account, device, or credential, and clearing it removes the file.
   @Test
-  func protectedFileRoundtripAndClear() throws {
+  func aSnapshotRoundTripsWithoutIdentityAndClearRemovesTheFile() throws {
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent(UUID().uuidString, isDirectory: true)
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -36,6 +38,8 @@ struct WidgetSnapshotTests {
     #expect(encoded.contains("input_tokens"))
     #expect(encoded.contains("amount_microusd"))
     #expect(encoded.contains("\"unit\":\"usd\""))
+    #expect(encoded.contains("\"kind\":\"runs_out\""))
+    #expect(encoded.contains("exhausts_at"))
 
     try store.clear()
     #expect(try store.load() == nil)
@@ -93,7 +97,7 @@ struct WidgetSnapshotTests {
   }
 
   @Test
-  func rejectsInvalidText() throws {
+  func rejectsInvalidTextAndSelection() throws {
     let emptyProvider = makeJSON(
       providerID: "",
       displayName: "Codex",
@@ -150,11 +154,8 @@ struct WidgetSnapshotTests {
     #expect(throws: DecodingError.self) {
       _ = try decodeSnapshot(nonHexSelection)
     }
-  }
 
-  @Test
-  func rejectsMissingSelectionID() throws {
-    let json = """
+    let missingSelection = """
       {
         "version": 2,
         "fetched_at": "2026-08-14T16:00:00Z",
@@ -173,7 +174,7 @@ struct WidgetSnapshotTests {
       }
       """
     #expect(throws: DecodingError.self) {
-      _ = try decodeSnapshot(json)
+      _ = try decodeSnapshot(missingSelection)
     }
   }
 
@@ -357,54 +358,6 @@ struct WidgetSnapshotTests {
   }
 
   @Test
-  func missingPaceStillDecodes() throws {
-    let snapshot = try decodeSnapshot(makeJSON(
-      providerID: "codex",
-      displayName: "Codex",
-      windowTitle: "Weekly"
-    ))
-    #expect(snapshot.items.first?.pace == nil)
-  }
-
-  @Test
-  func paceRoundtripsWithoutSecrets() throws {
-    let exhausts = date("2026-08-14T17:00:00Z")
-    let snapshot = WidgetSnapshot(
-      fetchedAt: date("2026-08-14T16:00:00Z"),
-      items: [
-        WidgetQuotaItem(
-          selectionID: "0123456789ab",
-          providerID: "codex",
-          providerDisplayName: "Codex",
-          windowTitle: "Weekly",
-          remainingPercent: 20,
-          hasLimit: true,
-          pace: .runsOut(
-            QuotaPaceProjection(tempo: .ahead, deltaPercent: 42, projectedAtReset: 142),
-            exhaustsAt: exhausts
-          )
-        )
-      ],
-      today: WidgetTodayUsage(
-        inputTokens: 0,
-        outputTokens: 0,
-        cost: WidgetCost(status: .unavailable)
-      )
-    )
-    let encoded = try String(data: encodeSnapshot(snapshot), encoding: .utf8)!
-    #expect(encoded.contains("\"kind\":\"runs_out\""))
-    #expect(encoded.contains("\"tempo\":\"ahead\""))
-    #expect(encoded.contains("delta_percent"))
-    #expect(encoded.contains("projected_at_reset"))
-    #expect(encoded.contains("exhausts_at"))
-    #expect(!encoded.contains("account_id"))
-    #expect(!encoded.contains("fingerprint"))
-    let loaded = try decodeSnapshot(encoded)
-    #expect(loaded.items.first?.pace?.isRunsOut == true)
-    #expect(loaded.items.first?.usedPercent == 80)
-  }
-
-  @Test
   func loadRejectsOversizeWithoutReadingWholeFile() throws {
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -445,7 +398,12 @@ struct WidgetSnapshotTests {
           providerID: "claude",
           providerDisplayName: "Claude Code",
           windowTitle: "Weekly",
-          remainingPercent: 10
+          remainingPercent: 10,
+          hasLimit: true,
+          pace: .runsOut(
+            QuotaPaceProjection(tempo: .ahead, deltaPercent: 42, projectedAtReset: 142),
+            exhaustsAt: date("2026-08-14T17:00:00Z")
+          )
         ),
       ],
       today: WidgetTodayUsage(

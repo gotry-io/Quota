@@ -5,8 +5,6 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { USAGE_HOUR_GRID_RULE } from "@gotry-io/quota-protocol";
 import {
-  fetchAccount,
-  fetchAccountActivity,
   fetchAccountSummary,
   fetchAccountUsagePeriod,
   requestEmailSignInLink,
@@ -17,47 +15,11 @@ import {
   ACTIVITY_DAYS,
   accountActivityPath,
   accountActivityRange,
-  accountPath,
   accountSummaryPath,
-  accountUsagePeriodPath,
   clearStoredPeriods,
   clearStoredSummary,
 } from "../src/lib/account-reads.ts";
 import { SIGN_IN_PATH, signInHref } from "../src/lib/routes.ts";
-
-test("asks for the Account at /api/v2/account", () => {
-  assert.equal(accountPath(), "/api/v2/account");
-});
-
-test("reads the Account identities", async () => {
-  const summary = acceptedSummaryPayload() as {
-    account: unknown;
-  };
-  const payload = {
-    protocol_version: 2,
-    account: summary.account,
-    identities: [{ provider: "github", label: "octocat", linked_at: "2026-01-04T12:00:00Z" }],
-  };
-  let requested = "";
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (input) => {
-    requested = String(input);
-    return new Response(JSON.stringify(payload), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
-  }) as typeof fetch;
-  try {
-    const result = await fetchAccount();
-    assert.equal(requested, "/api/v2/account");
-    assert.equal(result.status, "ok");
-    if (result.status === "ok") {
-      assert.equal(result.account.identities[0]?.label, "octocat");
-    }
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
 
 test("asks for the summary in the calendar this browser keeps", () => {
   const url = new URL(accountSummaryPath("Asia/Singapore"), "https://quota.gotry.io");
@@ -78,54 +40,6 @@ test("asks the activity chart for a year ending today", () => {
   assert.equal(url.searchParams.get("from"), range.from);
   assert.equal(url.searchParams.get("to"), range.to);
   assert.equal([...url.searchParams.keys()].sort().join(","), "from,to");
-});
-
-test("asks a single UTC day for its agent tree", async () => {
-  const range = { from: "2026-08-12", to: "2026-08-12" };
-  const url = new URL(accountActivityPath(range, "agents"), "https://quota.gotry.io");
-  assert.equal(url.pathname, "/api/v6/account/usage/activity");
-  assert.equal(url.searchParams.get("from"), "2026-08-12");
-  assert.equal(url.searchParams.get("to"), "2026-08-12");
-  assert.equal(url.searchParams.get("detail"), "agents");
-  assert.equal([...url.searchParams.keys()].sort().join(","), "detail,from,to");
-
-  let requested = "";
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (input) => {
-    requested = String(input);
-    return new Response(JSON.stringify({ protocol_version: 6, days: [] }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
-  }) as typeof fetch;
-  try {
-    const result = await fetchAccountActivity(range, "agents");
-    assert.equal(result.status, "ok");
-    const asked = new URL(requested, "https://quota.gotry.io");
-    assert.equal(asked.searchParams.get("from"), "2026-08-12");
-    assert.equal(asked.searchParams.get("to"), "2026-08-12");
-    assert.equal(asked.searchParams.get("detail"), "agents");
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test("asks a local-date range for the Account period read", () => {
-  const url = new URL(
-    accountUsagePeriodPath({
-      from: "2026-08-20",
-      to: "2026-08-26",
-      timezone: "Asia/Singapore",
-      breakdown: true,
-    }),
-    "https://quota.gotry.io",
-  );
-  assert.equal(url.pathname, "/api/v6/account/usage/period");
-  assert.equal(url.searchParams.get("from"), "2026-08-20");
-  assert.equal(url.searchParams.get("to"), "2026-08-26");
-  assert.equal(url.searchParams.get("timezone"), "Asia/Singapore");
-  assert.equal(url.searchParams.get("breakdown"), "1");
-  assert.equal([...url.searchParams.keys()].join(","), "from,to,timezone,breakdown");
 });
 
 test("offers the last period ETag back and returns the cached body on 304", async () => {
@@ -239,67 +153,44 @@ test("offers the last period ETag back and returns the cached body on 304", asyn
   }
 });
 
-test("asks a range for its hour-of-day rhythm", () => {
-  const range = { from: "2026-08-01", to: "2026-08-10" };
-  const url = new URL(
-    accountActivityPath(range, "hours", "America/Los_Angeles"),
-    "https://quota.gotry.io",
-  );
-  assert.equal(url.pathname, "/api/v6/account/usage/activity");
-  assert.equal(url.searchParams.get("detail"), "hours");
-  assert.equal(url.searchParams.get("tz"), "America/Los_Angeles");
-  assert.equal([...url.searchParams.keys()].sort().join(","), "detail,from,to,tz");
-});
-
-test("asks Relay to mail a sign-in link and treats 202 as accepted", async () => {
+test("mails a sign-in or link request and treats 202 as accepted", async () => {
   const originalFetch = globalThis.fetch;
-  let requested = "";
-  let body = "";
+  const requests: Array<{ url: string; body: string }> = [];
   globalThis.fetch = (async (input, init) => {
-    requested = String(input);
-    body = String(init?.body ?? "");
+    requests.push({ url: String(input), body: String(init?.body ?? "") });
     return new Response("{}", { status: 202 });
   }) as typeof fetch;
   try {
-    const result = await requestEmailSignInLink({
-      email: "person@example.test",
-      returnTo: "/my",
-    });
-    assert.equal(result, "accepted");
-    assert.equal(requested, "/api/auth/email/start");
-    assert.equal(body, JSON.stringify({ email: "person@example.test", return_to: "/my" }));
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test("asks Relay to mail a link that binds an address, with intent link", async () => {
-  const originalFetch = globalThis.fetch;
-  let body = "";
-  globalThis.fetch = (async (_input, init) => {
-    body = String(init?.body ?? "");
-    return new Response("{}", { status: 202 });
-  }) as typeof fetch;
-  try {
-    const result = await requestEmailSignInLink({
-      email: "person@example.test",
-      returnTo: "/my/settings",
-      intent: "link",
-    });
-    assert.equal(result, "accepted");
     assert.equal(
-      body,
-      JSON.stringify({
+      await requestEmailSignInLink({ email: "person@example.test", returnTo: "/my" }),
+      "accepted",
+    );
+    assert.equal(
+      await requestEmailSignInLink({
         email: "person@example.test",
-        return_to: "/my/settings",
+        returnTo: "/my/settings",
         intent: "link",
       }),
+      "accepted",
     );
+    assert.deepEqual(requests, [
+      {
+        url: "/api/auth/email/start",
+        body: JSON.stringify({ email: "person@example.test", return_to: "/my" }),
+      },
+      {
+        url: "/api/auth/email/start",
+        body: JSON.stringify({
+          email: "person@example.test",
+          return_to: "/my/settings",
+          intent: "link",
+        }),
+      },
+    ]);
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
-
 test("unbinds a channel and treats the last one as a conflict", async () => {
   const originalFetch = globalThis.fetch;
   const requests: Array<{ url: string; method: string }> = [];
@@ -327,41 +218,28 @@ test("unbinds a channel and treats the last one as a conflict", async () => {
   }
 });
 
-test("classifies 401 as a session that ended", () => {
-  const error = classifyAccountError(new Response(null, { status: 401 }));
-  assert.equal(error.status, "session_ended");
-  assert.equal(error.message, "Your session ended. Sign in again.");
-  assert.equal(error.action?.type, "sign_in");
-  if (error.action?.type === "sign_in") {
-    assert.equal(error.action.href, signInHref());
-  }
-});
+test("classifies 401, a destructive 403, a plain 403, and 500", () => {
+  const ended = classifyAccountError(new Response(null, { status: 401 }));
+  assert.equal(ended.status, "session_ended");
+  assert.deepEqual(ended.action, { type: "sign_in", href: signInHref() });
 
-test("classifies a destructive 403 as recent authentication", () => {
-  const error = classifyAccountError(new Response(null, { status: 403 }), {
+  const recent = classifyAccountError(new Response(null, { status: 403 }), {
     destructive: true,
     currentPath: "/my",
   });
-  assert.equal(error.status, "recent_auth_required");
-  assert.equal(error.message, "Sign in again to confirm this change.");
-  assert.equal(error.action?.type, "sign_in");
-  if (error.action?.type === "sign_in") {
-    assert.equal(error.action.href, `${SIGN_IN_PATH}?return_to=${encodeURIComponent("/my")}`);
-  }
-});
+  assert.equal(recent.status, "recent_auth_required");
+  assert.deepEqual(recent.action, {
+    type: "sign_in",
+    href: `${SIGN_IN_PATH}?return_to=${encodeURIComponent("/my")}`,
+  });
 
-test("classifies a non-destructive 403 as forbidden", () => {
-  const error = classifyAccountError(new Response(null, { status: 403 }));
-  assert.equal(error.status, "forbidden");
-  assert.equal(error.message, "You don't have permission to do that.");
-  assert.equal(error.action, null);
-});
+  const forbidden = classifyAccountError(new Response(null, { status: 403 }));
+  assert.equal(forbidden.status, "forbidden");
+  assert.equal(forbidden.action, null);
 
-test("classifies 500 as unavailable", () => {
-  const error = classifyAccountError(new Response(null, { status: 500 }));
-  assert.equal(error.status, "unavailable");
-  assert.equal(error.message, "Quota couldn't load this. Retry.");
-  assert.equal(error.action?.type, "retry");
+  const unavailable = classifyAccountError(new Response(null, { status: 500 }));
+  assert.equal(unavailable.status, "unavailable");
+  assert.equal(unavailable.action?.type, "retry");
 });
 
 function acceptedSummaryPayload(): unknown {

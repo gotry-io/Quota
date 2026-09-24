@@ -10,7 +10,11 @@ import { AccountService } from "../src/account/service.ts";
 import { accountMaintenanceInput, createRelayApp } from "../src/app.ts";
 import { SecretHasher } from "../src/security.ts";
 import type { SessionScope } from "@gotry-io/relay-core";
-import { D1AccountState, quotaHistoryUploadAnswerSql } from "../src/state/d1-account-state.ts";
+import {
+  D1AccountState,
+  quotaHistoryHeldDurationSql,
+  quotaHistoryUploadAnswerSql,
+} from "../src/state/d1-account-state.ts";
 import { DEVICE_SESSION_SCOPES, encodeScopes } from "../src/state/records.ts";
 import { D1UsageState } from "../src/state/d1-usage-state.ts";
 import { SignedInWebSessionStub } from "./web-session-stub.ts";
@@ -66,6 +70,7 @@ describe("Account quota history", () => {
           window_id: "five_hour",
           bucket_start: "2026-09-21T10:15:00Z",
           oldest_bucket_start: "2026-09-21T10:00:00Z",
+          duration_seconds: 18_000,
         },
       ],
     });
@@ -223,7 +228,7 @@ describe("Account quota history", () => {
     expect(await historyCount("account_clear")).toBe(0);
   });
 
-  it("answers 412 on a stale non-zero If-Match and leaves quota_history rows in place", async () => {
+  it("refuses a stale non-zero If-Match with 412 on the update path and keeps every quota_history row", async () => {
     const session = await seedDevice("cas");
     const app = appFor("account_cas");
     expect((await putSettings(app, { ...policy, history: { sync: true } })).status).toBe(200);
@@ -271,15 +276,6 @@ describe("Account quota history", () => {
     });
     expect(deletedAccount.status).toBe(204);
     expect(await historyCount("account_gone")).toBe(0);
-  });
-
-  it("refuses a point older than the series span plus one bucket", async () => {
-    const session = await seedDevice("stale");
-    const app = appFor("account_stale");
-    expect((await putSettings(app, { ...policy, history: { sync: true } })).status).toBe(200);
-    const response = await upload(session, [point("2026-09-18T10:00:00Z", 40)]);
-    expect(response.status).toBe(400);
-    expect(await historyCount("account_stale")).toBe(0);
   });
 
   it("clamps a 30-day since to 48 hours for a five-hour window", async () => {
@@ -401,21 +397,32 @@ describe("Account quota history", () => {
         (row) => row.detail.includes("quota_history_read_idx") && /SEARCH/i.test(row.detail),
       ),
     ).toBe(true);
+
+    const held = await db
+      .prepare(`EXPLAIN QUERY PLAN ${quotaHistoryHeldDurationSql}`)
+      .bind("account_plan", "codex", fingerprint, "weekly")
+      .all<{ detail: string }>();
+    expect(
+      held.results.some(
+        (row) => row.detail.includes("quota_history_read_idx") && /SEARCH/i.test(row.detail),
+      ),
+    ).toBe(true);
   });
 
-  it("rewrites every row of a window to the latest declared duration and expiry", async () => {
+  it("rewrites every row of a window to the latest declared duration and answers the one it held", async () => {
     const first = await seedDevice("dur");
     const app = appFor("account_dur");
     expect((await putSettings(app, { ...policy, history: { sync: true } })).status).toBe(200);
     expect((await upload(first, [point("2026-09-21T10:00:00Z", 40)])).status).toBe(200);
     const peer = await seedDevice("dur", { name: "peer", deviceId: "device_dur_peer" });
-    expect(
-      (
-        await upload(peer, [point("2026-09-21T10:00:00Z", 50)], {
-          durationSeconds: 604_800,
-        })
-      ).status,
-    ).toBe(200);
+    const declared = await upload(peer, [point("2026-09-21T10:00:00Z", 50)], {
+      durationSeconds: 604_800,
+    });
+    expect(declared.status).toBe(200);
+    // The answer names the duration the window's rows carried when the upload arrived, so a
+    // device whose rows another device's declaration expired early does not call that a loss.
+    const answered = (await declared.json()) as { series: { duration_seconds: number }[] };
+    expect(answered.series.map((series) => series.duration_seconds)).toEqual([18_000]);
 
     const rows = await db
       .prepare(

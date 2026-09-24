@@ -937,6 +937,9 @@
               },
               "oldest_bucket_start": {
                 "$ref": "#/$defs/__schema3"
+              },
+              "duration_seconds": {
+                "$ref": "#/$defs/__schema20"
               }
             },
             "required": [
@@ -944,7 +947,8 @@
               "fingerprint",
               "window_id",
               "bucket_start",
-              "oldest_bucket_start"
+              "oldest_bucket_start",
+              "duration_seconds"
             ],
             "additionalProperties": false
           }

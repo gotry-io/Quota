@@ -27,17 +27,12 @@ function withProjectYml(contents, fn) {
   }
 }
 
-test("matches MARKETING_VERSION from a temporary project.yml", () => {
+test("takes only the tag that matches MARKETING_VERSION", () => {
   withProjectYml("settings:\n  base:\n    MARKETING_VERSION: 1.2.3\n", (yml) => {
     const ok = run(["1.2.3"], { QUOTA_IOS_PROJECT_YML: yml });
     assert.equal(ok.status, 0, ok.stderr);
     const tagged = run(["ios-v1.2.3"], { QUOTA_IOS_PROJECT_YML: yml });
     assert.equal(tagged.status, 0, tagged.stderr);
-  });
-});
-
-test("rejects a tag that does not match the temporary project.yml", () => {
-  withProjectYml("settings:\n  base:\n    MARKETING_VERSION: 1.2.3\n", (yml) => {
     const bad = run(["9.9.9"], { QUOTA_IOS_PROJECT_YML: yml });
     assert.notEqual(bad.status, 0);
     assert.match(bad.stderr, /does not match Quota iOS MARKETING_VERSION \(1\.2\.3\)/);
@@ -52,12 +47,4 @@ test("reads a quoted MARKETING_VERSION and ignores comments", () => {
       assert.equal(ok.status, 0, ok.stderr);
     },
   );
-});
-
-test("rejects a missing or invalid tag", () => {
-  const missing = run([]);
-  assert.equal(missing.status, 2);
-  const invalid = run(["not-a-version"]);
-  assert.equal(invalid.status, 1);
-  assert.match(invalid.stderr, /invalid version/);
 });

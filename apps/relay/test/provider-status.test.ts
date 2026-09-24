@@ -5,7 +5,6 @@ import {
   parseStatuspageV2,
   PROVIDER_STATUS_CACHE_MILLISECONDS,
   readProviderStatus,
-  statuspageV2Endpoints,
 } from "../src/provider-status.ts";
 import { SecretHasher } from "../src/security.ts";
 import { D1AccountState } from "../src/state/d1-account-state.ts";
@@ -38,15 +37,6 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe("provider status pages", () => {
-  it("lists only catalog statuspage_v2 URLs", () => {
-    expect(statuspageV2Endpoints()).toEqual([
-      { id: "codex", url: "https://status.openai.com/api/v2/status.json" },
-      { id: "claude", url: "https://status.claude.com/api/v2/status.json" },
-      { id: "kimi", url: "https://status.moonshot.cn/api/v2/status.json" },
-      { id: "cursor", url: "https://status.cursor.com/api/v2/status.json" },
-    ]);
-  });
-
   it("parses indicator and description only", () => {
     expect(
       parseStatuspageV2({

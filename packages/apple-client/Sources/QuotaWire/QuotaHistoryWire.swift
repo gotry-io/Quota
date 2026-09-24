@@ -221,7 +221,8 @@ public struct QuotaHistoryUploadRequest: Codable, Equatable, Sendable {
 /// The JSON key of the newest is `bucket_start`. The Swift name is `newestBucketStart`, so its
 /// coding key is the camelCase `bucketStart` that `WireCodec` turns into `bucket_start`.
 /// `oldest_bucket_start` is optional on read: a Relay before ADR 0062's 2026-09-23 amendment
-/// does not send it.
+/// does not send it. `duration_seconds`, the duration Relay held for the window when the upload
+/// arrived, is optional too: a Relay before the 2026-09-24 amendment does not send it.
 public struct QuotaHistoryUploadResponse: Codable, Equatable, Sendable {
   public let protocolVersion: Int
   public let series: [SeriesWatermark]
@@ -264,19 +265,22 @@ public struct QuotaHistoryUploadResponse: Codable, Equatable, Sendable {
     public let windowId: String
     public let newestBucketStart: Date?
     public let oldestBucketStart: Date?
+    public let durationSeconds: Int?
 
     public init(
       provider: ProviderID,
       fingerprint: String,
       windowId: String,
       newestBucketStart: Date?,
-      oldestBucketStart: Date? = nil
+      oldestBucketStart: Date? = nil,
+      durationSeconds: Int? = nil
     ) {
       self.provider = provider
       self.fingerprint = fingerprint
       self.windowId = windowId
       self.newestBucketStart = newestBucketStart
       self.oldestBucketStart = oldestBucketStart
+      self.durationSeconds = durationSeconds
     }
 
     public init(from decoder: any Decoder) throws {
@@ -286,6 +290,14 @@ public struct QuotaHistoryUploadResponse: Codable, Equatable, Sendable {
       windowId = try quotaHistoryReadWindowId(container, forKey: .windowId)
       newestBucketStart = try container.decodeIfPresent(Date.self, forKey: .newestBucketStart)
       oldestBucketStart = try container.decodeIfPresent(Date.self, forKey: .oldestBucketStart)
+      durationSeconds = try container.decodeIfPresent(Int.self, forKey: .durationSeconds)
+      if let durationSeconds, durationSeconds < 0 {
+        throw DecodingError.dataCorruptedError(
+          forKey: .durationSeconds,
+          in: container,
+          debugDescription: "duration_seconds must not be negative."
+        )
+      }
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -295,6 +307,7 @@ public struct QuotaHistoryUploadResponse: Codable, Equatable, Sendable {
       try container.encode(windowId, forKey: .windowId)
       try container.encodeIfPresent(newestBucketStart, forKey: .newestBucketStart)
       try container.encodeIfPresent(oldestBucketStart, forKey: .oldestBucketStart)
+      try container.encodeIfPresent(durationSeconds, forKey: .durationSeconds)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -304,6 +317,7 @@ public struct QuotaHistoryUploadResponse: Codable, Equatable, Sendable {
       /// JSON `bucket_start`, after `WireCodec` converts snake_case.
       case newestBucketStart = "bucketStart"
       case oldestBucketStart
+      case durationSeconds
     }
   }
 }

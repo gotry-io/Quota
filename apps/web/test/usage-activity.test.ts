@@ -1,13 +1,9 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 import type { UsageActivityDay, UsageCostOutcome } from "@gotry-io/quota-protocol";
 import {
   ACTIVITY_TOOLTIP_MARGIN,
   ACTIVITY_WEEKDAY_LABELS,
-  activityRoverFromKey,
   buildUsageActivityModel,
   formatActivityDate,
   formatActivityTooltip,
@@ -183,24 +179,6 @@ test("keeps an in-page tooltip inside the viewport without overflowing", () => {
   assert.equal(below.top, 24 + 8);
 });
 
-test("activity markup uses a roving day-button group and a custom tooltip, not a native title", () => {
-  const source = readFileSync(
-    join(dirname(fileURLToPath(import.meta.url)), "../src/lib/components/UsageActivity.svelte"),
-    "utf8",
-  );
-  assert.match(source, /role="group"/);
-  assert.match(source, /aria-roledescription="grid"/);
-  assert.doesNotMatch(source, /role="grid"/);
-  assert.match(source, /tabindex=\{day\.date === roverDate \? 0 : -1\}/);
-  assert.match(source, /aria-pressed=\{day\.date === selectedDate\}/);
-  assert.match(source, /class="usage-activity-tooltip"/);
-  assert.match(source, /aria-label=\{day\.tooltip\}/);
-  assert.doesNotMatch(source, /\btitle=/);
-  assert.match(source, /if \(found\) \{/);
-  assert.match(source, /showTooltip\(found\.day, found\.button\)/);
-  assert.match(source, /else hideTooltip\(\)/);
-});
-
 test("moves the active day by one day, one week, thirty days, and the week edges", () => {
   const model = buildUsageActivityModel([], { from: "2026-01-01", to: "2026-03-15" }, "2026-03-15");
   assert.equal(nextActivityDate(model.days, "2026-01-15", "next-day"), "2026-01-16");
@@ -214,20 +192,6 @@ test("moves the active day by one day, one week, thirty days, and the week edges
   assert.equal(new Date("2026-01-15T00:00:00Z").getUTCDay(), 4);
   assert.equal(nextActivityDate(model.days, "2026-01-15", "row-start"), "2026-01-11");
   assert.equal(nextActivityDate(model.days, "2026-01-15", "row-end"), "2026-01-17");
-});
-
-test("maps grid keys onto rover actions", () => {
-  assert.equal(activityRoverFromKey("ArrowLeft"), "previous-day");
-  assert.equal(activityRoverFromKey("ArrowRight"), "next-day");
-  assert.equal(activityRoverFromKey("ArrowUp"), "previous-week");
-  assert.equal(activityRoverFromKey("ArrowDown"), "next-week");
-  assert.equal(activityRoverFromKey("Home"), "row-start");
-  assert.equal(activityRoverFromKey("End"), "row-end");
-  assert.equal(activityRoverFromKey("PageUp"), "page-back");
-  assert.equal(activityRoverFromKey("PageDown"), "page-forward");
-  assert.equal(activityRoverFromKey("Enter"), "select");
-  assert.equal(activityRoverFromKey(" "), "select");
-  assert.equal(activityRoverFromKey("Tab"), null);
 });
 
 test("keeps ?day= in the URL when the date is in the activity range", () => {

@@ -66,14 +66,6 @@ struct QuotaHistorySyncConformanceTests {
     }
   }
 
-  @Test func sourceCaptionNamesThisDeviceOrYourDevices() {
-    #expect(QuotaHistoryCopy.sourceCaption(.thisDevice, deviceNoun: "This iPhone") == "This iPhone")
-    #expect(QuotaHistoryCopy.sourceCaption(.thisDevice, deviceNoun: "This Mac") == "This Mac")
-    #expect(
-      QuotaHistoryCopy.sourceCaption(.yourDevices, deviceNoun: "This iPhone") == "From your devices"
-    )
-  }
-
   @Test func everyRowsLostAndReseedCaseMatchesTheSharedFixture() throws {
     let object = try QuotaHistorySyncFixture.raw()
     let lost = try #require(object["rows_lost"] as? [[String: Any]])
@@ -85,8 +77,9 @@ struct QuotaHistorySyncConformanceTests {
         answer = .absent
       } else {
         let fields = try #require(testCase["answer"] as? [String: Any])
-        answer = .oldest(
-          try fields["oldest_bucket_start"].map { try QuotaHistorySyncFixture.instant($0) }
+        answer = .answered(
+          oldest: try fields["oldest_bucket_start"].map { try QuotaHistorySyncFixture.instant($0) },
+          durationSeconds: fields["duration_seconds"] as? Int
         )
       }
       let judged = QuotaHistorySync.rowsLost(
@@ -111,35 +104,6 @@ struct QuotaHistorySyncConformanceTests {
       )
       #expect(seeded == (try QuotaHistorySyncFixture.instant(testCase["expected"])), "\(name)")
     }
-  }
-
-  @Test func mergedBucketsAreTheSamplesFoldAlreadyTakes() throws {
-    let now = try QuotaHistorySyncFixture.instant("2026-09-21T12:00:00Z")
-    let reset = try QuotaHistorySyncFixture.instant("2026-09-21T15:00:00Z")
-    let buckets = [
-      QuotaHistorySync.Bucket(
-        resetsAt: reset,
-        bucketStart: try QuotaHistorySyncFixture.instant("2026-09-21T10:00:00Z"),
-        usedPercent: 40
-      ),
-      QuotaHistorySync.Bucket(
-        resetsAt: reset,
-        bucketStart: try QuotaHistorySyncFixture.instant("2026-09-21T10:15:00Z"),
-        usedPercent: 42.5
-      ),
-    ]
-    let samples = QuotaHistorySync.samples(from: buckets)
-    #expect(samples.map(\.resetsAt) == buckets.map(\.resetsAt))
-    #expect(samples.map(\.observedAt) == buckets.map(\.bucketStart))
-    #expect(samples.map(\.usedPercent) == buckets.map(\.usedPercent))
-    let window = QuotaHistoryReading(resetsAt: reset, cadenceSeconds: 18_000)
-    let folded = QuotaRemainingHistory.fold(
-      window: window,
-      samples: samples,
-      usedPercent: 42.5,
-      now: now
-    )
-    #expect(folded != nil)
   }
 
   @Test func uploadableDropsPointsRelayWouldRefuse() throws {
