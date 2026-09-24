@@ -10,17 +10,13 @@ import Testing
 
 struct QuotaBrandIconsTests {
   @Test
-  func everyKnownProviderResolvesACatalogImage() {
+  func everyCatalogProviderAndTheQuotaMarkResolveAnImage() {
     for provider in ProviderID.allCases {
       #expect(
         catalogImage(named: provider.brandIconAssetName) != nil,
         "missing mark for \(provider.rawValue) (\(provider.brandIconAssetName))"
       )
     }
-  }
-
-  @Test
-  func quotaBrandMarkResolvesACatalogImage() {
     #expect(catalogImage(named: "quota") != nil, "missing Quota mark")
   }
 }

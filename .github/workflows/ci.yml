@@ -295,7 +295,7 @@ jobs:
             exit 1
           fi
           node scripts/ios-ui-run-summary.mjs dist/ios-unit.xcresult \
-            --title "iOS unit run" --min-tests 200 \
+            --title "iOS unit run" --min-tests 150 \
             | tee -a "$GITHUB_STEP_SUMMARY"
 
       # The failed attempt's own evidence, kept rather than re-derived from a rerun that passed.

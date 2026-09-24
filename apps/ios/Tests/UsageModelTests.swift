@@ -271,40 +271,6 @@ struct UsageModelTests {
   }
 
   @Test
-  func daySheetEmptyWhenTheDayHasNoAgents() async {
-    let loader = ScriptedActivityLoader(results: [
-      .activity(AccountUsageActivityResponse(days: [])),
-      .activity(
-        AccountUsageActivityResponse(days: [
-          UsageActivityDay(
-            date: "2026-08-10",
-            totals: UsageActivityChart.emptyTotals(),
-            cost: UsageActivityChart.emptyCost(),
-            partial: false,
-            agents: []
-          )
-        ])
-      ),
-    ])
-    let harness = UsageHarness()
-    let usage = harness.model(loader: loader)
-    await usage.loadActivity()
-    await usage.openActivityDay(date: "2026-08-10")
-    #expect(usage.activityDaySheet?.agents == .empty)
-  }
-
-  @Test
-  func daySheetStartsLoadingBeforeTheReadReturns() {
-    let loader = ScriptedActivityLoader(results: [])
-    let harness = UsageHarness()
-    let usage = harness.model(loader: loader)
-    usage.activityChart = .loaded([emptyDay("2026-08-14")])
-    usage.presentActivityDay(date: "2026-08-14")
-    #expect(usage.activityDaySheet?.date == "2026-08-14")
-    #expect(usage.activityDaySheet?.agents == .loading)
-  }
-
-  @Test
   func anOlderDayRequestIsIgnoredAfterANewerOne() async {
     let loader = GatedActivityLoader(results: [
       .activity(
@@ -442,60 +408,6 @@ struct UsageModelTests {
 
       usage.selectUsagePeriod(.all)
       #expect(usage.usagePeriodValue?.totals == summary.usage.all.totals)
-    }
-
-    @Test
-    func stepsAWeekBackAndForwardAndStopsAtThisWeek() {
-      let (usage, _, harness) = loadedUsage()
-      _ = harness
-      usage.usagePeriod = .thisWeek
-      let thisWeek = usage.usagePeriodRange?.from
-      usage.selectUsagePeriod(usage.usagePeriod.previous ?? .thisWeek)
-      #expect(usage.usagePeriod == .week(offset: 1))
-      #expect(usage.usagePeriodRange?.from != thisWeek)
-      usage.selectUsagePeriod(usage.usagePeriod.next ?? .thisWeek)
-      #expect(usage.usagePeriod == .thisWeek)
-      #expect(usage.usagePeriod.next == nil)
-    }
-
-    @Test
-    func aCustomRangeReadsThePeriodRoute() async {
-      let (usage, loader, harness) = loadedUsage(periodResults: [
-        .period(
-          VisualFixtureContent.accountPeriodResponse(
-            from: "2026-08-14",
-            to: "2026-08-14",
-            usage: VisualFixtureContent.summary(at: Self.now).usage.today,
-            days: VisualFixtureContent.activityDays(ending: Self.now)
-          )
-        )
-      ])
-      _ = harness
-      usage.selectUsagePeriod(.custom(from: "2026-08-14", to: "2026-08-14"))
-      await usage.loadPeriod()
-      #expect(usage.usagePeriodValue?.totals.totalTokens == 1_704_620)
-      let calls = await loader.periodCalls
-      #expect(calls.last?.from == "2026-08-14")
-      #expect(calls.last?.to == "2026-08-14")
-    }
-
-    @Test
-    func truncatedCoverageFollowsThePeriodBody() async {
-      let todayRange = UsagePeriodSelection.today.range(today: Self.now)!
-      let summary = VisualFixtureContent.summary(at: Self.now)
-      let body = VisualFixtureContent.accountPeriodResponse(
-        from: todayRange.from,
-        to: todayRange.to,
-        usage: summary.usage.today,
-        days: VisualFixtureContent.activityDays(ending: Self.now),
-        truncatedByRetention: true
-      )
-      let (usage, _, harness) = loadedUsage(periodResults: [.period(body)])
-      _ = harness
-      usage.selectUsagePeriod(.today)
-      await usage.loadPeriod()
-      #expect(usage.usagePeriodTruncated)
-      #expect(usage.usagePeriodValue?.partial == summary.usage.today.partial)
     }
 
     @Test

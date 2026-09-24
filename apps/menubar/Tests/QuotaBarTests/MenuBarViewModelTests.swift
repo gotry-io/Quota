@@ -227,39 +227,6 @@ func setOverviewSourcePinSendsTheSourceScopedIdentity() async throws {
   #expect(await record.pin == "local")
 }
 
-@Test @MainActor
-func aRebuildingCacheShowsTheCatchUpNoticeAndASettledOneDoesNot() async throws {
-  let settled = MenuBarViewModel(client: StubLocalService(state: loggingInState()))
-  await settled.refreshIfNeeded()
-  #expect(!settled.showsCacheRebuildNotice)
-
-  let base = loggingInState()
-  let rebuilding = LocalServiceState(
-    ipcVersion: base.ipcVersion,
-    revision: base.revision,
-    usageUploadEnabled: base.usageUploadEnabled,
-    groupUsageByProject: base.groupUsageByProject,
-    quotaRefreshIntervalSeconds: base.quotaRefreshIntervalSeconds,
-    usagePeriods: base.usagePeriods,
-    quota: base.quota,
-    usage: base.usage,
-    account: base.account,
-    pricing: base.pricing,
-    providers: base.providers,
-    providerBrowserSessions: base.providerBrowserSessions,
-    browserScanEnabled: base.browserScanEnabled,
-    overview: base.overview,
-    cache: LocalServiceCacheState(
-      rebuilding: true,
-      resetAt: Date(timeIntervalSince1970: 1_786_300_000)
-    )
-  )
-  let model = MenuBarViewModel(client: StubLocalService(state: rebuilding))
-  await model.refreshIfNeeded()
-  #expect(model.showsCacheRebuildNotice)
-  #expect(model.cache.resetAt == Date(timeIntervalSince1970: 1_786_300_000))
-}
-
 func accountSettingsDocument(
   revision: Int,
   resetReminders: Bool = true,
@@ -489,22 +456,8 @@ func thisMacsCollectionFailureShowsOnlyWhenItsOwnReadingIsTheOneOnTheRow() async
   #expect(neverConfigured?.status == nil)
 }
 
-@Test @MainActor
-func quittingAsksTheLocalServiceToShutDownBeforeTheAppGoes() async {
-  let record = CallRecord()
-  let model = MenuBarViewModel(
-    client: StubLocalService(state: loggingInState(), shutdownRecord: record)
-  )
-  model.start()
-
-  await model.shutdown()
-
-  let shutdowns = await record.count
-  #expect(shutdowns == 1, "the app's termination path sends the service its shutdown")
-}
-
-/// The other half of that promise: a quit is a decision the person already made, so a service that
-/// never answers costs the deadline and nothing more. What this pins is which wait ends the quit —
+/// A quit is a decision the person already made, so a service that never answers its shutdown
+/// costs the deadline and nothing more. What this pins is which wait ends the quit —
 /// the deadline's, released here on purpose — rather than how many milliseconds passed on the
 /// machine that happened to run it. The time limit is the hang detector, not the assertion.
 @Test(.timeLimit(.minutes(1))) @MainActor
@@ -547,7 +500,8 @@ func quittingStopsWaitingOnAHelperThatNeverAnswersItsShutdown() async {
   await heldGoodbye.open()
 }
 
-/// A healthy quit is not slowed to the deadline: the goodbye that lands cancels it. The sleeper
+/// Quitting asks the local service to shut down, and a healthy quit is not slowed to the
+/// deadline: the goodbye that lands cancels it. The sleeper
 /// here only ends by cancellation, so a quit that returns proves the arrival cancelled it.
 @Test(.timeLimit(.minutes(1))) @MainActor
 func quittingThatGetsItsGoodbyeDoesNotWaitOutTheDeadline() async {
@@ -1031,6 +985,9 @@ final class QuotaHistoryAccountScript: @unchecked Sendable {
 
 actor AccountSettingsWriteRecord {
   private(set) var calls: [(document: AccountSettingsDocument, ifMatch: String)] = []
+  /// How many calls have been answered, gate included: a test waits for this to know a held
+  /// write has landed, rather than for an interval.
+  private(set) var returned = 0
   var results: [Result<LocalServiceAccountSettingsWriteResult, Error>] = []
   var refreshValue: LocalServiceAccountSettingsState?
   var gate: TestGate?
@@ -1050,6 +1007,7 @@ actor AccountSettingsWriteRecord {
     if let gate {
       await gate.wait()
     }
+    returned += 1
     if results.isEmpty {
       return .written(document)
     }

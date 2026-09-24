@@ -61,7 +61,9 @@ struct UserNotificationAlertSinkTests {
     #expect(request.trigger == nil)
   }
 
-  @Test func windowResetPostsImmediatelyWhenNothingIsScheduled() {
+  /// A reset posts at once unless a reminder is already booked on the calendar for that window,
+  /// which would otherwise announce the same reset twice.
+  @Test func aWindowResetPostsOnceAndIsSkippedWhenAReminderIsBookedForThatWindow() {
     let center = FakeNotificationCenter()
     let sink = UserNotificationAlertSink(center: center)
     sink.catalog = AlertDeliveryCatalog(entries: [
@@ -74,14 +76,8 @@ struct UserNotificationAlertSinkTests {
     #expect(center.added.first?.content.title == "Codex · Weekly")
     #expect(center.added.first?.content.body == "Weekly quota reset")
     #expect(center.added.first?.trigger == nil)
-  }
 
-  @Test func windowResetIsSkippedWhenAReminderIsAlreadyScheduledForThatWindow() {
-    let center = FakeNotificationCenter()
-    let sink = UserNotificationAlertSink(center: center)
-    sink.catalog = AlertDeliveryCatalog(entries: [
-      "ccfc96629357": .init(providerDisplayName: "Codex", windows: ["weekly": "Weekly"])
-    ])
+    center.added = []
     sink.scheduledResetKeys = [
       UserNotificationAlertSink.resetKey(selector: "ccfc96629357", windowID: "weekly")
     ]

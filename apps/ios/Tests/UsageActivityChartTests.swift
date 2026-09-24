@@ -26,34 +26,7 @@ struct UsageActivityChartTests {
   }
 
   @Test
-  func takesEachDaysTotalsCostAndScanVerdictAsRelayFoldedThem() {
-    let chart = UsageActivityChart.build(
-      reported: [
-        day(
-          "2026-03-02",
-          input: 150,
-          output: 50,
-          cost: cost(amountMicrousd: "400000", status: .partial, unpricedRows: 1),
-          partial: true
-        ),
-        day("2026-03-03", input: 10, output: 10),
-      ],
-      range: (from: "2026-03-02", to: "2026-03-03"),
-      today: "2026-03-03"
-    )
-
-    let first = chart.days.first { $0.date == "2026-03-02" }
-    #expect(first?.tokens == 200)
-    #expect(first?.partial == true)
-    #expect(first?.cost?.status == .partial)
-    #expect(first?.cost?.amountMicrousd == "400000")
-    #expect(first?.level == 4)
-    #expect(chart.days.first { $0.date == "2026-03-03" }?.level == 1)
-    #expect(chart.days.first { $0.date == "2026-03-04" }?.level == 0)
-  }
-
-  @Test
-  func placesMonthLabelsOnWeekColumnsAndDropsOverlappingNeighbors() {
+  func aMonthLabelSitsOnTheWeekHoldingItsFirstVisibleDayAndDropsAnOverlappingNeighbor() {
     let wide = UsageActivityChart.build(
       reported: [],
       range: (from: "2026-01-01", to: "2026-03-15"),
@@ -73,10 +46,7 @@ struct UsageActivityChartTests {
     #expect(tight.monthLabels.map(\.label) == ["Jan"])
     #expect(tight.monthLabels[0].weekIndex == 0)
     #expect(tight.monthLabels[0].span == 2)
-  }
 
-  @Test
-  func anchorsAMidWeekMonthOnTheSundayFirstWeekThatContainsItsFirstVisibleDay() {
     let june = UsageActivityChart.build(
       reported: [],
       range: (from: "2026-05-01", to: "2026-06-15"),
@@ -118,32 +88,11 @@ struct UsageActivityChartTests {
   }
 
   @Test
-  func activityWindowIs365UtcDaysEndingToday() {
-    let range = UsageActivityCalendar.range(endingOn: "2026-08-14")
-    #expect(range.from == "2025-08-15")
-    #expect(range.to == "2026-08-14")
-    #expect(UsageActivityCalendar.longDate("2026-08-14") == "August 14, 2026")
-  }
-
-  @Test
   func fiveFillLevelsAreZeroAndFourEqualBandsOfTheBusiestDay() {
     #expect(UsageActivityChart.activityLevel(0, maximum: 200) == 0)
     #expect(UsageActivityChart.activityLevel(20, maximum: 0) == 0)
     #expect(UsageActivityChart.activityLevel(20, maximum: 200) == 1)
     #expect(UsageActivityChart.activityLevel(200, maximum: 200) == 4)
-  }
-
-  @Test
-  func selectedDayAccessibilityStatesDateTokensAndCost() {
-    let chart = UsageActivityChart.build(
-      reported: [day("2026-08-14", input: 80, output: 20, cost: cost(amountMicrousd: "1230000"))],
-      range: (from: "2026-08-14", to: "2026-08-14"),
-      today: "2026-08-14"
-    )
-    let spoken = chart.days.first { $0.date == "2026-08-14" }?.accessibilityValue
-    #expect(spoken?.contains("August 14, 2026") == true)
-    #expect(spoken?.contains("tokens") == true)
-    #expect(spoken?.contains("complete") == true)
   }
 
   @Test

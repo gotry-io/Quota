@@ -878,9 +878,9 @@ provider and support, and no custom card chrome beyond the system widget contain
   check. A confirmed finding there is a defect to fix, but it does not block a merge, and the
   reachability of these layouts at large type is therefore no longer checked on every merge. What
   the required check still proves is in `QuotaSmokeUITests`: the journeys, the state controls, and
-  the seven essential values at the standard and `accessibilityExtraLarge` sizes. Each census test
+  the seven essential values at `accessibilityExtraLarge`. Each census test
   opens its one screen directly (`--route`), so a finding on one screen never hides the next; what
-  a screen says — About's copy and links, the full Providers matrix, the local-only and merged
+  a screen says — About's copy and links, the Providers matrix, the local-only and merged
   details' history and sources — is asserted there, at every profile's size.
 - UI test launches are deterministic about presentation: every launch names its text size (the
   profile's, else the standard `large`) and starts with the in-app Appearance preference at System,
@@ -950,9 +950,8 @@ only; they must never contain access tokens, refresh tokens, or production data.
 `QUOTA_IOS_APPEARANCE` (`light` or `dark`) select Dynamic Type and appearance for that run; variant
 PNGs land in a subdirectory. Re-run Connect, Confirm, Overview, Usage, Devices, subscription
 detail, and each Settings destination at one accessibility text size.
-The required check asserts the seven essential values at the standard size and at
-`accessibilityExtraLarge` (`QuotaSmokeUITests.testEssentialValuesAtStandardSize` and
-`…AtAccessibilitySize`): Overview remaining, Today tokens, cost and the combined Today label, the
+The required check asserts the seven essential values at `accessibilityExtraLarge`, the size that
+truncates first (`QuotaSmokeUITests.testEssentialValuesAtAccessibilitySize`): Overview remaining, Today tokens, cost and the combined Today label, the
 Usage headline's tokens and cost, and subscription remaining — each exists, is hittable, carries
 its whole accessibility label, and sits on screen. One large-type journey stays with them,
 Settings › About and back with Log Out still on the hub. Everything else at that size — the

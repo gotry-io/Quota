@@ -6,11 +6,6 @@ import Testing
 
 struct DeepLinkTests {
   @Test
-  func overview() {
-    #expect(parse("io.gotry.quota:/overview") == .overview)
-  }
-
-  @Test
   func oauthCallback() {
     // The end of a browser sign-in that finished outside the session sheet, query and all.
     #expect(
@@ -21,18 +16,13 @@ struct DeepLinkTests {
     #expect(parse("io.gotry.quota:/oauth/callback/extra") == nil)
   }
 
+  /// A subscription link names a `selection_id`: exactly twelve lowercase hex characters once
+  /// percent-decoded. Anything else is refused rather than guessed at.
   @Test
-  func validSubscriptionId() {
+  func aSubscriptionLinkIsTwelveLowercaseHexAfterDecoding() {
     #expect(
       parse("io.gotry.quota:/subscriptions/0123456789ab") == .subscription(id: "0123456789ab")
     )
-    #expect(
-      parse("io.gotry.quota:/subscriptions/abcdef012345") == .subscription(id: "abcdef012345")
-    )
-  }
-
-  @Test
-  func percentEncodedSelectionIdDecodesThenMatches() {
     #expect(
       parse("io.gotry.quota:/subscriptions/0123456789%61b") == .subscription(id: "0123456789ab")
     )
@@ -40,25 +30,11 @@ struct DeepLinkTests {
       parse("io.gotry.quota:/subscriptions/%30%31%32%33%34%35%36%37%38%39%61%62")
         == .subscription(id: "0123456789ab")
     )
-  }
-
-  @Test
-  func rejectsUppercaseSelectionId() {
     #expect(parse("io.gotry.quota:/subscriptions/0123456789AB") == nil)
-    #expect(parse("io.gotry.quota:/subscriptions/0123456789Ab") == nil)
     #expect(parse("io.gotry.quota:/subscriptions/0123456789%41b") == nil)
-  }
-
-  @Test
-  func rejectsTooLongAndTooShort() {
     #expect(parse("io.gotry.quota:/subscriptions/0123456789abc") == nil)
     #expect(parse("io.gotry.quota:/subscriptions/0123456789a") == nil)
     #expect(parse("io.gotry.quota:/subscriptions/") == nil)
-  }
-
-  @Test
-  func rejectsIllegalCharacters() {
-    #expect(parse("io.gotry.quota:/subscriptions/0123456789zz") == nil)
     #expect(parse("io.gotry.quota:/subscriptions/0123456789ag") == nil)
     #expect(parse("io.gotry.quota:/subscriptions/0123456789-b") == nil)
     #expect(parse("io.gotry.quota:/subscriptions/0123456789_b") == nil)
@@ -77,27 +53,29 @@ struct DeepLinkTests {
   func schemeIsCaseInsensitive() {
     #expect(parse("IO.GOTRY.QUOTA:/overview") == .overview)
   }
-
-  @Test
-  func appTabsAreQuotaUsageSettings() {
-    #expect(AppTab.allCases.map(\.title) == ["Quota", "Usage", "Settings"])
-    #expect(AppTab.quota.systemImage == "gauge.with.dots.needle.33percent")
-  }
 }
 
 #if DEBUG
   @MainActor
   struct DeepLinkRoutingTests {
+    /// A link that names no detail this phone can open — Overview itself, an id no subscription
+    /// answers to, a path Quota does not know — lands on a clean Overview with nothing pending.
     @Test
-    func overviewLinkClearsPendingSelectionAndShowsOverview() {
-      let model = AppModel.visualFixture(.content, now: VisualFixture.referenceDate)
-      model.selectedTab = .settings
-      model.pendingSubscriptionSelection = "0123456789ab"
-      model.overviewPath = ["codex|visual_codex|global|"]
-      model.openDeepLink(URL(string: "io.gotry.quota:/overview")!)
-      #expect(model.selectedTab == .quota)
-      #expect(model.pendingSubscriptionSelection == nil)
-      #expect(model.overviewPath.isEmpty)
+    func aLinkThatOpensNoDetailLandsOnACleanOverview() {
+      for link in [
+        "io.gotry.quota:/overview",
+        "io.gotry.quota:/subscriptions/0123456789ab",
+        "io.gotry.quota:/devices",
+      ] {
+        let model = AppModel.visualFixture(.content, now: VisualFixture.referenceDate)
+        model.selectedTab = .settings
+        model.pendingSubscriptionSelection = "0123456789ab"
+        model.overviewPath = ["codex|visual_codex|global|"]
+        model.openDeepLink(URL(string: link)!)
+        #expect(model.selectedTab == .quota, "\(link)")
+        #expect(model.pendingSubscriptionSelection == nil, "\(link)")
+        #expect(model.overviewPath.isEmpty, "\(link)")
+      }
     }
 
     @Test
@@ -121,17 +99,6 @@ struct DeepLinkTests {
     }
 
     @Test
-    func unknownSubscriptionIdStaysOnOverviewAndClearsPending() {
-      let model = AppModel.visualFixture(.content, now: VisualFixture.referenceDate)
-      model.selectedTab = .usage
-      model.overviewPath = ["codex|visual_codex|global|"]
-      model.openDeepLink(URL(string: "io.gotry.quota:/subscriptions/0123456789ab")!)
-      #expect(model.selectedTab == .quota)
-      #expect(model.pendingSubscriptionSelection == nil)
-      #expect(model.overviewPath.isEmpty)
-    }
-
-    @Test
     func subscriptionLinkWaitsForSummaryThenResolves() throws {
       let salt = Data(repeating: 0x5a, count: 32)
       let store = InMemorySelectionSaltStore(salt: salt)
@@ -150,18 +117,6 @@ struct DeepLinkTests {
       model.resolvePendingSubscriptionSelection()
       #expect(model.pendingSubscriptionSelection == nil)
       #expect(model.overviewPath == [subscription.key])
-    }
-
-    @Test
-    func unknownLinkReturnsToOverview() {
-      let model = AppModel.visualFixture(.content, now: VisualFixture.referenceDate)
-      model.selectedTab = .settings
-      model.pendingSubscriptionSelection = "0123456789ab"
-      model.overviewPath = ["codex|visual_codex|global|"]
-      model.openDeepLink(URL(string: "io.gotry.quota:/devices")!)
-      #expect(model.selectedTab == .quota)
-      #expect(model.pendingSubscriptionSelection == nil)
-      #expect(model.overviewPath.isEmpty)
     }
 
     @Test

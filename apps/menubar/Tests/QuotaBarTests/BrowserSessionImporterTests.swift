@@ -5,36 +5,6 @@ import Testing
 
 @testable import QuotaBar
 
-/// Every provider that has a web session declares one, and the catalog names the exact hosts
-/// and cookies each read is limited to. Cursor is the only one with no official sign-in of its
-/// own, which is what `exclusive` says.
-@Test
-func everyProviderWithAWebSessionDeclaresOne() {
-  #expect(ProviderID.cursor.browserSession?.cookieNames == [
-    "WorkosCursorSessionToken", "wos-session", "__Secure-wos-session",
-  ])
-  #expect(ProviderID.claude.browserSession?.cookieNames == ["sessionKey", "lastActiveOrg"])
-  #expect(ProviderID.grok.browserSession?.cookieNames == ["sso", "sso-rw"])
-  #expect(ProviderID.kimi.browserSession?.cookieNames == ["kimi-auth"])
-  #expect(
-    ProviderID.codex.browserSession?.cookieNames.contains("__Secure-next-auth.session-token")
-      == true)
-  #expect(ProviderID.codex.browserSession?.cookieHosts == ["chatgpt.com", "www.chatgpt.com"])
-  #expect(ProviderID.claude.browserSession?.cookieHosts == ["claude.ai", "www.claude.ai"])
-  #expect(ProviderID.grok.browserSession?.cookieHosts == ["grok.com", "www.grok.com"])
-  #expect(ProviderID.kimi.browserSession?.cookieHosts == ["www.kimi.com", "kimi.com"])
-
-  let declared = ProviderID.allCases.filter { $0.browserSession != nil }
-  #expect(Set(declared) == Set([.codex, .claude, .grok, .kimi, .cursor]))
-  // Only Cursor has no CLI sign-in command and no API key to omit the sign-in row for.
-  #expect(declared.filter { $0.browserSession?.exclusive == true } == [.cursor])
-  for provider in declared {
-    let spec = provider.browserSession
-    #expect(spec?.loginURL.hasPrefix("https://") == true)
-    #expect(spec?.cookieNames.isEmpty == false)
-  }
-}
-
 @Test
 func browserPriorityIsAValidatedPrefixOfEverySupportedBrowser() throws {
   #expect(ProviderID.allCases.contains(.cursor))

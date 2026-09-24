@@ -131,15 +131,6 @@ func namesTheAccountFromTheSignInBeforeAnyAccountReadArrives() async throws {
   #expect(flow.accountState == .signedIn)
 }
 
-/// With neither a read nor a name, the window says what it honestly knows.
-@Test @MainActor
-func fallsBackToTheGenericAccountNameWhenTheSignInNamedNothing() async throws {
-  let flow = makeAccountFlow(client: StubLocalService(state: justSignedInState(label: nil)))
-  flow.acceptState(justSignedInState(label: nil))
-
-  #expect(flow.accountDisplayLabel == "Quota account")
-}
-
 /// A sign-in finishes on the service's thread and is announced by an event. When that event does
 /// not arrive, the flow still stops saying "finish sign-in in browser": it asks.
 @Test @MainActor

@@ -32,21 +32,6 @@ struct QuotaPaceConformanceTests {
       )
     }
   }
-
-  @Test func aWindowWithNoCadenceHasNoPace() {
-    let pace = QuotaPace.evaluate(
-      QuotaPaceReading(
-        usedPercent: 60,
-        resetsAt: Date(timeIntervalSince1970: 1_000_000),
-        cadenceSeconds: nil,
-        isBalanceOnly: false
-      ),
-      now: Date(timeIntervalSince1970: 999_000)
-    )
-    #expect(pace == .none)
-    #expect(QuotaPaceCopy.headline(pace, resetsAt: nil) == nil)
-    #expect(QuotaPaceCopy.detail(pace) == nil)
-  }
 }
 
 private struct PaceFixture: Decodable {

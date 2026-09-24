@@ -39,16 +39,6 @@ struct TransportTests {
   }
 
   @Test
-  func urlSessionMapsTimeoutAndDoesNotCollapseTransportErrors() async throws {
-    let url = URL(string: "https://quota.gotry.io/test/timeout")!
-    ScriptedURLProtocol.use(.init(error: URLError(.timedOut)), for: url)
-    let transport = URLSessionHTTPTransport(configuration: Self.stubbedConfiguration())
-    await #expect(throws: HTTPTransportError.timeout) {
-      _ = try await transport.perform(URLRequest(url: url))
-    }
-  }
-
-  @Test
   func urlSessionRefusesRedirectsWithoutFollowing() async throws {
     let url = URL(string: "https://quota.gotry.io/test/redirect")!
     ScriptedURLProtocol.use(

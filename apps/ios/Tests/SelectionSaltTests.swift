@@ -8,26 +8,10 @@ import Testing
 @testable import Quota
 
 struct SelectionSaltTests {
+  /// A widget's `selection_id` is what a deep link must parse — twelve lowercase hex characters —
+  /// and a new salt (logout clears it) renames every subscription so old links fall back.
   @Test
-  func makeReturnsTwelveLowercaseHexCharacters() {
-    let salt = Data(repeating: 0x5a, count: 32)
-    let id = SelectionIDs.make(selector: "ccfc96629357", salt: salt)
-    #expect(id.count == 12)
-    #expect(id == id.lowercased())
-    let hex = CharacterSet(charactersIn: "0123456789abcdef")
-    #expect(id.unicodeScalars.allSatisfy { hex.contains($0) })
-  }
-
-  @Test
-  func makeIsStableForTheSameSelectorAndSalt() {
-    let salt = Data(repeating: 0x5a, count: 32)
-    let first = SelectionIDs.make(selector: "ccfc96629357", salt: salt)
-    let again = SelectionIDs.make(selector: "ccfc96629357", salt: salt)
-    #expect(first == again)
-  }
-
-  @Test
-  func makeChangesWhenTheSaltChanges() {
+  func aSelectionIDIsTwelveLowercaseHexAndANewSaltRenamesIt() {
     let selector = SubscriptionSelector.make(
       provider: "codex",
       fingerprint: "fp_codex_01",
@@ -36,27 +20,12 @@ struct SelectionSaltTests {
     )
     let first = SelectionIDs.make(selector: selector, salt: Data(repeating: 0x11, count: 32))
     let rotated = SelectionIDs.make(selector: selector, salt: Data(repeating: 0x22, count: 32))
+    let hex = CharacterSet(charactersIn: "0123456789abcdef")
+    #expect(first.count == 12)
+    #expect(first.unicodeScalars.allSatisfy { hex.contains($0) })
     #expect(first != rotated)
     #expect(first != selector)
     #expect(rotated != selector)
-  }
-
-  @Test
-  func inMemoryLoadOrCreateReusesTheSameSaltUntilCleared() throws {
-    let generation = SaltGenerationCounter()
-    let store = InMemorySelectionSaltStore {
-      generation.count += 1
-      return Data(repeating: UInt8(generation.count), count: 32)
-    }
-    let first = try store.loadOrCreate()
-    let again = try store.loadOrCreate()
-    #expect(first == again)
-    #expect(generation.count == 1)
-
-    try store.clear()
-    let rotated = try store.loadOrCreate()
-    #expect(rotated != first)
-    #expect(generation.count == 2)
   }
 
   @Test
@@ -95,18 +64,17 @@ struct SelectionSaltTests {
     )
     #expect(try firstStore.loadOrCreate() == Data(repeating: 0x11, count: 32))
 
+    // The racing store read before the first one wrote, so it reaches the add and loses it.
     let racing = KeychainSelectionSaltStore(
       service: "io.gotry.quota.test-selection-salt",
       account: "selection-salt",
       keychain: keychain,
       generateSalt: { Data(repeating: 0x22, count: 32) }
     )
+    keychain.missNextRead = true
     #expect(try racing.loadOrCreate() == Data(repeating: 0x11, count: 32))
+    #expect(keychain.calls == ["add", "add"])
   }
-}
-
-final class SaltGenerationCounter: @unchecked Sendable {
-  var count = 0
 }
 
 final class SelectionSaltFakeKeychain: KeychainOperating, @unchecked Sendable {
@@ -114,6 +82,8 @@ final class SelectionSaltFakeKeychain: KeychainOperating, @unchecked Sendable {
   var calls: [String] = []
   var deleteCount = 0
   var lastAddAccessible: String?
+  /// Answers the next read as empty, the way a store that read before another one wrote sees it.
+  var missNextRead = false
 
   func add(_ attributes: [String: Any]) -> OSStatus {
     calls.append("add")
@@ -132,6 +102,10 @@ final class SelectionSaltFakeKeychain: KeychainOperating, @unchecked Sendable {
   }
 
   func copyMatching(_ query: [String: Any]) -> (OSStatus, Data?) {
+    if missNextRead {
+      missNextRead = false
+      return (errSecItemNotFound, nil)
+    }
     let key = identity(query)
     guard let data = items[key] else { return (errSecItemNotFound, nil) }
     return (errSecSuccess, data)

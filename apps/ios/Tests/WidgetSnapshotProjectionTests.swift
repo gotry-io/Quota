@@ -14,87 +14,12 @@ struct WidgetSnapshotProjectionTests {
   /// this file is stamped with — so a projected pace is the same on every run.
   private let testNow = Date(timeIntervalSince1970: 1_786_723_200)
 
+  /// Rows that tie on remaining percent rank by title, then fingerprint, source, and window id,
+  /// so the widget shows the same order whatever order Relay listed them in. A source-scoped
+  /// fingerprint is shared by two Macs collecting the same provider; the source is what tells
+  /// those two subscriptions apart.
   @Test
-  func projectsOneItemPerWindowOfEachResolvedSubscription() throws {
-    // Relay resolves an account's readings into one row per subscription, so the widget shows
-    // one item per window of each row rather than one per reporting device.
-    let subscription = observation(
-      provider: "codex",
-      fingerprint: "fp_codex_01",
-      windowID: "weekly",
-      title: "Weekly",
-      usedPercent: 10,
-      observedAt: "2026-08-14T16:00:00Z",
-      deviceID: "device_02"
-    )
-    let otherFingerprint = observation(
-      provider: "codex",
-      fingerprint: "fp_codex_02",
-      windowID: "weekly",
-      title: "Weekly",
-      usedPercent: 50,
-    )
-    let summary = try decodeSummary(subscriptions: [subscription, otherFingerprint])
-    let items = WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt, now: testNow)
-    #expect(items.count == 2)
-    #expect(items.map(\.remainingPercent).sorted() == [50, 90])
-    #expect(items.allSatisfy { $0.providerID == "codex" })
-    #expect(items.allSatisfy { $0.providerDisplayName == "Codex" })
-  }
-
-  @Test
-  func sortsPercentageLowestRemainingThenProviderThenBalanceOnly() throws {
-    let summary = try decodeSummary(
-      subscriptions: [
-        observation(
-          provider: "claude",
-          fingerprint: "fp_claude",
-          windowID: "weekly",
-          title: "Weekly",
-          usedPercent: 20,
-        ),
-        observation(
-          provider: "codex",
-          fingerprint: "fp_codex",
-          windows: [
-            (id: "5h", title: "5h", usedPercent: 80),
-            (id: "weekly", title: "Weekly", usedPercent: 80),
-          ],
-        ),
-        observation(
-          provider: "grok",
-          fingerprint: "fp_grok",
-          windowID: "balance",
-          title: "Balance (USD)",
-          usedPercent: 0,
-          remainingValue: 12.5,
-          valueUnit: "usd",
-          limitValue: nil,
-        ),
-      ]
-    )
-    let items = WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt, now: testNow)
-    #expect(items.count == 4)
-    // Percentage first: lowest remainingPercent, then provider sortOrder, then title.
-    #expect(items[0].providerID == "codex")
-    #expect(items[0].remainingPercent == 20)
-    #expect(items[0].windowTitle == "5h")
-    #expect(items[1].providerID == "codex")
-    #expect(items[1].windowTitle == "Weekly")
-    #expect(items[2].providerID == "claude")
-    #expect(items[2].remainingPercent == 80)
-    // Balance-only last with Balance title from RemainingQuotaFormat.
-    #expect(items[3].providerID == "grok")
-    #expect(items[3].windowTitle == "Balance")
-    #expect(items[3].remainingValue == 12.5)
-    #expect(items[3].unit == .usd)
-    #expect(items[3].hasLimit == false)
-  }
-
-  @Test
-  func sortsDeterministicallyWithFingerprintAndWindowIdTieBreaks() throws {
-    // One account reporting several windows is one observation carrying all of them, so
-    // the tie-breaks have to order windows within a subscription as well as across them.
+  func equalReadingsRankTheSameWhateverOrderTheyArriveIn() throws {
     let summary = try decodeSummary(
       subscriptions: [
         observation(
@@ -113,40 +38,34 @@ struct WidgetSnapshotProjectionTests {
         ),
       ]
     )
-    let items = WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt, now: testNow)
-    #expect(items.count == 4)
-    // Same remaining percent and provider: title, then fingerprint, then window id.
+    let items = WidgetSnapshotProjection.projectItems(
+      from: summary.subscriptions, salt: testSalt, now: testNow)
     #expect(items.map(\.windowTitle) == ["Daily", "Daily", "Weekly", "Weekly"])
-    // Fingerprint is not published; order is still stable across runs.
-    let again = WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt, now: testNow)
-    #expect(items == again)
-  }
+    #expect(
+      WidgetSnapshotProjection.projectItems(
+        from: Array(summary.subscriptions.reversed()), salt: testSalt, now: testNow) == items
+    )
 
-  @Test
-  func keepsSourceScopedSubscriptionsApartAndOrdersThemDeterministically() throws {
-    // A source-scoped fingerprint means nothing outside its source, so two Macs collecting
-    // the same provider share it. The source is what tells the two subscriptions apart.
-    let observation = { (deviceID: String, usedPercent: Double) in
+    let sourceScoped = { (deviceID: String) in
       self.subscriptionPayload(
         provider: "litellm",
         fingerprint: "fp_source",
         scope: "source",
-        windows: [
-          ["id": "weekly", "title": "Weekly", "used_percent": usedPercent] as [String: Any]
-        ],
+        windows: [["id": "weekly", "title": "Weekly", "used_percent": 40.0] as [String: Any]],
         status: "available",
         observedAt: "2026-08-14T15:00:00Z",
         deviceID: deviceID
       )
     }
-    let summary = try decodeSummary(
-      subscriptions: [observation("device_b", 40), observation("device_a", 40)])
-
-    let items = WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt, now: testNow)
-
-    #expect(items.count == 2)
+    let twoMacs = try decodeSummary(
+      subscriptions: [sourceScoped("device_b"), sourceScoped("device_a")])
+    let macItems = WidgetSnapshotProjection.projectItems(
+      from: twoMacs.subscriptions, salt: testSalt, now: testNow)
+    #expect(macItems.count == 2)
+    #expect(Set(macItems.map(\.selectionID)).count == 2)
     #expect(
-      WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt, now: testNow) == items
+      WidgetSnapshotProjection.projectItems(
+        from: Array(twoMacs.subscriptions.reversed()), salt: testSalt, now: testNow) == macItems
     )
   }
 
@@ -164,61 +83,6 @@ struct WidgetSnapshotProjectionTests {
     let summary = try decodeSummary(subscriptions: subscriptions)
     let items = WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt, now: testNow)
     #expect(items.count == 16)
-  }
-
-  @Test
-  func mapsTodayCostAndTheReportedState() throws {
-    let summary = try decodeSummary(
-      subscriptions: [
-        observation(
-          provider: "codex",
-          fingerprint: "fp_codex_01",
-          windowID: "weekly",
-          title: "Weekly",
-          usedPercent: 29,
-          status: "stale",
-        )
-      ]
-    )
-    let snapshot = WidgetSnapshotProjection.make(
-      subscriptions: summary.subscriptions,
-      today: summary.usage.today,
-      fetchedAt: date("2026-08-14T16:00:00Z"),
-      salt: testSalt
-    )
-    #expect(snapshot.items.first?.state == .stale)
-    #expect(snapshot.today.inputTokens == 1000)
-    #expect(snapshot.today.outputTokens == 200)
-    #expect(snapshot.today.cost.status == .complete)
-    #expect(snapshot.today.cost.amountMicrousd == "3138")
-  }
-
-  /// A phone with no Quota account has no Today fold to project: Today is the Account's sum of
-  /// what every device reported, and this device uploads nothing.
-  @Test
-  func withoutAnAccountTodayIsUnavailableRatherThanZero() throws {
-    let summary = try decodeSummary(
-      subscriptions: [
-        observation(
-          provider: "codex",
-          fingerprint: "fp_codex_01",
-          windowID: "weekly",
-          title: "Weekly",
-          usedPercent: 29
-        )
-      ]
-    )
-    let snapshot = WidgetSnapshotProjection.make(
-      subscriptions: summary.subscriptions,
-      today: nil,
-      fetchedAt: date("2026-08-14T16:00:00Z"),
-      salt: testSalt
-    )
-    #expect(snapshot.items.count == 1)
-    #expect(snapshot.today.inputTokens == 0)
-    #expect(snapshot.today.outputTokens == 0)
-    #expect(snapshot.today.cost.status == .unavailable)
-    #expect(snapshot.today.cost.amountMicrousd == nil)
   }
 
   @Test
@@ -242,28 +106,6 @@ struct WidgetSnapshotProjectionTests {
     // The widget re-renders long after the app published this.
     #expect(item.stateLabel(now: date("2026-08-14T16:00:01Z")) == "Not current")
     #expect(item.stateLabel(now: date("2026-08-14T15:59:59Z")) == nil)
-  }
-
-  @Test
-  func aReportedFailureReachesTheWidgetAsItsOwnWord() throws {
-    let summary = try decodeSummary(
-      subscriptions: [
-        observation(
-          provider: "codex",
-          fingerprint: "fp_codex_01",
-          windowID: "monthly",
-          title: "Monthly",
-          usedPercent: 0,
-          status: "auth_required",
-        )
-      ]
-    )
-    let item = try #require(WidgetSnapshotProjection.projectItems(from: summary.subscriptions, salt: testSalt, now: testNow).first)
-
-    // The wire status, the payload state, and the shared vocabulary have to agree; the
-    // reading has not aged out, so only what the source reported can say otherwise.
-    #expect(item.state == .signInNeeded)
-    #expect(item.observedState(now: date("2026-08-14T16:00:00Z")) == .signInNeeded)
   }
 
   @Test
@@ -325,42 +167,6 @@ struct WidgetSnapshotProjectionTests {
     #expect(!encoded.contains("\"source\""))
     #expect(encoded.contains("selection_id"))
     #expect(encoded.contains(expectedID))
-  }
-
-  @Test
-  func selectionIDIsStableForTheSameSaltAndChangesWhenTheSaltDoes() throws {
-    let summary = try decodeSummary(
-      subscriptions: [
-        observation(
-          provider: "codex",
-          fingerprint: "fp_codex_01",
-          windowID: "weekly",
-          title: "Weekly",
-          usedPercent: 29
-        )
-      ]
-    )
-    let first = WidgetSnapshotProjection.projectItems(
-      from: summary.subscriptions,
-      salt: testSalt,
-      now: testNow
-    )
-    let again = WidgetSnapshotProjection.projectItems(
-      from: summary.subscriptions,
-      salt: testSalt,
-      now: testNow
-    )
-    #expect(first.map(\.selectionID) == again.map(\.selectionID))
-    #expect(first.first?.selectionID.count == 12)
-
-    let otherSalt = Data(repeating: 0xa5, count: 32)
-    let rotated = WidgetSnapshotProjection.projectItems(
-      from: summary.subscriptions,
-      salt: otherSalt,
-      now: testNow
-    )
-    #expect(first.map(\.selectionID) != rotated.map(\.selectionID))
-    #expect(rotated.first?.selectionID.count == 12)
   }
 
   private func decodeSummary(

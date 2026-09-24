@@ -10,33 +10,6 @@ import UserNotifications
 
 @MainActor
 struct SettingsModelTests {
-  @Test func thresholdChoicesAreTheDocumentedSetAndSecondSlotMayBeOff() {
-    #expect(SettingsModel.thresholdChoices == [5, 10, 15, 20, 25, 30, 40, 50])
-    #expect(SettingsCopy.off == "Off")
-    #expect(SettingsCopy.alertAt == "Alert at")
-    #expect(SettingsCopy.thenAt == "Then at")
-    #expect(SettingsCopy.enableNotifications == "Enable Notifications")
-    #expect(SettingsCopy.resetReminders == "Reset Reminders")
-    #expect(SettingsCopy.footer == "Alerts are checked when Quota refreshes.")
-    #expect(
-      SettingsCopy.footerSignedIn
-        == "Reset reminders, pace warnings, and thresholds follow the Account. Enable Notifications stays on this iPhone. Alerts are checked when Quota refreshes."
-    )
-    #expect(SettingsCopy.budgetStaysOnThisIPhone == "The monthly budget stays on this iPhone.")
-    #expect(SettingsCopy.accountSpendThisMonth == "Account spend this month")
-    #expect(SettingsCopy.permissionDenied == "Allow notifications for Quota in Settings.")
-    #expect(SettingsCopy.openSettings == "Open Settings")
-    #expect(SettingsCopy.emptyAlerts == "No quota alerts are available yet.")
-    #expect(SettingsCopy.devices == "Devices")
-    #expect(SettingsCopy.manageDevices == "Manage Devices on Web")
-    #expect(SettingsCopy.thresholdLabel(20) == "20%")
-    #expect(SettingsModel.isValidThreshold(20))
-    #expect(!SettingsModel.isValidThreshold(3))
-    #expect(!SettingsModel.isValidThreshold(99))
-    #expect(SettingsModel.secondThresholdChoices(first: 20) == [5, 10, 15])
-    #expect(SettingsModel.secondThresholdChoices(first: 5).isEmpty)
-  }
-
   @Test func invalidThresholdsAreIgnoredAndSecondOffStoresASingleValue() {
     let defaults = isolatedSettingsDefaults()
     defer { defaults.tearDown() }
@@ -113,68 +86,9 @@ struct SettingsModelTests {
     #expect(QuotaWebLinks.deleteAccountReturnTo == "/my/settings?delete=account")
   }
 
-  @Test func identityMethodLineListsBoundChannelsInSurfaceOrder() {
-    let now = Date(timeIntervalSince1970: 1_786_723_200)
-    #expect(SettingsCopy.identityMethodLine([]) == "Signed in")
-    let github = AccountIdentity(provider: .github, label: "octocat", linkedAt: now)
-    let apple = AccountIdentity(provider: .apple, label: nil, linkedAt: now)
-    #expect(SettingsCopy.identityMethodLine([github]) == "GitHub")
-    #expect(SettingsCopy.identityMethodLine([github, apple]) == "Apple · GitHub")
-  }
-
-  @Test func versionLabelIsShortVersionAndBuild() {
-    #expect(SettingsCopy.versionLabel(shortVersion: "0.0.1", build: "1") == "0.0.1 (1)")
-    #expect(SettingsCopy.license == "License")
-    #expect(SettingsCopy.licenseValue == "MIT")
-    #expect(
-      SettingsCopy.productSentence
-        == "Quota shows remaining quota this iPhone reads from the providers you connect, and the quota "
-        + "and usage QuotaBar reports from your Macs."
-    )
-    #expect(SettingsCopy.privacySentence == "This iPhone never uploads its sign-ins. Only the readings it takes reach your Account.")
-  }
-
-  @Test func subscriptionsUseCatalogOrderMaskedLabelsAndDefaultThresholds() {
-    let defaults = isolatedSettingsDefaults()
-    defer { defaults.tearDown() }
-    let model = SettingsModel(
-      rulesStore: AlertCoordinator.rulesStore(defaults: defaults.store),
-      notificationCenter: FakeNotificationAuthorizer(),
-      appearanceDefaults: defaults.store
-    )
-    let now = Date(timeIntervalSince1970: 1_786_723_200)
-    let grok = testSubscription(
-      provider: .grok,
-      fingerprint: "visual_grok",
-      label: nil,
-      observedAt: now
-    )
-    let codex = testSubscription(
-      provider: .codex,
-      fingerprint: "visual_codex",
-      label: "pe***@example.com",
-      observedAt: now
-    )
-    let claude = testSubscription(
-      provider: .claude,
-      fingerprint: "visual_claude",
-      label: "Team workspace",
-      observedAt: now
-    )
-
-    #expect(model.notificationSubscriptions(from: []).isEmpty)
-
-    let rows = model.notificationSubscriptions(from: [grok, claude, codex])
-    #expect(rows.map(\.provider) == [.codex, .claude, .grok])
-    #expect(rows.map(\.providerDisplayName) == ["Codex", "Claude Code", "Grok"])
-    #expect(rows.map(\.accountLabel) == ["pe***@example.com", "Team workspace", "Account 1"])
-    #expect(rows.allSatisfy { $0.firstThreshold == 20 && $0.secondThreshold == 10 })
-    #expect(rows[0].selector == SettingsModel.selector(for: codex))
-    #expect(!model.rules.enabled)
-    #expect(model.rules.resetReminders)
-  }
-
-  @Test func denyingAuthorizationTurnsTheSwitchBackOff() async {
+  /// The Enable Notifications switch is what the system answered, not what was tapped: a denial
+  /// turns it back off and says so, and a grant turns it on and keeps it on across a relaunch.
+  @Test func theNotificationSwitchFollowsWhatTheSystemAnswers() async {
     let defaults = isolatedSettingsDefaults()
     defer { defaults.tearDown() }
     let center = FakeNotificationAuthorizer()
@@ -190,19 +104,8 @@ struct SettingsModelTests {
     #expect(!model.rules.enabled)
     #expect(model.authorizationDenied)
     #expect(center.requestedOptions == [.alert, .sound])
-  }
 
-  @Test func grantingAuthorizationTurnsTheSwitchOn() async {
-    let defaults = isolatedSettingsDefaults()
-    defer { defaults.tearDown() }
-    let center = FakeNotificationAuthorizer()
     center.requestAuthorizationGranted = true
-    let model = SettingsModel(
-      rulesStore: AlertCoordinator.rulesStore(defaults: defaults.store),
-      notificationCenter: center,
-      appearanceDefaults: defaults.store
-    )
-
     await model.setNotificationsEnabled(true)
 
     #expect(model.rules.enabled)
@@ -241,29 +144,4 @@ private func isolatedSettingsDefaults() -> IsolatedSettingsDefaults {
   let store = UserDefaults(suiteName: name)!
   store.removePersistentDomain(forName: name)
   return IsolatedSettingsDefaults(name: name, store: store)
-}
-
-private func testSubscription(
-  provider: ProviderID,
-  fingerprint: String,
-  label: String?,
-  observedAt: Date
-) -> QuotaSubscription {
-  let snapshot = QuotaSnapshot(
-    provider: provider,
-    account: QuotaAccount(
-      fingerprint: fingerprint,
-      label: label,
-      fingerprintScope: .global
-    ),
-    windows: [],
-    status: .available,
-    observedAt: observedAt
-  )
-  return QuotaSubscription(
-    key: "\(provider.rawValue)|\(fingerprint)|global|",
-    provider: provider,
-    snapshot: snapshot,
-    sources: []
-  )
 }

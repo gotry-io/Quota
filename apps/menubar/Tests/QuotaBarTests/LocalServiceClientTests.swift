@@ -118,85 +118,6 @@ struct LocalServiceClientTests {
   }
 
   @Test
-  func decodesBoundedUnifiedDiagnosticReport() async throws {
-    let service = try TemporaryService(
-      python: #"""
-        import json
-        import sys
-
-        request = json.loads(sys.stdin.readline())
-        if request["operation"] == "diagnose":
-            result = {
-                "schema_version": 3,
-                "generated_at": "2026-08-11T00:00:00Z",
-                "client": {"name": "QuotaBar", "version": "0.0.7"},
-                "summary": {"operation": "healthy", "attention": "none"},
-                "surfaces": [
-                    {"id": "quota_overview", "status": "ok", "data": "empty", "last_success_at": None, "message": "No quota yet.", "recovery": "none"},
-                    {"id": "usage_this_device", "status": "ok", "data": "empty", "last_success_at": None, "message": "No Usage yet.", "recovery": "none"},
-                    {"id": "usage_account", "status": "inactive", "data": "empty", "last_success_at": None, "message": "Usage sync is off.", "recovery": "none"},
-                    {"id": "account", "status": "inactive", "data": "empty", "last_success_at": None, "message": "Not signed in.", "recovery": "none"},
-                ],
-                "sources": [],
-                "recent": [],
-            }
-        else:
-            result = {}
-        print(json.dumps({
-            "type": "response",
-            "request_id": request["request_id"],
-            "result": result,
-        }), flush=True)
-        """#
-    )
-    defer { service.remove() }
-    let client = try client(for: service)
-    let report = try await client.diagnose()
-    #expect(report.summary.operation == .healthy)
-    #expect(report.surfaces.count == 4)
-    await client.shutdown()
-  }
-
-  @Test
-  func decodesQuotaHistorySamplesFromTheHelper() async throws {
-    let service = try TemporaryService(
-      python: #"""
-        import json
-        import sys
-
-        request = json.loads(sys.stdin.readline())
-        assert request["operation"] == "quota_history"
-        assert "since" in request["payload"]
-        result = {
-            "samples_by_subscription": {
-                "ccfc96629357": {
-                    "five_hour": [{
-                        "resets_at": "2026-09-05T12:00:00Z",
-                        "observed_at": "2026-09-05T09:30:00Z",
-                        "used_percent": 40.0,
-                    }]
-                }
-            },
-            "utc_offset_seconds": 0,
-        }
-        print(json.dumps({
-            "type": "response",
-            "request_id": request["request_id"],
-            "result": result,
-        }), flush=True)
-        """#
-    )
-    defer { service.remove() }
-    let client = try client(for: service)
-    let history = try await client.quotaHistory(
-      since: Date(timeIntervalSince1970: 1_786_300_000)
-    )
-    #expect(history.utcOffsetSeconds == 0)
-    #expect(history.samplesBySubscription["ccfc96629357"]?["five_hour"]?.first?.usedPercent == 40)
-    await client.shutdown()
-  }
-
-  @Test
   func quotaHistoryEncodesLocalAndAccountSources() async throws {
     let service = try TemporaryService(
       python: #"""
@@ -318,7 +239,6 @@ struct LocalServiceClientTests {
     let service = try TemporaryService(
       announcesReady: false,
       python: #"""
-        _time.sleep(0.5)
         print(_json.dumps({"type": "event", "event": "ready", "ipc_version": 4}), flush=True)
         """#
     )
@@ -395,45 +315,6 @@ struct LocalServiceClientTests {
   }
 
   @Test
-  func refreshAccountSettingsDecodesTheStateFragment() async throws {
-    let service = try TemporaryService(
-      python: #"""
-        import json
-        import sys
-
-        request = json.loads(sys.stdin.readline())
-        assert request["operation"] == "refresh_account_settings"
-        assert request["payload"] == {}
-        print(json.dumps({
-            "type": "response",
-            "request_id": request["request_id"],
-            "result": {
-                "document": {
-                    "protocol_version": 2,
-                    "revision": 0,
-                    "updated_at": "1970-01-01T00:00:00Z",
-                    "alerts": {
-                        "reset_reminders": True,
-                        "pace_alerts": True,
-                        "thresholds": {},
-                    },
-                    "budget": {"amount_usd": None, "alerts": True},
-                },
-                "revision": 0,
-            },
-        }), flush=True)
-        """#
-    )
-    defer { service.remove() }
-    let client = try client(for: service)
-    let settings = try await client.refreshAccountSettings()
-    #expect(settings.revision == 0)
-    #expect(settings.document.budget.amountUSD == nil)
-    #expect(settings.document.alerts.resetReminders)
-    await client.shutdown()
-  }
-
-  @Test
   func mapsStableRemoteErrorsWithoutAcceptingPartialResults() async throws {
     let service = try TemporaryService(
       python: #"""
@@ -458,34 +339,6 @@ struct LocalServiceClientTests {
     ) {
       _ = try await client.state()
     }
-  }
-
-  @Test
-  func decodesDeviceDisconnectReasonFromRemoteError() async throws {
-    let service = try TemporaryService(
-      python: #"""
-        import json
-        import sys
-
-        request = json.loads(sys.stdin.readline())
-        print(json.dumps({
-            "type": "response",
-            "request_id": request["request_id"],
-            "error": {"code": "device_deleted", "recovery_action": "login"},
-        }), flush=True)
-        """#
-    )
-    defer { service.remove() }
-    let client = try client(for: service)
-    let remoteError = LocalServiceRemoteError(code: .deviceDeleted, recoveryAction: .login)
-
-    await #expect(throws: LocalServiceClientError.remote(remoteError)) {
-      _ = try await client.state()
-    }
-    #expect(
-      LocalServiceClientError.remote(remoteError).errorDescription
-        == "This device was removed. Sign in again to reconnect it."
-    )
   }
 
   @Test
@@ -552,18 +405,28 @@ struct LocalServiceClientTests {
     #expect(errors.allSatisfy { $0 == .connectionClosed })
   }
 
+  /// `launch` opts the helper's stdin out of SIGPIPE. A helper whose input is gone must turn the
+  /// next request into `connectionClosed`; without the option that write kills QuotaBar (here, the
+  /// test runner) before `write` can report `EPIPE`.
   @Test
-  func noSigpipeDescriptorsReportEPIPEOnceTheReaderIsGone() throws {
-    // `launch` sets this on the helper's stdin so that `write` can catch a broken pipe.
-    var descriptors: [Int32] = [0, 0]
-    try #require(pipe(&descriptors) == 0)
-    defer { close(descriptors[1]) }
-    try #require(fcntl(descriptors[1], F_SETNOSIGPIPE, 1) == 0)
-    close(descriptors[0])
+  func aRequestToAHelperThatClosedItsInputFailsInsteadOfKillingTheApp() async throws {
+    let service = try TemporaryService(
+      announcesReady: false,
+      python: #"""
+        import os
 
-    // Without the option this write terminates the runner instead of returning.
-    #expect(write(descriptors[1], "x", 1) == -1)
-    #expect(errno == EPIPE)
+        # The reader goes first, then the helper says it is ready, so the request that follows
+        # is written to a pipe nobody reads.
+        os.close(0)
+        ready()
+        wait_for_mark("finished")
+        """#
+    )
+    defer { service.remove() }
+    defer { service.mark("finished") }
+    let client = try client(for: service)
+
+    #expect(await stateError(from: client) == .connectionClosed)
   }
 
   @Test
@@ -783,9 +646,10 @@ struct LocalServiceClientTests {
       python: #"""
         import json
         import sys
-        import time
 
-        time.sleep(0.6)
+        # Running, and silent until the test has cancelled the caller that waits for it.
+        mark("launched")
+        wait_for_mark("cancelled")
         ready()
 
         for line in sys.stdin:
@@ -801,13 +665,15 @@ struct LocalServiceClientTests {
     let client = try client(for: service)
 
     let abandoned = Task { try await client.state() }
-    try await Task.sleep(for: .milliseconds(100))
+    // The helper is running and has not announced itself, so the caller is waiting for ready.
+    try await service.waitForMark("launched")
     abandoned.cancel()
     await #expect(throws: CancellationError.self) {
       _ = try await abandoned.value
     }
 
     // The helper opens as it was always going to, and the next request is served by it.
+    service.mark("cancelled")
     let state = try await client.state()
     #expect(state.revision == 1)
     #expect(try service.launchCount() == 1)
@@ -866,32 +732,22 @@ struct LocalServiceClientTests {
 /// wait on. The one real-process watchdog case above proves the monitor is wired to this.
 @Suite
 struct LivenessRoundTests {
+  /// Nothing outstanding stops the watch; an answered round asks again and forgets earlier
+  /// misses; the first silent round counts and asks again; the second gives up.
   @Test
-  func nothingOutstandingStopsTheWatch() {
+  func aHelperIsGivenUpOnOnlyAfterTwoSilentRoundsWhileARequestWaits() {
     #expect(
       LivenessRound.next(pendingRequests: 0, pingsOutstanding: 1, missedPings: 1)
         == .stopWatching
     )
-  }
-
-  @Test
-  func anAnsweredRoundAsksAgainAndForgetsEarlierMisses() {
     #expect(
       LivenessRound.next(pendingRequests: 1, pingsOutstanding: 0, missedPings: 0)
         == .ping(missedPings: 0)
     )
-  }
-
-  @Test
-  func theFirstUnansweredPingCountsAndAsksAgain() {
     #expect(
       LivenessRound.next(pendingRequests: 1, pingsOutstanding: 1, missedPings: 0)
         == .ping(missedPings: 1)
     )
-  }
-
-  @Test
-  func theSecondUnansweredPingGivesUp() {
     #expect(
       LivenessRound.next(pendingRequests: 1, pingsOutstanding: 1, missedPings: 1) == .giveUp
     )

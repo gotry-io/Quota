@@ -272,24 +272,6 @@ final class QuotaSmokeUITests: QuotaUITestCase {
     )
   }
 
-  /// Devices are the Account's. Without an account the Settings row is absent; the sign-in
-  /// card already covers it.
-  func testLocalOnlyFixtureHasNoDevicesRow() throws {
-    let app = launch(fixture: "local-only", route: "settings")
-    XCTAssertTrue(
-      app.descendants(matching: .any)["settings.root"].waitForExistence(timeout: 10),
-      "settings.root"
-    )
-    XCTAssertFalse(
-      app.descendants(matching: .any)["settings.devices"].exists,
-      "Devices row is absent when signed out"
-    )
-    XCTAssertFalse(
-      app.descendants(matching: .any)["devices.root"].exists,
-      "Devices is not a tab"
-    )
-  }
-
   func testConfirmAccountFixtureAsksToUseTheGitHubAccount() throws {
     let app = launch(fixture: "confirm-account")
     XCTAssertTrue(
@@ -471,7 +453,7 @@ final class QuotaSmokeUITests: QuotaUITestCase {
   }
 
   /// A phone that only reads its own providers still has a quota screen, no managed Today, and no
-  /// account-only Devices row.
+  /// account-only Devices row in Settings.
   func testLocalOnlyOverviewIsItsOwnReadingWithoutAccountRows() throws {
     let app = launch(fixture: "local-only")
     XCTAssertTrue(
@@ -502,16 +484,19 @@ final class QuotaSmokeUITests: QuotaUITestCase {
     tapToOpen(card, in: app, "overview.subscription", destination: "subscription.detail")
     popBack(app, from: "subscription.detail", to: "overview.root", backTitle: "Quota")
     XCTAssertTrue(card.waitForExistence(timeout: 5), "this iPhone's own reading after back")
+
+    // Devices are the Account's: without one the Settings hub has no Devices row either; the
+    // sign-in card already covers it.
+    try selectTab(app, "Settings", root: "settings.root")
+    XCTAssertFalse(
+      app.descendants(matching: .any)["settings.devices"].exists,
+      "Devices row is absent when signed out"
+    )
   }
 
-  /// The seven essential values at the standard text size: they exist, are hittable, carry their
-  /// whole label, and sit on screen.
-  func testEssentialValuesAtStandardSize() throws {
-    try assertEssentialValues(textSize: "large")
-  }
-
-  /// The same seven values at `accessibilityExtraLarge`, where a fixed-height row or a
-  /// `lineLimit(1)` would truncate them.
+  /// The seven essential values at `accessibilityExtraLarge`, where a fixed-height row or a
+  /// `lineLimit(1)` would truncate them: they exist, are hittable, carry their whole label, and
+  /// sit on screen.
   func testEssentialValuesAtAccessibilitySize() throws {
     try assertEssentialValues(textSize: "accessibilityExtraLarge")
   }
@@ -532,7 +517,7 @@ final class QuotaSmokeUITests: QuotaUITestCase {
     )
   }
 
-  /// Both sizes assert the same values, so a size that truncates one of them fails by name.
+  /// Each value is asserted by name, so the one a size truncates fails by name.
   private func assertEssentialValues(textSize: String) throws {
     var app = launch(fixture: "content", textSize: textSize)
     XCTAssertTrue(

@@ -69,28 +69,24 @@ enum Fixtures {
     return try! JSONSerialization.data(withJSONObject: object)
   }
 
-  static func summaryTotals(
-    input: Int = 1000,
-    output: Int = 200,
-    cacheRead: Int = 100
-  ) -> [String: Any] {
+  static func summaryTotals(input: Int = 1000, output: Int = 200) -> [String: Any] {
     [
       "total_tokens": input + output,
       "input_tokens": input,
       "output_tokens": output,
-      "cache_read_input_tokens": cacheRead,
+      "cache_read_input_tokens": 100,
       "cache_write_input_tokens": 0,
       "reasoning_tokens": 50,
       "messages": 1,
     ]
   }
 
-  static func completeCost(amount: String = "3138") -> [String: Any] {
+  static func completeCost() -> [String: Any] {
     [
       "mode": "calculate",
       "basis": "calculated",
       "status": "complete",
-      "amount_microusd": amount,
+      "amount_microusd": "3138",
       "catalog_revision": "pricing_1",
       "calculated_rows": 1,
       "reported_rows": 0,
@@ -100,61 +96,12 @@ enum Fixtures {
     ]
   }
 
-  static func usageActivityDay(
-    date: String = "2026-08-10",
-    totals: [String: Any]? = nil,
-    cost: [String: Any]? = nil,
-    partial: Bool = false,
-    agents: [[String: Any]]? = nil
-  ) -> [String: Any] {
-    var object: [String: Any] = [
-      "date": date,
-      "totals": totals ?? summaryTotals(),
-      "cost": cost ?? completeCost(),
-      "partial": partial,
-    ]
-    if let agents {
-      object["agents"] = agents
-    }
-    return object
-  }
-
-  static func usagePeriodDayBucket(
-    date: String,
-    totals: [String: Any]? = nil,
-    cost: [String: Any]? = nil,
-    partial: Bool = false
-  ) -> [String: Any] {
+  static func usageActivityDay(date: String = "2026-08-10") -> [String: Any] {
     [
       "date": date,
-      "totals": totals ?? summaryTotals(),
-      "cost": cost ?? completeCost(),
-      "partial": partial,
-    ]
-  }
-
-  static func usagePeriodCoverage(
-    partial: Bool = false,
-    dailyRetainedFrom: String? = nil,
-    hourlyRetainedFrom: String? = nil,
-    truncatedByRetention: Bool = false
-  ) -> [String: Any] {
-    [
-      "partial": partial,
-      "daily_retained_from": dailyRetainedFrom as Any,
-      "hourly_retained_from": hourlyRetainedFrom as Any,
-      "truncated_by_retention": truncatedByRetention,
-    ]
-  }
-
-  static func usagePeriodRevision() -> [String: Any] {
-    [
-      "usage_revision": 1,
-      "device_generation": 1,
-      "account_updated_at": "2026-08-02T12:00:00Z",
-      "pricing_revision": "pricing_1",
-      "model_catalog_revision": "models_1",
-      "fold_version": 1,
+      "totals": summaryTotals(),
+      "cost": completeCost(),
+      "partial": false,
     ]
   }
 
@@ -162,15 +109,10 @@ enum Fixtures {
     from: String = "2026-08-02",
     to: String = "2026-08-02",
     timezone: String = "UTC",
-    totals: [String: Any]? = nil,
-    cost: [String: Any]? = nil,
-    cacheSaved saved: [String: Any]? = nil,
-    days: [[String: Any]]? = nil,
-    agents: [[String: Any]]? = nil,
-    coverage: [String: Any]? = nil,
-    extra: [String: Any] = [:]
+    totals: [String: Any]? = nil
   ) throws -> Data {
-    var object: [String: Any] = [
+    let totals = totals ?? summaryTotals()
+    let object: [String: Any] = [
       "protocol_version": 6,
       "request": ["from": from, "to": to, "timezone": timezone],
       "bounds": [
@@ -178,61 +120,52 @@ enum Fixtures {
         "end": "\(from)T01:00:00Z",
         "grid": WireCodec.usageHourGridRule,
       ],
-      "totals": totals ?? summaryTotals(),
-      "cost": cost ?? completeCost(),
-      "cache_saved": saved ?? cacheSaved(),
-      "days": days ?? [usagePeriodDayBucket(date: from, totals: totals, cost: cost)],
-      "coverage": coverage ?? usagePeriodCoverage(),
-      "revision": usagePeriodRevision(),
+      "totals": totals,
+      "cost": completeCost(),
+      "cache_saved": cacheSaved(),
+      "days": [
+        ["date": from, "totals": totals, "cost": completeCost(), "partial": false]
+      ],
+      "coverage": [
+        "partial": false,
+        "daily_retained_from": NSNull(),
+        "hourly_retained_from": NSNull(),
+        "truncated_by_retention": false,
+      ],
+      "revision": [
+        "usage_revision": 1,
+        "device_generation": 1,
+        "account_updated_at": "2026-08-02T12:00:00Z",
+        "pricing_revision": "pricing_1",
+        "model_catalog_revision": "models_1",
+        "fold_version": 1,
+      ],
     ]
-    if let agents {
-      object["agents"] = agents
-    }
-    for (key, value) in extra {
-      object[key] = value
-    }
     return try JSONSerialization.data(withJSONObject: object)
   }
 
-  static func usageActivityJSON(
-    days: [[String: Any]],
-    extra: [String: Any] = [:]
-  ) throws -> Data {
-    var object: [String: Any] = [
+  static func usageActivityJSON(days: [[String: Any]]) throws -> Data {
+    try JSONSerialization.data(withJSONObject: [
       "protocol_version": 6,
       "days": days,
-    ]
-    for (key, value) in extra {
-      object[key] = value
-    }
-    return try JSONSerialization.data(withJSONObject: object)
+    ])
   }
 
-  static func cacheSaved(
-    amountMicrousd: String? = "190",
-    status: String = "complete",
-    unpricedRows: Int = 0
-  ) -> [String: Any] {
+  static func cacheSaved() -> [String: Any] {
     [
-      "amount_microusd": amountMicrousd as Any,
-      "status": status,
-      "unpriced_rows": unpricedRows,
+      "amount_microusd": "190",
+      "status": "complete",
+      "unpriced_rows": 0,
     ]
   }
 
-  static func usagePeriod(
-    totals: [String: Any]? = nil,
-    cost: [String: Any]? = nil,
-    cacheSaved saved: [String: Any]? = nil,
-    partial: Bool = false,
-    agents: [[String: Any]] = []
-  ) -> [String: Any] {
+  static func usagePeriod(cost: [String: Any]? = nil) -> [String: Any] {
     [
-      "totals": totals ?? summaryTotals(),
+      "totals": summaryTotals(),
       "cost": cost ?? completeCost(),
-      "cache_saved": saved ?? cacheSaved(),
-      "partial": partial,
-      "agents": agents,
+      "cache_saved": cacheSaved(),
+      "partial": false,
+      "agents": [],
     ]
   }
 
@@ -285,65 +218,21 @@ enum Fixtures {
 
   static func accountSummaryJSON(
     accountID: String = "account_01",
-    extraRoot: [String: Any] = [:],
-    usage: [String: Any]? = nil,
-    subscriptions: [[String: Any]] = [],
-    devices: [[String: Any]] = []
+    usage: [String: Any]? = nil
   ) throws -> Data {
-    var object: [String: Any] = [
+    try JSONSerialization.data(withJSONObject: [
       "protocol_version": 6,
       "account": [
         "account_id": accountID,
         "display_label": "octocat",
         "created_at": "2026-07-01T00:00:00Z",
       ],
-      "devices": devices,
-      "subscriptions": subscriptions,
+      "devices": [],
+      "subscriptions": [],
       "usage": usage ?? accountUsage(),
       "pricing_revision": "pricing_1",
       "model_catalog_revision": "models_1",
-    ]
-    for (key, value) in extraRoot {
-      object[key] = value
-    }
-    return try JSONSerialization.data(withJSONObject: object)
-  }
-
-  static func quotaSubscription() -> [String: Any] {
-    [
-      "key": "codex|fp_codex_01|global|",
-      "provider": "codex",
-      "snapshot": [
-        "provider": "codex",
-        "account": [
-          "fingerprint": "fp_codex_01",
-          "fingerprint_scope": "global",
-          "label": "codex-user",
-          "plan": "plus",
-        ],
-        "windows": [
-          [
-            "id": "weekly",
-            "title": "Weekly",
-            "used_percent": 29.0,
-            "resets_at": "2026-08-18T00:00:00Z",
-          ]
-        ],
-        "status": "available",
-        "observed_at": "2026-08-14T15:00:00Z",
-      ],
-      "sources": [["device_id": "device_01", "observed_at": "2026-08-14T15:00:00Z"]],
-    ]
-  }
-
-  static func accountDevice() -> [String: Any] {
-    [
-      "id": "device_01",
-      "display_name": "Studio Mac",
-      "platform": "macos",
-      "last_seen_at": "2026-08-14T15:00:05Z",
-      "last_observed_at": "2026-08-14T15:00:00Z",
-    ]
+    ])
   }
 
   /// The control document an upload reads first.

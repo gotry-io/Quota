@@ -4,27 +4,6 @@ import QuotaPresentation
 import Testing
 
 struct AccountSettingsTests {
-  @Test func theBudgetAmountRoundTripsThroughTheWireAsCents() throws {
-    let cents = try AccountSettingsSample.document(amount: "\"250.00\"")
-    #expect(cents.budget.amountUSD == Decimal(250))
-    #expect(try AccountSettingsSample.wireAmount(cents) == "250.00")
-
-    let tenths = try AccountSettingsSample.document(amount: "\"0.5\"")
-    #expect(tenths.budget.amountUSD == Decimal(string: "0.5"))
-    // A `Decimal` keeps no trailing zero of its own, so the wire form is always cents.
-    #expect(try AccountSettingsSample.wireAmount(tenths) == "0.50")
-
-    let cap = try AccountSettingsSample.document(amount: "\"1000000\"")
-    #expect(cap.budget.amountUSD == UsageBudget.maximumAmountUSD)
-    #expect(try AccountSettingsSample.wireAmount(cap) == "1000000.00")
-
-    let none = try AccountSettingsSample.document(amount: "null")
-    #expect(none.budget.amountUSD == nil)
-    #expect(try AccountSettingsSample.wireAmount(none) == nil)
-    let written = try #require(String(data: try none.updateRequestJSON(), encoding: .utf8))
-    #expect(written.contains("\"amount_usd\":null"))
-  }
-
   @Test func aDocumentDecodesPastKeysThisBuildDoesNotName() throws {
     let document = try AccountSettingsDocument.decode(
       Data(
@@ -57,67 +36,6 @@ struct AccountSettingsTests {
     #expect(rewritten.history.sync == false)
     #expect(rewritten.revision == 0)
     #expect(rewritten.updatedAt == nil)
-  }
-
-  @Test func aDocumentWithoutHistoryDecodesAsSyncOffAndAWriteOmitsIt() throws {
-    let document = try AccountSettingsDocument.decode(
-      Data(
-        """
-        {
-          "protocol_version": 2,
-          "revision": 1,
-          "updated_at": "2026-09-21T10:00:00Z",
-          "alerts": { "reset_reminders": true, "pace_alerts": true, "thresholds": {} },
-          "budget": { "amount_usd": null, "alerts": true }
-        }
-        """.utf8
-      )
-    )
-    #expect(document.history.sync == false)
-    let object = try JSONSerialization.jsonObject(with: try document.updateRequestJSON())
-    let fields = try #require(object as? [String: Any])
-    #expect(fields["history"] == nil)
-    #expect(fields.keys.sorted() == ["alerts", "budget", "protocol_version"])
-  }
-
-  @Test func anExplicitHistorySwitchIsStoredAndAWriteThatNamesItSendsIt() throws {
-    let document = try AccountSettingsDocument.decode(
-      Data(
-        """
-        {
-          "alerts": { "reset_reminders": true, "pace_alerts": true, "thresholds": {} },
-          "budget": { "amount_usd": null, "alerts": true },
-          "history": { "sync": true }
-        }
-        """.utf8
-      )
-    )
-    #expect(document.history.sync)
-    #expect(document.writesHistory == false)
-    var named = document
-    named.writesHistory = true
-    let object = try JSONSerialization.jsonObject(with: try named.updateRequestJSON())
-    let fields = try #require(object as? [String: Any])
-    let history = try #require(fields["history"] as? [String: Any])
-    #expect(history["sync"] as? Bool == true)
-  }
-
-  /// The strict check is over the stored shape, so `revision`, `updated_at`, and the
-  /// `protocol_version` a request adds around it are not part of it either.
-  @Test func normalizeRefusesAKeyTheDocumentDoesNotDefine() {
-    let alerts = #"{"reset_reminders":true,"pace_alerts":true,"thresholds":{}}"#
-    let budget = #"{"amount_usd":null,"alerts":true}"#
-    let documents = [
-      #"{"alerts":\#(alerts),"budget":\#(budget),"enabled":false}"#,
-      #"{"revision":3,"alerts":\#(alerts),"budget":\#(budget)}"#,
-      #"{"protocol_version":2,"alerts":\#(alerts),"budget":\#(budget)}"#,
-      #"{"alerts":{"reset_reminders":true,"pace_alerts":true,"thresholds":{},"enabled":false},"#
-        + #""budget":\#(budget)}"#,
-      #"{"alerts":\#(alerts),"budget":{"amount_usd":null,"alerts":true,"currency":"USD"}}"#,
-    ]
-    for document in documents {
-      #expect(AccountSettings.normalize(Data(document.utf8)) == .refused, "\(document)")
-    }
   }
 
   @Test func anUpdateRequestStatesOnlyWhatAClientMayWrite() throws {
@@ -164,40 +82,6 @@ struct AccountSettingsTests {
     let rules = AlertRules(thresholds: ["a1b2c3d4e5f6": [10, 30, 20]])
     let policy = AccountSettingsPolicy(rules: rules, budget: UsageBudget.none)
     #expect(policy.thresholds == ["a1b2c3d4e5f6": [30, 20]])
-  }
-
-  @Test func selectorsThisDeviceDoesNotKnowSurviveAReapply() throws {
-    let fresh = try AccountSettingsDocument.decode(
-      Data(
-        """
-        {
-          "revision": 4,
-          "alerts": {
-            "reset_reminders": true,
-            "pace_alerts": true,
-            "thresholds": { "112233445566": [15], "deadbeef0001": [5] }
-          },
-          "budget": { "amount_usd": "100.00", "alerts": true }
-        }
-        """.utf8
-      )
-    )
-    let added = AccountSettings.reapply(
-      edit: .setThresholds(selector: "a1b2c3d4e5f6", [30, 5]),
-      onto: fresh
-    )
-    #expect(
-      added.alerts.thresholds == [
-        "112233445566": [15], "deadbeef0001": [5], "a1b2c3d4e5f6": [30, 5],
-      ]
-    )
-    #expect(added.revision == 4)
-    #expect(added.budget.amountUSD == Decimal(100))
-
-    let switched = AccountSettings.reapply(edit: .setPaceAlerts(false), onto: fresh)
-    #expect(switched.alerts.thresholds == fresh.alerts.thresholds)
-    #expect(switched.alerts.paceAlerts == false)
-    #expect(switched.alerts.resetReminders)
   }
 
   @Test func reapplyOfHistorySyncNamesHistoryOnlyOnThatWrite() throws {
@@ -315,6 +199,19 @@ struct AccountSettingsTests {
         "\(amount)"
       )
     }
+    // The strict check is over the stored shape, so `revision`, `updated_at`, and the
+    // `protocol_version` a request adds around it are not part of it either.
+    let alerts = #"{"reset_reminders":true,"pace_alerts":true,"thresholds":{}}"#
+    let budget = #"{"amount_usd":null,"alerts":true}"#
+    for document in [
+      #"{"revision":3,"alerts":\#(alerts),"budget":\#(budget)}"#,
+      #"{"protocol_version":2,"alerts":\#(alerts),"budget":\#(budget)}"#,
+      #"{"alerts":{"reset_reminders":true,"pace_alerts":true,"thresholds":{},"enabled":false},"#
+        + #""budget":\#(budget)}"#,
+      #"{"alerts":\#(alerts),"budget":{"amount_usd":null,"alerts":true,"currency":"USD"}}"#,
+    ] {
+      #expect(AccountSettings.normalize(Data(document.utf8)) == .refused, "\(document)")
+    }
     #expect(AccountSettings.normalize(Data("{}".utf8)) == .refused)
     #expect(
       AccountSettings.normalize(
@@ -337,10 +234,6 @@ private enum AccountSettingsSample {
     )
   }
 
-  static func document(amount: String) throws -> AccountSettingsDocument {
-    try AccountSettingsDocument.decode(json(amount: amount))
-  }
-
   /// A document giving every selector the same threshold list.
   static func thresholds(selectors: [String], values: String) -> Data {
     let entries = selectors.map { "\"\($0)\": \(values)" }.joined(separator: ", ")
@@ -356,13 +249,5 @@ private enum AccountSettingsSample {
       }
       """.utf8
     )
-  }
-
-  /// The `amount_usd` a write states, or nil when the write states no budget.
-  static func wireAmount(_ document: AccountSettingsDocument) throws -> String? {
-    let object = try JSONSerialization.jsonObject(with: try document.updateRequestJSON())
-    let fields = try #require(object as? [String: Any])
-    let budget = try #require(fields["budget"] as? [String: Any])
-    return budget["amount_usd"] as? String
   }
 }

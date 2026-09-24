@@ -49,7 +49,7 @@ struct QuotaRemainingHistoryTests {
     #expect(currentFirst.remainingPercent > previousLast.remainingPercent)
   }
 
-  @Test func aMissingWindowStaysAGap() throws {
+  @Test func aMissingWindowIsAGapAndABackToBackWindowIsNot() throws {
     let firstReset = now.addingTimeInterval(-Double(cadence))
     let thirdReset = firstReset.addingTimeInterval(Double(cadence * 2))
     let history = try #require(
@@ -77,42 +77,27 @@ struct QuotaRemainingHistoryTests {
       history.segments[1].resetsAt.timeIntervalSince(history.segments[0].resetsAt)
         == Double(cadence * 2)
     )
-  }
 
-  @Test func estimateEndpointEqualsThePaceProjection() throws {
-    let resetsAt = now.addingTimeInterval(3_600)
-    let start = resetsAt.addingTimeInterval(Double(-cadence))
-    let lastObserved = start.addingTimeInterval(12_600)
-    let used = 58.0
-    let history = try #require(
+    // Two windows back to back are two segments, and that is a reset, not a gap.
+    let previousReset = now
+    let currentReset = previousReset.addingTimeInterval(Double(cadence))
+    let consecutive = try #require(
       QuotaRemainingHistory.fold(
-        window: QuotaHistoryReading(resetsAt: resetsAt, cadenceSeconds: cadence),
+        window: QuotaHistoryReading(resetsAt: currentReset, cadenceSeconds: cadence),
         samples: [
           QuotaSample(
-            resetsAt: resetsAt, observedAt: start.addingTimeInterval(3_600), usedPercent: 20),
-          QuotaSample(resetsAt: resetsAt, observedAt: lastObserved, usedPercent: used),
+            resetsAt: previousReset, observedAt: previousReset.addingTimeInterval(-60),
+            usedPercent: 80),
+          QuotaSample(
+            resetsAt: currentReset, observedAt: previousReset.addingTimeInterval(60),
+            usedPercent: 12),
         ],
-        usedPercent: used,
-        now: lastObserved
+        usedPercent: 12,
+        now: previousReset.addingTimeInterval(60)
       )
     )
-    let pace = QuotaPace.evaluate(
-      QuotaPaceReading(
-        usedPercent: used,
-        resetsAt: resetsAt,
-        cadenceSeconds: cadence,
-        isBalanceOnly: false
-      ),
-      now: lastObserved
-    )
-    let projected = try #require(pace.projection?.projectedAtReset)
-    let estimate = try #require(history.estimate)
-    #expect(estimate.isEstimate)
-    #expect(estimate.date == resetsAt)
-    #expect(
-      estimate.remainingPercent
-        == RemainingQuotaFormat.remainingPercent(usedPercent: round2(projected))
-    )
+    #expect(consecutive.segments.count == 2)
+    #expect(!QuotaRemainingHistory.hasGap(consecutive, cadenceSeconds: cadence))
   }
 
   @Test func estimateAgreesWithTheHistoryFoldProjection() throws {
@@ -156,7 +141,8 @@ struct QuotaRemainingHistoryTests {
     }
   }
 
-  @Test func emptySamplesFoldToNil() {
+  /// No samples, or a window with no cadence to place them in, is nothing to draw.
+  @Test func noSamplesOrNoCadenceFoldsToNothing() {
     #expect(
       QuotaRemainingHistory.fold(
         window: QuotaHistoryReading(
@@ -166,9 +152,6 @@ struct QuotaRemainingHistoryTests {
         now: now
       ) == nil
     )
-  }
-
-  @Test func noCadenceFoldsToNil() {
     #expect(
       QuotaRemainingHistory.fold(
         window: QuotaHistoryReading(resetsAt: now.addingTimeInterval(3_600), cadenceSeconds: nil),
@@ -238,7 +221,7 @@ struct QuotaRemainingHistoryTests {
     #expect(history.segments.contains { $0.resetsAt == resetsAt })
   }
 
-  @Test func estimateIsUnchangedWhenOlderSamplesAreClippedAway() throws {
+  @Test func theEstimateIsThePaceProjectionEvenWithOlderSamplesClippedAway() throws {
     let resetsAt = now.addingTimeInterval(3_600)
     let start = resetsAt.addingTimeInterval(Double(-cadence))
     let lastObserved = start.addingTimeInterval(12_600)
@@ -292,28 +275,6 @@ struct QuotaRemainingHistoryTests {
     #expect(estimate.date == resetsAt)
     #expect(estimate.remainingPercent == expectedRemaining)
     #expect(!clipped.segments.contains { $0.resetsAt == oldReset })
-  }
-
-  @Test func consecutiveWindowsAreNotAGap() throws {
-    let previousReset = now
-    let currentReset = previousReset.addingTimeInterval(Double(cadence))
-    let history = try #require(
-      QuotaRemainingHistory.fold(
-        window: QuotaHistoryReading(resetsAt: currentReset, cadenceSeconds: cadence),
-        samples: [
-          QuotaSample(
-            resetsAt: previousReset, observedAt: previousReset.addingTimeInterval(-60),
-            usedPercent: 80),
-          QuotaSample(
-            resetsAt: currentReset, observedAt: previousReset.addingTimeInterval(60),
-            usedPercent: 12),
-        ],
-        usedPercent: 12,
-        now: previousReset.addingTimeInterval(60)
-      )
-    )
-    #expect(history.segments.count == 2)
-    #expect(!QuotaRemainingHistory.hasGap(history, cadenceSeconds: cadence))
   }
 
   private func round2(_ value: Double) -> Double {

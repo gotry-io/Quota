@@ -18,22 +18,15 @@ struct QuotaHistoryWireTests {
     try expectSameJSON(uploadBody, WireCodec.encodeRequest(upload))
   }
 
-  @Test func uploadAnswerRoundTripsTheRelayFixture() throws {
-    let answer = try WireCodec.decode(
-      QuotaHistoryUploadResponse.self,
-      from: Data(uploadAnswer.utf8)
-    )
-    #expect(answer.protocolVersion == 6)
-    let series = try #require(answer.series.first)
-    #expect(series.provider == .codex)
-    #expect(series.fingerprint == "account_test")
-    #expect(series.windowId == "five_hour")
-    #expect(series.newestBucketStart == instant("2026-09-21T10:15:00Z"))
-    #expect(series.oldestBucketStart == instant("2026-09-21T10:00:00Z"))
-    try expectSameJSON(uploadAnswer, WireCodec.encodeRequest(answer))
-  }
+  /// The answer names the newest bucket as `bucket_start`, and an answer from a Relay before
+  /// ADR 0062's amendment carries no `oldest_bucket_start` and still decodes.
+  @Test func anUploadAnswerReadsItsBucketsAndToleratesAMissingOldest() throws {
+    let full = try #require(
+      try WireCodec.decode(QuotaHistoryUploadResponse.self, from: Data(uploadAnswer.utf8))
+        .series.first)
+    #expect(full.newestBucketStart == instant("2026-09-21T10:15:00Z"))
+    #expect(full.oldestBucketStart == instant("2026-09-21T10:00:00Z"))
 
-  @Test func anUploadAnswerWithoutTheOldestBucketStillDecodes() throws {
     var object = try jsonObject(uploadAnswer)
     var series = try #require((object["series"] as? [[String: Any]])?.first)
     series.removeValue(forKey: "oldest_bucket_start")
@@ -57,13 +50,6 @@ struct QuotaHistoryWireTests {
       instant("2026-09-21T10:15:00Z"),
     ])
     try expectSameJSON(readAnswer, WireCodec.encodeRequest(read))
-  }
-
-  @Test func readAnswerWhileSyncIsOffRoundTrips() throws {
-    let read = try WireCodec.decode(QuotaHistoryReadResponse.self, from: Data(syncOff.utf8))
-    #expect(read.sync == false)
-    #expect(read.windows.isEmpty)
-    try expectSameJSON(syncOff, WireCodec.encodeRequest(read))
   }
 
   @Test func anUploadRefusesAKeyTheContractDoesNotName() throws {

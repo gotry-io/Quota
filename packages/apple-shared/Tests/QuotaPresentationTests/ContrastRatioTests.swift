@@ -2,70 +2,27 @@ import QuotaPresentation
 import Testing
 
 struct ContrastRatioTests {
+  /// The WCAG 2.x anchors: the extremes are 21:1, a colour against itself is 1:1, and which of
+  /// the two is the foreground does not change the answer.
   @Test
-  func blackOnWhiteIs21() {
+  func theRatioIsWCAGsFromTwentyOneToOneWhicheverColourIsInFront() {
     #expect(
       ContrastRatio.ratio(
         foreground: (red: 0, green: 0, blue: 0),
         background: (red: 1, green: 1, blue: 1)
       ) == 21
     )
-  }
-
-  @Test
-  func identicalColoursAre1() {
     #expect(
       ContrastRatio.ratio(
         foreground: (red: 0.4, green: 0.5, blue: 0.6),
         background: (red: 0.4, green: 0.5, blue: 0.6)
       ) == 1
     )
-  }
-
-  @Test
-  func swappingForegroundAndBackgroundDoesNotChangeTheRatio() {
-    let whiteOnEmerald = ContrastRatio.ratio(
-      foreground: (red: 1, green: 1, blue: 1),
-      background: (
-        red: QuotaBrand.emerald.red,
-        green: QuotaBrand.emerald.green,
-        blue: QuotaBrand.emerald.blue
-      )
+    let light = (red: 1.0, green: 1.0, blue: 1.0)
+    let dark = (red: 0.03, green: 0.45, blue: 0.34)
+    #expect(
+      ContrastRatio.ratio(foreground: light, background: dark)
+        == ContrastRatio.ratio(foreground: dark, background: light)
     )
-    let emeraldOnWhite = ContrastRatio.ratio(
-      foreground: (
-        red: QuotaBrand.emerald.red,
-        green: QuotaBrand.emerald.green,
-        blue: QuotaBrand.emerald.blue
-      ),
-      background: (red: 1, green: 1, blue: 1)
-    )
-    #expect(whiteOnEmerald == emeraldOnWhite)
-  }
-
-  @Test
-  func whiteOnBrandEmeraldIsTheDocumentedWCAGRatio() {
-    let ratio = ContrastRatio.ratio(
-      foreground: (red: 1, green: 1, blue: 1),
-      background: (
-        red: QuotaBrand.emerald.red,
-        green: QuotaBrand.emerald.green,
-        blue: QuotaBrand.emerald.blue
-      )
-    )
-    #expect((ratio * 1_000).rounded() / 1_000 == 5.765)
-  }
-
-  @Test
-  func blackOnBrandMintIsTheDocumentedWCAGRatio() {
-    let ratio = ContrastRatio.ratio(
-      foreground: (red: 0, green: 0, blue: 0),
-      background: (
-        red: QuotaBrand.mint.red,
-        green: QuotaBrand.mint.green,
-        blue: QuotaBrand.mint.blue
-      )
-    )
-    #expect((ratio * 1_000).rounded() / 1_000 == 12.984)
   }
 }

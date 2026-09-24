@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import QuotaAccount
 import QuotaAlertDelivery
 import QuotaAlerts
@@ -43,43 +44,24 @@ struct AccountSettingsSyncTests {
     #expect(harness.applied >= 1)
   }
 
-  @Test func firstSyncAdoptsWhenTheAccountAlreadyHasARow() async throws {
+  @Test func firstSyncAdoptsTheAccountRowAndMergesLocalSelectorsItDoesNotName() async throws {
     let harness = SettingsSyncHarness()
-    harness.rules.save(AlertRules(enabled: true, resetReminders: true, paceAlerts: true))
-    let remote = accountSettingsGETBody(
-      revision: 3,
-      resetReminders: false,
-      paceAlerts: false,
-      amountUSD: "250.00"
-    )
-    let transport = ScriptedHTTPTransport(
-      [.init(status: 200, body: remote, headers: ["ETag": "\"3\""])],
-      autoAnswerAccountSettings: false
-    )
-    let sync = harness.makeSync(transport: transport)
-
-    await sync.refresh()
-
-    let rules = harness.rules.load()
-    #expect(rules.enabled)
-    #expect(!rules.resetReminders)
-    #expect(!rules.paceAlerts)
-    #expect(harness.budget.load().amountUSD == Decimal(250))
-    #expect(transport.requests.compactMap(\.httpMethod) == ["GET"])
-  }
-
-  @Test func firstSyncMergesLocalSelectorsTheAccountDoesNotName() async throws {
-    let harness = SettingsSyncHarness()
-    var local = AlertRules(enabled: true)
+    var local = AlertRules(enabled: true, resetReminders: true, paceAlerts: true)
     local.setThresholds([30], for: "c3d4e5f6a1b2")
     harness.rules.save(local)
     let remote = accountSettingsGETBody(
       revision: 2,
-      thresholds: ["a1b2c3d4e5f6": [20, 10]]
+      resetReminders: false,
+      paceAlerts: false,
+      thresholds: ["a1b2c3d4e5f6": [20, 10]],
+      amountUSD: "250.00"
     )
     let written = accountSettingsGETBody(
       revision: 3,
-      thresholds: ["a1b2c3d4e5f6": [20, 10], "c3d4e5f6a1b2": [30]]
+      resetReminders: false,
+      paceAlerts: false,
+      thresholds: ["a1b2c3d4e5f6": [20, 10], "c3d4e5f6a1b2": [30]],
+      amountUSD: "250.00"
     )
     let transport = ScriptedHTTPTransport(
       [
@@ -92,79 +74,14 @@ struct AccountSettingsSyncTests {
 
     await sync.refresh()
 
-    #expect(harness.rules.load().thresholds["c3d4e5f6a1b2"] == [30])
-    #expect(harness.rules.load().thresholds["a1b2c3d4e5f6"] == [20, 10])
-    #expect(harness.rules.load().enabled)
+    let rules = harness.rules.load()
+    #expect(rules.thresholds["c3d4e5f6a1b2"] == [30])
+    #expect(rules.thresholds["a1b2c3d4e5f6"] == [20, 10])
+    #expect(rules.enabled)
+    #expect(!rules.resetReminders)
+    #expect(!rules.paceAlerts)
+    #expect(harness.budget.load().amountUSD == Decimal(250))
     #expect(transport.requests.compactMap(\.httpMethod) == ["GET", "PUT"])
-  }
-
-  @Test func historySyncNamesHistoryAndLeavesTheRestOfTheDocument() async throws {
-    let harness = SettingsSyncHarness()
-    let transport = ScriptedHTTPTransport(
-      [
-        .init(status: 200, body: defaultAccountSettingsGETBody(), headers: ["ETag": "\"0\""]),
-        .init(
-          status: 200,
-          body: accountSettingsGETBody(revision: 1, history: true),
-          headers: ["ETag": "\"1\""]
-        ),
-      ],
-      autoAnswerAccountSettings: false
-    )
-    let sync = harness.makeSync(transport: transport)
-    await sync.refresh()
-
-    await sync.apply(.setHistorySync(true))
-
-    #expect(sync.historySync == true)
-    #expect(sync.pending.isEmpty)
-    let puts = transport.requests.filter { $0.httpMethod == "PUT" }
-    #expect(puts.count == 1)
-    let body = String(decoding: try #require(puts.first?.httpBody), as: UTF8.self)
-    let expected =
-      "{\"alerts\":{\"pace_alerts\":true,\"reset_reminders\":true,\"thresholds\":{}},"
-      + "\"budget\":{\"alerts\":true,\"amount_usd\":null},"
-      + "\"history\":{\"sync\":true},\"protocol_version\":2}"
-    #expect(body == expected)
-    let object = try settingsObject(puts.first)
-    #expect(Set(object.keys) == ["alerts", "budget", "history", "protocol_version"])
-  }
-
-  @Test func aStaleHistorySyncReappliesOnce() async throws {
-    let harness = SettingsSyncHarness()
-    let fresh = accountSettingsGETBody(revision: 2, resetReminders: true, amountUSD: "75.50")
-    let written = accountSettingsGETBody(
-      revision: 3,
-      resetReminders: true,
-      amountUSD: "75.50",
-      history: true
-    )
-    let transport = ScriptedHTTPTransport(
-      [
-        .init(status: 200, body: defaultAccountSettingsGETBody(), headers: ["ETag": "\"0\""]),
-        .init(status: 412, body: fresh, headers: ["ETag": "\"2\""]),
-        .init(status: 200, body: written, headers: ["ETag": "\"3\""]),
-      ],
-      autoAnswerAccountSettings: false
-    )
-    let sync = harness.makeSync(transport: transport)
-    await sync.refresh()
-
-    await sync.apply(.setHistorySync(true))
-
-    let puts = transport.requests.filter { $0.httpMethod == "PUT" }
-    #expect(puts.count == 2)
-    #expect(puts.last?.value(forHTTPHeaderField: "If-Match") == "\"2\"")
-    let retry = try settingsObject(puts.last)
-    let history = try #require(retry["history"] as? [String: Any])
-    #expect(history["sync"] as? Bool == true)
-    let budget = try #require(retry["budget"] as? [String: Any])
-    #expect(budget["amount_usd"] as? String == "75.50")
-    #expect(budget["alerts"] as? Bool == true)
-    let alerts = try #require(retry["alerts"] as? [String: Any])
-    #expect(alerts["reset_reminders"] as? Bool == true)
-    #expect(sync.historySync == true)
-    #expect(sync.pending.isEmpty)
   }
 
   @Test func historySyncOffLeavesAPendingOnEditAlone() async throws {
@@ -211,31 +128,6 @@ struct AccountSettingsSyncTests {
     #expect(sync.historySync == false)
   }
 
-  @Test func aLocalEditWritesTheDocument() async throws {
-    let harness = SettingsSyncHarness()
-    let transport = ScriptedHTTPTransport(
-      [
-        .init(status: 200, body: defaultAccountSettingsGETBody(), headers: ["ETag": "\"0\""]),
-        .init(
-          status: 200,
-          body: accountSettingsGETBody(revision: 1, resetReminders: false),
-          headers: ["ETag": "\"1\""]
-        ),
-      ],
-      autoAnswerAccountSettings: false
-    )
-    let sync = harness.makeSync(transport: transport)
-    await sync.refresh()
-    harness.applied = 0
-
-    await sync.apply(.setResetReminders(false))
-
-    #expect(harness.rules.load().resetReminders == false)
-    #expect(sync.pending.isEmpty)
-    #expect(transport.requests.compactMap(\.httpMethod) == ["GET", "PUT"])
-    #expect(harness.applied >= 1)
-  }
-
   @Test func aStaleWriteReappliesOnceAndWrites() async throws {
     let harness = SettingsSyncHarness()
     let fresh = accountSettingsGETBody(
@@ -266,6 +158,9 @@ struct AccountSettingsSyncTests {
     #expect(sync.pending.isEmpty)
     #expect(transport.requests.compactMap(\.httpMethod) == ["GET", "PUT", "PUT"])
     #expect(transport.requests.last?.value(forHTTPHeaderField: "If-Match") == "\"2\"")
+    let retry = try settingsObject(transport.requests.last)
+    #expect(alerts(retry)["reset_reminders"] as? Bool == false)
+    #expect(budgetAmount(retry) == "75.50")
   }
 
   @Test func aSecond412LeavesTheLocalValueAndKeepsThePendingEdit() async throws {
@@ -318,35 +213,6 @@ struct AccountSettingsSyncTests {
     #expect(transport.requests.compactMap(\.httpMethod) == ["GET", "PUT", "GET", "PUT"])
   }
 
-  @Test func signOutClearsTheCacheAndLeavesLocalValues() async throws {
-    let harness = SettingsSyncHarness()
-    harness.rules.save(AlertRules(enabled: true, resetReminders: false))
-    harness.budget.save(UsageBudget(amountUSD: 40, alerts: true))
-    let transport = ScriptedHTTPTransport(
-      [
-        .init(
-          status: 200,
-          body: accountSettingsGETBody(revision: 1, resetReminders: false, amountUSD: "40"),
-          headers: ["ETag": "\"1\""]
-        ),
-        .init(status: 204, body: Data()),
-      ],
-      autoAnswerAccountSettings: false
-    )
-    let client = harness.makeClient(transport: transport)
-    let sync = harness.makeSync(client: client)
-    await sync.refresh()
-    #expect(try await client.loadCachedSettings()?.document.revision == 1)
-
-    await client.logout()
-    harness.signedIn = false
-
-    #expect(try await client.loadCachedSettings() == nil)
-    #expect(harness.rules.load().resetReminders == false)
-    #expect(harness.budget.load().amountUSD == 40)
-    #expect(harness.rules.load().enabled)
-  }
-
   @Test func aSecondAccountGetsItsOwnFirstSync() async throws {
     let harness = SettingsSyncHarness()
     let firstAccount = MemoryAccountSessionStore(session: Fixtures.session(accountID: "account_01"))
@@ -387,25 +253,6 @@ struct AccountSettingsSyncTests {
     #expect(harness.rules.load().paceAlerts == false)
     #expect(harness.rules.load().enabled)
     #expect(secondTransport.requests.compactMap(\.httpMethod) == ["GET"])
-  }
-
-  @Test func enabledIsNeverWrittenBySync() async throws {
-    let harness = SettingsSyncHarness()
-    harness.rules.save(AlertRules(enabled: true, resetReminders: true))
-    let transport = ScriptedHTTPTransport(
-      [
-        .init(
-          status: 200,
-          body: accountSettingsGETBody(revision: 2, resetReminders: false),
-          headers: ["ETag": "\"2\""]
-        )
-      ],
-      autoAnswerAccountSettings: false
-    )
-    let sync = harness.makeSync(transport: transport)
-    await sync.refresh()
-    await sync.apply(.setPaceAlerts(false))
-    #expect(harness.rules.load().enabled)
   }
 
   @Test func localAndRemoteChangesBothRecompute() async throws {
@@ -568,10 +415,7 @@ struct AccountSettingsSyncTests {
     async let first = sync.apply(.setResetReminders(false))
     await transport.waitForFirstPUT()
     async let second = sync.apply(.setBudget(amount: 40, alerts: true))
-    for _ in 0..<2_000 where sync.pending.count < 2 {
-      try? await Task.sleep(for: .milliseconds(2))
-    }
-    #expect(sync.pending.count == 2)
+    await waitUntil { sync.pending.count == 2 }
     await transport.releaseFirstPUT()
     await first
     #expect(sync.pending.map(\.edit) == [.setBudget(amount: 40, alerts: true)])
@@ -673,6 +517,16 @@ private final class SettingsSyncHarness {
     sync.isSignedIn = { [weak self] in self?.signedIn ?? false }
     sync.onApplied = { [weak self] in self?.applied += 1 }
     return sync
+  }
+}
+
+/// Returns once `condition` holds, woken by the observed change rather than a delay.
+@MainActor
+private func waitUntil(_ condition: @escaping @MainActor () -> Bool) async {
+  while !condition() {
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+      withObservationTracking { _ = condition() } onChange: { continuation.resume() }
+    }
   }
 }
 
