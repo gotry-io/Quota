@@ -101,9 +101,9 @@ public enum QuotaHistorySync {
   }
 
   /// How long before its expiry a bucket stops counting as one Relay must still hold. Relay
-  /// never sweeps a row before its `expires_at`, but a device clock behind Relay's, or an
-  /// `expires_at` another device shortened by declaring a shorter duration, can make a row go
-  /// earlier than this device expects.
+  /// never sweeps a row before its `expires_at`, but a device clock behind Relay's can make a
+  /// row go earlier than this device expects. A duration another device shortened is the
+  /// answer's `duration_seconds`, not this slack.
   public static let oldestSlackSeconds = 3_600
 
   /// Relay must still hold this bucket: `bucket + span > now + 1 h`.
@@ -117,8 +117,9 @@ public enum QuotaHistorySync {
   public enum UploadAnswer: Equatable, Sendable {
     /// The answer leaves the series out.
     case absent
-    /// Its `oldest_bucket_start`, or `nil` from a Relay that does not send one.
-    case oldest(Date?)
+    /// Its `oldest_bucket_start` and `duration_seconds`, each `nil` from a Relay that does not
+    /// send it.
+    case answered(oldest: Date?, durationSeconds: Int?)
   }
 
   /// Relay lost rows of a series this device uploaded (ADR 0062, amendment 2026-09-23).
@@ -126,21 +127,26 @@ public enum QuotaHistorySync {
   /// The evidence is the oldest bucket uploaded in this on-period while it is live, otherwise
   /// the watermark from before this chunk while it is live and every point of the chunk is
   /// later than it. A series the answer leaves out is always a loss: the answer names every
-  /// series sent. No `oldest_bucket_start` (an older Relay) judges nothing. The fixture's
-  /// `rows_lost` section is the contract.
+  /// series sent. No `oldest_bucket_start` (an older Relay) judges nothing. Liveness uses the
+  /// shorter of this device's duration and the answer's `duration_seconds`, the one the
+  /// window's rows expired by, which another device may have shortened (amendment
+  /// 2026-09-24). The fixture's `rows_lost` section is the contract.
   public static func rowsLost(
     recordedOldest: Date?,
     watermark: Date?,
     chunkOldest: Date,
     answer: UploadAnswer,
-    durationSeconds: Int,
+    durationSeconds ownDurationSeconds: Int,
     now: Date
   ) -> Bool {
     let answered: Date
+    let durationSeconds: Int
     switch answer {
     case .absent: return true
-    case .oldest(nil): return false
-    case .oldest(let value?): answered = value
+    case .answered(oldest: nil, _): return false
+    case .answered(oldest: let value?, let held):
+      answered = value
+      durationSeconds = min(ownDurationSeconds, held ?? ownDurationSeconds)
     }
     let evidence: Date?
     if let recordedOldest,

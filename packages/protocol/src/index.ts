@@ -2041,7 +2041,12 @@ export type QuotaHistoryUpload = z.infer<typeof QuotaHistoryUploadSchema>;
  * (`oldest_bucket_start`) bucket Relay now holds from this device. A device that uploaded an
  * older bucket in the current on-period than `oldest_bucket_start` learns that Relay lost rows
  * (the switch went off and on between two of its refreshes) and backfills that series again.
- * A client reads `oldest_bucket_start` as optional: an older Relay does not send it.
+ * `duration_seconds` is the duration Relay held for the window when this upload arrived, before
+ * the upload's own declaration rewrote it: the one the window's rows expired by since this
+ * device's last upload. A device judges liveness with the shorter of its own and this one, and
+ * adopts a shorter one, so two devices that declare different durations converge.
+ * A client reads `oldest_bucket_start` and `duration_seconds` as optional: an older Relay does
+ * not send them.
  */
 export const QuotaHistoryUploadResponseSchema = z
   .object({
@@ -2054,6 +2059,7 @@ export const QuotaHistoryUploadResponseSchema = z
           window_id: z.string().min(1).max(64).regex(BILLING_DIMENSION_PATTERN),
           bucket_start: Rfc3339InstantSchema,
           oldest_bucket_start: Rfc3339InstantSchema,
+          duration_seconds: SafeNonnegativeIntegerSchema,
         })
         .strict(),
     ),

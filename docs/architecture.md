@@ -176,7 +176,11 @@ subscription's new samples past the per-Account watermark and `PUT`s them to
 `false → true` transition backfills that window's span once. Beside each series' watermark the
 helper keeps the oldest bucket it uploaded in the current on-period; an upload answer naming a
 later `oldest_bucket_start` than that (or, once it is past its span, than the watermark) means
-the switch went off and on behind the device, and that series is backfilled again, once. The watermark and that fact live in
+the switch went off and on behind the device, and that series is backfilled again, once. The
+answer also names the duration the window's rows carried before this upload rewrote it; the
+helper judges liveness with the shorter of that and its own, and declares a shorter answered
+duration from then on, so two devices that disagree converge instead of re-backfilling each
+other. The watermark and that fact live in
 `identity.sqlite` and are cleared on sign-out and on `409 history_sync_off`. `413
 quota_history_full` stops the upload until the next collection. Relay merges on the read
 ([ADR 0062](decisions/0062-quota-history-may-follow-the-account.md)). The website draws no

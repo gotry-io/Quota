@@ -5187,12 +5187,15 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// A signed-in state with `history.sync` on, one global five-hour subscription, and these
-    /// local samples (all with the same reset two hours after `now`).
+    /// A signed-in state with `history.sync` on, one global subscription with one window
+    /// `(id, duration_seconds)`, and these local samples (all with the same reset two hours
+    /// after `now`).
     fn history_gap_state(
         now: chrono::DateTime<chrono::Utc>,
+        window: (&str, i64),
         samples: &[(chrono::DateTime<chrono::Utc>, f64)],
     ) -> (std::path::PathBuf, Arc<crate::state::StateStore>, String) {
+        let (window_id, duration_seconds) = window;
         let stamp = |instant: chrono::DateTime<chrono::Utc>| {
             instant.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         };
@@ -5216,10 +5219,10 @@ mod tests {
                     "codex",
                     &stamp(*instant),
                     &[serde_json::json!({
-                        "id": "five_hour",
+                        "id": window_id,
                         "used_percent": used,
                         "resets_at": resets,
-                        "duration_seconds": 18000
+                        "duration_seconds": duration_seconds
                     })],
                     *instant,
                 )
@@ -5238,10 +5241,10 @@ mod tests {
                             "account": {"fingerprint": "account_test", "fingerprint_scope": "global"},
                             "observed_at": stamp(now),
                             "windows": [{
-                                "id": "five_hour",
+                                "id": window_id,
                                 "used_percent": 42.5,
                                 "resets_at": resets,
-                                "duration_seconds": 18000
+                                "duration_seconds": duration_seconds
                             }]
                         }]
                     }]
@@ -5292,7 +5295,8 @@ mod tests {
         let earlier = now - chrono::Duration::hours(2);
         let bucket = history_bucket;
         let series_key = "codex\u{0}account_test\u{0}five_hour";
-        let (root, state, resets) = history_gap_state(now, &[(earlier, 30.0), (now, 42.5)]);
+        let (root, state, resets) =
+            history_gap_state(now, ("five_hour", 18_000), &[(earlier, 30.0), (now, 42.5)]);
         // This on-period already uploaded the earlier bucket. The switch then went off and on
         // on the website, so Relay holds nothing older than what this collection sends.
         let mut record = crate::state::QuotaHistorySyncRecord {
@@ -5306,6 +5310,7 @@ mod tests {
                 watermark: Some(bucket(now)),
                 oldest: Some(bucket(earlier)),
                 previous: Vec::new(),
+                adopted_duration_seconds: None,
             },
         );
         state
@@ -5383,8 +5388,11 @@ mod tests {
         let confirmed = now - chrono::Duration::hours(2);
         let bucket = history_bucket;
         let series_key = "codex\u{0}account_test\u{0}five_hour";
-        let (root, state, resets) =
-            history_gap_state(now, &[(first, 30.0), (confirmed, 35.0), (now, 42.5)]);
+        let (root, state, resets) = history_gap_state(
+            now,
+            ("five_hour", 18_000),
+            &[(first, 30.0), (confirmed, 35.0), (now, 42.5)],
+        );
         // The recorded oldest is past its span (a backfill seeds it near now − span), so only
         // the watermark Relay confirmed can say the rows went. The confirmed bucket's value is
         // already uploaded, so this collection sends only the newer one.
@@ -5403,6 +5411,7 @@ mod tests {
                     bucket_start: bucket(confirmed),
                     used_percent: 35.0,
                 }],
+                adopted_duration_seconds: None,
             },
         );
         state
@@ -5427,6 +5436,139 @@ mod tests {
         let record = state.quota_history_sync("account_1").expect("record");
         let series = record.series.get(series_key).expect("series");
         assert_eq!(series.oldest.as_deref(), Some(bucket(first).as_str()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A peer declares a weekly window one day long: Relay expires this device's rows older
+    /// than that span, and this device's own 28-day record would call it a loss on every upload,
+    /// backfill, rewrite the duration back, and the peer would shorten it again. Judged by the
+    /// duration Relay answers, it is not a loss; this device adopts the shorter duration, and the
+    /// next upload declares it and is quiet.
+    #[test]
+    fn quota_history_adopts_a_shorter_answered_duration_instead_of_backfilling_again() {
+        let now = chrono::Utc::now();
+        let old = now - chrono::Duration::days(10);
+        let confirmed = now - chrono::Duration::hours(2);
+        let weekly = |instant: chrono::DateTime<chrono::Utc>| {
+            crate::history::quota_history_bucket_start_utc(
+                &instant.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                604_800,
+            )
+            .expect("bucket")
+        };
+        let series_key = "codex\u{0}account_test\u{0}weekly";
+        let (root, state, resets) = history_gap_state(
+            now,
+            ("weekly", 604_800),
+            &[(old, 10.0), (confirmed, 20.0), (now, 30.0)],
+        );
+        let mut record = crate::state::QuotaHistorySyncRecord {
+            sync: true,
+            backfill_done: true,
+            ..Default::default()
+        };
+        record.series.insert(
+            series_key.to_owned(),
+            crate::state::QuotaHistorySeriesRecord {
+                watermark: Some(weekly(confirmed)),
+                oldest: Some(weekly(old)),
+                previous: vec![crate::history::QuotaHistorySyncedPoint {
+                    resets_at: resets.clone(),
+                    bucket_start: weekly(confirmed),
+                    used_percent: 20.0,
+                }],
+                adopted_duration_seconds: None,
+            },
+        );
+        state
+            .set_quota_history_sync("account_1", &record)
+            .expect("record");
+        let answer = |newest: &str| {
+            serde_json::json!({
+                "protocol_version": MANAGED_DATA_PROTOCOL,
+                "series": [{
+                    "provider": "codex",
+                    "fingerprint": "account_test",
+                    "window_id": "weekly",
+                    "bucket_start": newest,
+                    "oldest_bucket_start": weekly(confirmed),
+                    "duration_seconds": 86_400
+                }]
+            })
+        };
+        let cancel = AtomicBool::new(false);
+        let (origin, server) =
+            spawn_bounded_mock_server(vec![http_json(200, None, &answer(&weekly(now)))]);
+        AccountManager::new(
+            Arc::new(RelayClient::for_test(&origin).expect("client")),
+            state.clone(),
+            "Test Mac".to_owned(),
+        )
+        .sync_quota_history_after_collection(&cancel);
+        let sent = server.join().expect("server");
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert!(
+            sent[0].contains("\"duration_seconds\":604800"),
+            "{}",
+            sent[0]
+        );
+        let stored = state.quota_history_sync("account_1").expect("record");
+        assert_eq!(stored.last_error, None);
+        let series = stored.series.get(series_key).expect("series");
+        assert_eq!(series.adopted_duration_seconds, Some(86_400));
+        assert_eq!(series.oldest.as_deref(), Some(weekly(old).as_str()));
+
+        // The next collection declares the adopted duration, and the answer is quiet.
+        let later = now + chrono::Duration::seconds(1);
+        state
+            .record_quota_samples(
+                &crate::protocol::QuotaOverviewIdentity::selector_for(
+                    "codex",
+                    "account_test",
+                    "global",
+                    None,
+                ),
+                "codex",
+                &later.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                &[serde_json::json!({
+                    "id": "weekly",
+                    "used_percent": 40,
+                    "resets_at": resets,
+                    "duration_seconds": 604_800
+                })],
+                later,
+            )
+            .expect("sample");
+        let newest = crate::history::quota_history_bucket_start_utc(
+            &later.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            86_400,
+        )
+        .expect("bucket");
+        let (origin, server) =
+            spawn_bounded_mock_server(vec![http_json(200, None, &answer(&newest))]);
+        AccountManager::new(
+            Arc::new(RelayClient::for_test(&origin).expect("client")),
+            state.clone(),
+            "Test Mac".to_owned(),
+        )
+        .sync_quota_history_after_collection(&cancel);
+        let sent = server.join().expect("server");
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert!(
+            sent[0].contains("\"duration_seconds\":86400"),
+            "{}",
+            sent[0]
+        );
+        let stored = state.quota_history_sync("account_1").expect("record");
+        assert_eq!(stored.last_error, None);
+        assert_eq!(
+            stored
+                .series
+                .get(series_key)
+                .expect("series")
+                .adopted_duration_seconds,
+            Some(86_400)
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

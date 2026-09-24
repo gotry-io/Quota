@@ -192,6 +192,11 @@ pub struct QuotaHistorySeriesRecord {
     pub oldest: Option<String>,
     #[serde(default)]
     pub previous: Vec<crate::history::QuotaHistorySyncedPoint>,
+    /// A shorter `duration_seconds` Relay answered for the window (another device declared
+    /// it), declared instead of the collector's until an answer names a longer one. A record
+    /// written before this field has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adopted_duration_seconds: Option<i64>,
 }
 
 /// The last `GET /api/v6/account/quota-history` body for one Account, one subscription, one `since`.
@@ -6793,6 +6798,7 @@ mod tests {
                 watermark: Some("2026-09-21T10:00:00Z".to_owned()),
                 oldest: None,
                 previous: Vec::new(),
+                adopted_duration_seconds: None,
             },
         );
         store

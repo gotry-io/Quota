@@ -25,6 +25,16 @@ import Testing
     }
 
     @Test
+    func aCustomRangeInUTCPlus8CanEndOnTheLocalTodayBeforeTheUTCDayTurns() throws {
+      var calendar = Calendar(identifier: .gregorian)
+      calendar.timeZone = try #require(TimeZone(identifier: "Asia/Shanghai"))
+      // 07:30 on 24 September in Shanghai is still 23 September in UTC.
+      let now = Fixtures.date("2026-09-23T23:30:00Z")
+      let bounds = UsageRangeEditor.bounds(earliestDay: "2025-09-24", now: now, calendar: calendar)
+      #expect(UsageDateText.date(bounds.upperBound, calendar) == "2026-09-24")
+    }
+
+    @Test
     func aBudgetIsStoredAndReadBack() {
       let defaults = UserDefaults(suiteName: "io.gotry.quota.budget-test")!
       defaults.removePersistentDomain(forName: "io.gotry.quota.budget-test")

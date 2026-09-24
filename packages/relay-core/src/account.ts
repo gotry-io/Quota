@@ -487,6 +487,8 @@ export type QuotaHistoryWriteResult =
         bucket_start: string;
         /** Oldest bucket Relay holds from this device for the series. */
         oldest_bucket_start: string;
+        /** The window's duration Relay held when the upload arrived, before its rewrite. */
+        duration_seconds: number;
       }[];
     };
 

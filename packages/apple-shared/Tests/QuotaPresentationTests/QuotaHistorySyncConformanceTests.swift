@@ -85,8 +85,9 @@ struct QuotaHistorySyncConformanceTests {
         answer = .absent
       } else {
         let fields = try #require(testCase["answer"] as? [String: Any])
-        answer = .oldest(
-          try fields["oldest_bucket_start"].map { try QuotaHistorySyncFixture.instant($0) }
+        answer = .answered(
+          oldest: try fields["oldest_bucket_start"].map { try QuotaHistorySyncFixture.instant($0) },
+          durationSeconds: fields["duration_seconds"] as? Int
         )
       }
       let judged = QuotaHistorySync.rowsLost(

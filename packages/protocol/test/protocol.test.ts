@@ -1462,6 +1462,7 @@ describe("quota protocol", () => {
           window_id: "five_hour",
           bucket_start: "2026-09-21T10:15:00Z",
           oldest_bucket_start: "2026-09-21T10:00:00Z",
+          duration_seconds: 18_000,
         },
       ],
     };

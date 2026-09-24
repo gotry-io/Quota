@@ -472,7 +472,7 @@ final class QuotaHistoryCoordinator {
     for entry in samples.windows {
       guard let snapshot = byKey[entry.subscriptionKey],
         let window = snapshot.windows.first(where: { $0.id == entry.windowID }),
-        let duration = window.durationSeconds, duration >= 0,
+        let collected = window.durationSeconds, collected >= 0,
         WireValidation.isBillingDimension(entry.windowID)
       else { continue }
       let normalized = entry.samples.map {
@@ -487,6 +487,7 @@ final class QuotaHistoryCoordinator {
           && $0.fingerprint == snapshot.account.fingerprint
           && $0.windowID == entry.windowID
       }
+      let duration = min(collected, stored?.adoptedDurationSeconds ?? collected)
       let lastUploaded: [QuotaHistorySync.Bucket]
       let relevant: [QuotaSample]
       if backfill || stored?.newestBucketStart == nil {
@@ -599,7 +600,9 @@ final class QuotaHistoryCoordinator {
             recordedOldest: stored?.oldestBucketStart,
             watermark: stored?.newestBucketStart,
             chunkOldest: chunkOldest,
-            answer: answered.map { .oldest($0.oldestBucketStart) } ?? .absent,
+            answer: answered.map {
+              .answered(oldest: $0.oldestBucketStart, durationSeconds: $0.durationSeconds)
+            } ?? .absent,
             durationSeconds: series.durationSeconds,
             now: now
           )
@@ -607,6 +610,23 @@ final class QuotaHistoryCoordinator {
           lost.insert(key)
           state.series.removeAll {
             Self.seriesKey($0.provider, $0.fingerprint, $0.windowID) == key
+          }
+          // The adopted duration is about the window, not the lost rows.
+          if let adopted = Self.adoptedDuration(
+            stored?.adoptedDurationSeconds,
+            answered: answered?.durationSeconds,
+            declared: series.durationSeconds
+          ) {
+            state.series.append(
+              QuotaHistoryWatermarkFile.Series(
+                provider: series.provider.rawValue,
+                fingerprint: series.fingerprint,
+                windowID: series.windowId,
+                newestBucketStart: nil,
+                lastUploaded: [],
+                adoptedDurationSeconds: adopted
+              )
+            )
           }
           continue
         }
@@ -645,6 +665,11 @@ final class QuotaHistoryCoordinator {
         stored.newestBucketStart = latest
       }
     }
+    stored.adoptedDurationSeconds = Self.adoptedDuration(
+      stored.adoptedDurationSeconds,
+      answered: answered?.durationSeconds,
+      declared: series.durationSeconds
+    )
     if let earliest = series.points.map(\.bucketStart).min() {
       stored.oldestBucketStart = QuotaHistorySync.reseedOldest(
         stored.oldestBucketStart,
@@ -675,6 +700,15 @@ final class QuotaHistoryCoordinator {
     } else {
       state.series.append(stored)
     }
+  }
+
+  /// A duration the answer names shorter than the one this chunk declared is adopted; a longer
+  /// one ends an adoption, so this iPhone declares its collector's again.
+  private static func adoptedDuration(_ current: Int?, answered: Int?, declared: Int) -> Int? {
+    guard let answered else { return current }
+    if answered < declared { return answered }
+    if answered > declared { return nil }
+    return current
   }
 
   private static func seriesKey(_ provider: String, _ fingerprint: String, _ windowID: String)

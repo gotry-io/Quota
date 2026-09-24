@@ -487,6 +487,99 @@ struct QuotaHistoryTests {
     #expect(historyPutBodies(transport).count == 2)
   }
 
+  @Test func aShorterDurationRelayAnswersIsAdoptedInsteadOfBackfillingAgain() async throws {
+    let watermarks = MemoryQuotaHistoryWatermarkStore()
+    let resets = Fixtures.date("2026-09-25T00:00:00Z")
+    let old = Fixtures.date("2026-09-11T10:00:00Z")
+    let confirmed = Fixtures.date("2026-09-21T10:00:00Z")
+    // Another device declared this weekly window one day long, so Relay expired this iPhone's
+    // rows older than four days. By its own 28-day span the record from ten days ago is still
+    // evidence and the answer would read as a loss on every upload; by the duration Relay
+    // answers it is not, and this iPhone adopts that duration.
+    try watermarks.save(
+      QuotaHistoryWatermarkFile(
+        accounts: [
+          "account_01": QuotaHistoryWatermarkFile.Account(
+            observedSync: true,
+            series: [
+              QuotaHistoryWatermarkFile.Series(
+                provider: "codex",
+                fingerprint: "account_test",
+                windowID: "weekly",
+                newestBucketStart: confirmed,
+                lastUploaded: [
+                  QuotaHistorySync.Bucket(resetsAt: resets, bucketStart: confirmed, usedPercent: 20)
+                ],
+                oldestBucketStart: old
+              )
+            ]
+          )
+        ]
+      )
+    )
+    let snapshot = QuotaSnapshot(
+      provider: .codex,
+      account: QuotaAccount(fingerprint: "account_test", fingerprintScope: .global),
+      windows: [
+        QuotaWindow(
+          id: "weekly",
+          title: "Weekly",
+          usedPercent: 30,
+          resetsAt: resets,
+          durationSeconds: 604_800
+        )
+      ],
+      status: .available,
+      observedAt: historyNow
+    )
+    let journal = LocalQuotaSamples(
+      windows: [
+        LocalQuotaSamples.Entry(
+          subscriptionKey: LocalQuotaSamples.key(for: snapshot),
+          provider: .codex,
+          windowID: "weekly",
+          samples: [
+            QuotaSample(resetsAt: resets, observedAt: old, usedPercent: 10),
+            QuotaSample(resetsAt: resets, observedAt: confirmed, usedPercent: 20),
+            QuotaSample(
+              resetsAt: resets,
+              observedAt: Fixtures.date("2026-09-21T11:30:00Z"),
+              usedPercent: 30
+            ),
+          ]
+        )
+      ]
+    )
+    let transport = HistoryTransport(
+      historyAnswers: [
+        Data(
+          """
+          {"protocol_version":6,"series":[{"provider":"codex","fingerprint":"account_test",\
+          "window_id":"weekly","bucket_start":"2026-09-21T12:00:00Z",\
+          "oldest_bucket_start":"2026-09-21T10:00:00Z","duration_seconds":86400}]}
+          """.utf8
+        )
+      ]
+    )
+    let model = historyModel(
+      transport: transport,
+      watermarks: watermarks,
+      journal: journal,
+      snapshot: snapshot
+    )
+
+    await model.restore()
+    await model.waitForDetachedLaunchWork()
+    await model.quotaHistory.sync()
+
+    let bodies = historyPutBodies(transport)
+    #expect(bodies.count == 1)
+    #expect(bodies.first.map { $0.contains("\"duration_seconds\":604800") } == true)
+    let stored = try #require(watermarks.load().accounts["account_01"]?.series.first)
+    #expect(stored.adoptedDurationSeconds == 86_400)
+    #expect(stored.oldestBucketStart == old)
+  }
+
   @Test func aRecordPastItsSpanFallsBackToTheWatermarkBeforeThisChunk() async throws {
     let watermarks = MemoryQuotaHistoryWatermarkStore()
     let resets = Fixtures.date("2026-09-21T15:00:00Z")
@@ -699,9 +792,9 @@ private func historyModel(
   reads: MemoryQuotaHistoryReadStore = MemoryQuotaHistoryReadStore(),
   journal: LocalQuotaSamples? = nil,
   settings: CachedAccountSettings? = nil,
+  snapshot: QuotaSnapshot = historySnapshot(),
   now: @escaping @Sendable () -> Date = { historyNow }
 ) -> AppModel {
-  let snapshot = historySnapshot()
   let providerSessions = MemoryProviderSessionStore(
     sessions: [
       StoredProviderSession(
@@ -1037,6 +1130,9 @@ private final class HistoryTransport: HTTPTransport, @unchecked Sendable {
   /// The `oldest_bucket_start` each quota-history PUT answers, in order. Past the end, the
   /// 10:00 bucket the journal fixture backfills.
   var historyOldest: [String]
+  /// Whole quota-history PUT answers, in order, instead of `historyOldest`; past the end, the
+  /// last one.
+  var historyAnswers: [Data]
 
   private struct MutableState {
     var recorded: [Recorded] = []
@@ -1055,7 +1151,8 @@ private final class HistoryTransport: HTTPTransport, @unchecked Sendable {
     settingsStatus: Int = 200,
     settingsPUTStatus: Int = 200,
     holdFirstHistoryPut: Bool = false,
-    historyOldest: [String] = []
+    historyOldest: [String] = [],
+    historyAnswers: [Data] = []
   ) {
     self.historyStatus = historyStatus
     self.historyCode = historyCode
@@ -1065,6 +1162,7 @@ private final class HistoryTransport: HTTPTransport, @unchecked Sendable {
     self.settingsPUTStatus = settingsPUTStatus
     self.holdFirstHistoryPut = holdFirstHistoryPut
     self.historyOldest = historyOldest
+    self.historyAnswers = historyAnswers
   }
 
   var isWaitingForHistory: Bool {
@@ -1150,6 +1248,10 @@ private final class HistoryTransport: HTTPTransport, @unchecked Sendable {
     case ("PUT", "/api/v6/device/quota-history"):
       if historyStatus == 200 {
         let ordinal = state.withLock(\.historyPuts)
+        if let last = historyAnswers.last {
+          let index = ordinal - 1
+          return (200, historyAnswers.indices.contains(index) ? historyAnswers[index] : last, [:])
+        }
         let oldest =
           historyOldest.indices.contains(ordinal - 1)
           ? historyOldest[ordinal - 1] : "2026-09-21T10:00:00Z"

@@ -685,9 +685,9 @@ fn quota_history_upload_body(generation: u64, points: &[&QuotaHistoryUploadPoint
 }
 
 /// How long before its expiry a bucket stops counting as one Relay must still hold. Relay never
-/// sweeps a row before its `expires_at`, but a device clock behind Relay's, or an `expires_at`
-/// another device shortened by declaring a shorter duration, can make a row go earlier than
-/// this device expects.
+/// sweeps a row before its `expires_at`, but a device clock behind Relay's can make a row go
+/// earlier than this device expects. A duration another device shortened is the answer's
+/// `duration_seconds`, not this slack.
 pub const QUOTA_HISTORY_OLDEST_SLACK_SECONDS: i64 = 3_600;
 
 /// Relay must still hold this bucket: `bucket + span > now + 1 h`.
@@ -704,8 +704,12 @@ pub fn quota_history_oldest_is_live(bucket_start: &str, duration_seconds: i64, n
 pub enum QuotaHistoryUploadAnswer<'a> {
     /// The answer leaves the series out.
     Absent,
-    /// Its `oldest_bucket_start`, or `None` from a Relay that does not send one.
-    Oldest(Option<&'a str>),
+    /// Its `oldest_bucket_start` and `duration_seconds`, each `None` from a Relay that does
+    /// not send it.
+    Answered {
+        oldest: Option<&'a str>,
+        duration_seconds: Option<i64>,
+    },
 }
 
 /// Relay lost rows of a series this device uploaded (ADR 0062, amendment 2026-09-23).
@@ -713,8 +717,10 @@ pub enum QuotaHistoryUploadAnswer<'a> {
 /// The evidence is the oldest bucket uploaded in this on-period while it is live, otherwise the
 /// watermark from before this chunk while it is live and every point of the chunk is later than
 /// it. A series the answer leaves out is always a loss: the answer names every series sent. An
-/// answer without `oldest_bucket_start` (an older Relay) judges nothing. The fixture's
-/// `rows_lost` section is the contract.
+/// answer without `oldest_bucket_start` (an older Relay) judges nothing. Liveness uses the
+/// shorter of this device's duration and the answer's `duration_seconds`, the one the window's
+/// rows expired by, which another device may have shortened (amendment 2026-09-24). The
+/// fixture's `rows_lost` section is the contract.
 pub fn quota_history_rows_lost(
     recorded_oldest: Option<&str>,
     watermark: Option<&str>,
@@ -723,10 +729,16 @@ pub fn quota_history_rows_lost(
     duration_seconds: i64,
     now: &str,
 ) -> bool {
-    let answered = match answer {
+    let (answered, duration_seconds) = match answer {
         QuotaHistoryUploadAnswer::Absent => return true,
-        QuotaHistoryUploadAnswer::Oldest(None) => return false,
-        QuotaHistoryUploadAnswer::Oldest(Some(answered)) => answered,
+        QuotaHistoryUploadAnswer::Answered { oldest: None, .. } => return false,
+        QuotaHistoryUploadAnswer::Answered {
+            oldest: Some(answered),
+            duration_seconds: held,
+        } => (
+            answered,
+            held.map_or(duration_seconds, |held| held.min(duration_seconds)),
+        ),
     };
     let evidence = recorded_oldest
         .filter(|recorded| quota_history_oldest_is_live(recorded, duration_seconds, now))
@@ -1086,11 +1098,14 @@ mod tests {
             let answer = if case["answer"].as_str() == Some("absent") {
                 QuotaHistoryUploadAnswer::Absent
             } else {
-                QuotaHistoryUploadAnswer::Oldest(
-                    case["answer"]
+                QuotaHistoryUploadAnswer::Answered {
+                    oldest: case["answer"]
                         .get("oldest_bucket_start")
                         .and_then(Value::as_str),
-                )
+                    duration_seconds: case["answer"]
+                        .get("duration_seconds")
+                        .and_then(Value::as_i64),
+                }
             };
             assert_eq!(
                 quota_history_rows_lost(

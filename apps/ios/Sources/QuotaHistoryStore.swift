@@ -16,6 +16,11 @@ struct QuotaHistoryWatermarkFile: Codable, Equatable, Sendable {
     /// chunk re-seeds it (`reseed_oldest` in the history sync fixture). A file
     /// written before this field has none, and starts from its next upload.
     var oldestBucketStart: Date? = nil
+    /// A shorter `duration_seconds` Relay answered for the window (another device declared
+    /// it), declared instead of the collector's until an answer names a longer one, so the two
+    /// devices stop rewriting each other's expiry (ADR 0062, amendment 2026-09-24). A file
+    /// written before this field has none.
+    var adoptedDurationSeconds: Int? = nil
   }
 
   struct Account: Codable, Equatable, Sendable {
