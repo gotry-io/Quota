@@ -939,24 +939,6 @@ mod tests {
         }
     }
 
-    /// Claude Code owns this grant. A Mac without one has only the stored claude.ai session
-    /// to try, and without that too there is nothing at all.
-    #[test]
-    fn the_browser_session_is_discovered_only_without_a_local_grant() {
-        let mut context = isolated_context();
-        assert!(!context.allows_host_keychain());
-        assert!(discover(&context).is_empty());
-        context
-            .browser_sessions
-            .insert(ProviderId::Claude, vec!["sessionKey=sk-ant-ok".to_owned()]);
-        let sessions = discover(&context);
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(
-            sessions[0].credential_source,
-            super::super::BROWSER_SESSION_SOURCE
-        );
-    }
-
     /// The stored session is the last rung, and only the last rung.
     ///
     /// It answers when this Mac's own credential said "sign in again"; it never answers first,

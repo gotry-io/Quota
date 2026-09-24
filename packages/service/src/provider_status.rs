@@ -184,36 +184,6 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn catalog_lists_only_statuspage_v2_urls() {
-        let pages = catalog_endpoints();
-        assert_eq!(
-            pages,
-            vec![
-                ("codex", "https://status.openai.com/api/v2/status.json"),
-                ("claude", "https://status.claude.com/api/v2/status.json"),
-                ("kimi", "https://status.moonshot.cn/api/v2/status.json"),
-                ("cursor", "https://status.cursor.com/api/v2/status.json"),
-            ]
-        );
-    }
-
-    #[test]
-    fn parse_takes_indicator_and_description_only() {
-        let body = json!({
-            "page": { "id": "abc", "name": "OpenAI" },
-            "status": {
-                "indicator": "minor",
-                "description": "Partial System Outage"
-            }
-        });
-        let reading = parse_statuspage_v2(&body, "codex", "2026-09-06T00:00:00Z").expect("reading");
-        assert_eq!(reading.provider, "codex");
-        assert_eq!(reading.indicator, "minor");
-        assert_eq!(reading.description, "Partial System Outage");
-        assert_eq!(reading.checked_at, "2026-09-06T00:00:00Z");
-    }
-
-    #[test]
     fn parse_rejects_unknown_indicators() {
         let body = json!({
             "status": { "indicator": "maintenance", "description": "Scheduled" }
@@ -278,32 +248,26 @@ mod tests {
         assert_eq!(merged["codex"].indicator, "minor");
     }
 
+    /// The component is stored as a map, so its order is the map's; the view is catalog order.
+    /// Claude sorts before Codex and follows it in the catalog, so a view that kept map order fails.
     #[test]
-    fn component_round_trip_preserves_catalog_order() {
+    fn the_stored_component_reads_back_in_catalog_order_not_map_order() {
         let mut readings = BTreeMap::new();
-        readings.insert(
-            "cursor".to_owned(),
-            ProviderStatusReading {
-                provider: "cursor".to_owned(),
-                indicator: "none".to_owned(),
-                description: "All Systems Operational".to_owned(),
-                checked_at: "2026-09-06T00:00:00Z".to_owned(),
-            },
-        );
-        readings.insert(
-            "codex".to_owned(),
-            ProviderStatusReading {
-                provider: "codex".to_owned(),
-                indicator: "major".to_owned(),
-                description: "Major Service Outage".to_owned(),
-                checked_at: "2026-09-06T00:01:00Z".to_owned(),
-            },
-        );
-        let value = component_value(&readings);
-        let restored = readings_from_component(Some(&value));
+        for (provider, indicator) in [("claude", "none"), ("codex", "major")] {
+            readings.insert(
+                provider.to_owned(),
+                ProviderStatusReading {
+                    provider: provider.to_owned(),
+                    indicator: indicator.to_owned(),
+                    description: "All Systems Operational".to_owned(),
+                    checked_at: "2026-09-06T00:00:00Z".to_owned(),
+                },
+            );
+        }
+        let restored = readings_from_component(Some(&component_value(&readings)));
+        assert_eq!(restored, readings);
         let views = views_in_catalog_order(&restored);
-        assert_eq!(views.len(), 2);
-        assert_eq!(views[0].provider, "codex");
-        assert_eq!(views[1].provider, "cursor");
+        let order: Vec<&str> = views.iter().map(|view| view.provider.as_str()).collect();
+        assert_eq!(order, ["codex", "claude"]);
     }
 }

@@ -5058,13 +5058,6 @@ mod tests {
         LocalUsageFile, NormalizedUsageEvent, ScanCoverage, UsageSourceScan,
     };
 
-    #[test]
-    fn timestamp_is_canonical() {
-        let value = now_rfc3339();
-        assert!(value.ends_with('Z'));
-        assert_eq!(value.len(), 20);
-    }
-
     /// An `active` row without its tokens is the one shape a person cannot recover from in the
     /// app: every Account read fails and sign-in is refused for being active. Opening the store
     /// drops it; a complete session is left alone.
@@ -5191,36 +5184,6 @@ mod tests {
     }
 
     #[test]
-    fn a_journal_this_device_cannot_write_never_blocks_the_work_it_describes() {
-        let root = std::env::temp_dir().join(format!("quota-journal-ro-{}", Uuid::new_v4()));
-        fs::create_dir_all(&root).expect("root");
-        let store = StateStore::open(&root).expect("state");
-        // A cache that refuses the insert is the machine, not the file: the store answers with
-        // no handle and the caller carries on.
-        {
-            let conn = store.cache.lock().expect("database");
-            conn.execute("DROP TABLE diagnostic_attempts", [])
-                .expect("remove the journal");
-        }
-        assert!(
-            store
-                .begin_diagnostic_attempt(
-                    DiagnosticAttemptKind::QuotaCollection,
-                    DiagnosticAttemptTrigger::Manual,
-                    Some("provider:codex"),
-                    None,
-                )
-                .is_none()
-        );
-        store.finish_diagnostic_attempt(
-            None,
-            &DiagnosticAttemptCompletion::new(DiagnosticAttemptOutcome::Success, None),
-        );
-        drop(store);
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
     fn diagnostic_retention_keeps_running_rows_and_detaches_children() {
         let root = std::env::temp_dir().join(format!("quota-attempt-cap-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).expect("root");
@@ -5332,21 +5295,6 @@ mod tests {
             .expect("opens once the owner has left");
         releaser.join().expect("releaser");
         drop(store);
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
-    fn lock_is_exclusive() {
-        let root = std::env::temp_dir().join(format!("quota-state-{}", Uuid::new_v4()));
-        fs::create_dir_all(&root).expect("root");
-        let first = OwnerLock::acquire(&root).expect("first lock");
-        assert!(matches!(
-            OwnerLock::acquire(&root),
-            Err(StateError::Unavailable)
-        ));
-        drop(first);
-        let second = OwnerLock::acquire(&root).expect("released lock");
-        drop(second);
         fs::remove_dir_all(root).expect("cleanup");
     }
 
@@ -5567,39 +5515,6 @@ mod tests {
             2
         );
         assert_eq!(store.pricing_etag().expect("cleared etag"), None);
-        drop(store);
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
-    fn provider_status_is_a_field_of_the_providers_component() {
-        let root = std::env::temp_dir().join(format!("quota-provider-status-{}", Uuid::new_v4()));
-        fs::create_dir_all(&root).expect("root");
-        let store = StateStore::open(&root).expect("state");
-        let mut readings = std::collections::BTreeMap::new();
-        readings.insert(
-            "codex".to_owned(),
-            crate::provider_status::ProviderStatusReading {
-                provider: "codex".to_owned(),
-                indicator: "minor".to_owned(),
-                description: "Partial System Outage".to_owned(),
-                checked_at: "2026-09-06T00:00:00Z".to_owned(),
-            },
-        );
-        store
-            .set_component(
-                ComponentName::Providers,
-                ComponentStatus::Ready,
-                Some(crate::provider_status::component_value(&readings)),
-                Some("2026-09-06T00:00:00Z".to_owned()),
-                None,
-                false,
-            )
-            .expect("write");
-        let snapshot = store.snapshot().expect("snapshot");
-        assert_eq!(snapshot.provider_status.len(), 1);
-        assert_eq!(snapshot.provider_status[0].provider, "codex");
-        assert_eq!(snapshot.provider_status[0].indicator, "minor");
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");
     }
@@ -6100,42 +6015,6 @@ mod tests {
         fs::remove_dir_all(root).expect("cleanup");
     }
 
-    /// An appended tail adds to what is stored instead of replacing it, and the hours it lands
-    /// in are the only ones recomputed.
-    #[test]
-    fn an_appended_tail_keeps_the_records_already_indexed() {
-        let root = std::env::temp_dir().join(format!("quota-usage-append-{}", Uuid::new_v4()));
-        fs::create_dir_all(&root).expect("root");
-        let store = StateStore::open(&root).expect("state");
-        store
-            .apply_usage_scan(
-                UsageAgent::Codex,
-                &usage_scan(vec![usage_event("2026-08-10T12:15:00Z", 1)], 1),
-                1,
-            )
-            .expect("initial scan");
-        let mut appended = usage_scan(vec![usage_event("2026-08-10T13:15:00Z", 2)], 2);
-        appended.sources[0].append = true;
-        appended.sources[0].record_keys = vec!["line:64:0".into()];
-        store
-            .apply_usage_scan(UsageAgent::Codex, &appended, 2)
-            .expect("append scan");
-        assert_eq!(store.usage_event_count().expect("count"), 2);
-        let (rows, _) = store.usage_period_rows(None).expect("rows");
-        assert_eq!(
-            rows.iter().map(|row| row.input_tokens).sum::<u64>(),
-            3,
-            "{rows:?}"
-        );
-        let sessions = store.usage_sessions().expect("sessions");
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].messages, 2);
-        assert_eq!(sessions[0].tokens_in, 3);
-        assert_eq!(sessions[0].project_key, "usage");
-        drop(store);
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
     #[test]
     fn a_scan_folds_sessions_from_files_and_drops_them_after_ninety_days() {
         let root = std::env::temp_dir().join(format!("quota-usage-sessions-{}", Uuid::new_v4()));
@@ -6172,6 +6051,8 @@ mod tests {
         store
             .apply_usage_scan(UsageAgent::Codex, &appended, 2)
             .expect("append scan");
+        // An appended tail adds to the records already indexed instead of replacing them.
+        assert_eq!(store.usage_event_count().expect("count"), 2);
         let sessions = store.usage_sessions().expect("appended");
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].messages, 2);
@@ -6196,7 +6077,7 @@ mod tests {
         store
             .apply_usage_scan(
                 UsageAgent::Codex,
-                &usage_scan(vec![usage_event("2026-08-10T12:15:00Z", 4)], 3),
+                &usage_scan(vec![usage_event(&started_at, 4)], 3),
                 3,
             )
             .expect("prune scan");

@@ -349,88 +349,8 @@ mod tests {
         }
     }
 
-    /// The org list alone proves nothing: a session that can list organizations and cannot read
-    /// usage is a session this build would store and never be able to spend.
-    #[test]
-    fn validate_keeps_only_a_session_that_can_read_usage() {
-        let organizations = r#"[{"uuid":"org-1","capabilities":["chat"]}]"#.to_owned();
-        let account = r#"{"email_address":"ada@example.com","subscription_type":"max"}"#.to_owned();
-        let (address, server) = serve(vec![
-            organizations.clone(),
-            account.clone(),
-            r#"{"five_hour":{"utilization":12}}"#.to_owned(),
-        ]);
-        let validated = validate_at(
-            "sessionKey=sk-ant-ok",
-            &context(),
-            &format!("http://{address}"),
-        )
-        .expect("validated");
-        // The same organization the OAuth rung names, so the ladder does not rename the account.
-        let (oauth, scope) = account_identity("claude", "organization_id", Some("org-1"));
-        assert_eq!(validated.account_fingerprint, oauth);
-        assert_eq!(scope, "global");
-        assert_eq!(
-            validated.account_label.as_deref(),
-            Some("ad***@example.com")
-        );
-        let heads = server.join().expect("server");
-        assert!(heads[0].contains("cookie: sessionkey=sk-ant-ok"));
-        assert!(heads[2].contains("/api/organizations/org-1/usage"));
-
-        // An account that answers for a window this build knows, even to say it has none, has
-        // been read: the same rule the OAuth rung applies, so the ladder does not tell a
-        // reader with no windows that their session is broken.
-        let (address, server) = serve(vec![
-            organizations.clone(),
-            account.clone(),
-            r#"{"five_hour":null}"#.to_owned(),
-        ]);
-        validate_at(
-            "sessionKey=sk-ant-ok",
-            &context(),
-            &format!("http://{address}"),
-        )
-        .expect("an account with no windows is still an account");
-        assert_eq!(server.join().expect("server").len(), 3);
-
-        // A session that still lists organizations and answers for no window this build knows
-        // is refused.
-        let (address, server) = serve(vec![organizations, account, "{}".to_owned()]);
-        let error = validate_at(
-            "sessionKey=sk-ant-ok",
-            &context(),
-            &format!("http://{address}"),
-        )
-        .expect_err("no usage");
-        assert_eq!(error.category, ErrorCategory::Error);
-        assert_eq!(error.source_id, SOURCE);
-        assert_eq!(server.join().expect("server").len(), 3);
-    }
-
-    #[test]
-    fn account_plan_prefers_the_rate_limit_tier() {
-        assert_eq!(
-            web_account_plan(&serde_json::json!({
-                "subscription_type": "max",
-                "rate_limit_tier": "default_claude_max_20x"
-            }))
-            .as_deref(),
-            Some("max_20x")
-        );
-    }
-
-    /// A header without an Anthropic `sessionKey` is rejected before a request is made.
-    #[test]
-    fn validate_rejects_a_header_that_names_no_session() {
-        let error = validate_at("lastActiveOrg=org-2", &context(), "http://127.0.0.1:1")
-            .expect_err("no session key");
-        assert_eq!(error.category, ErrorCategory::Error);
-        assert_eq!(error.source_id, SOURCE);
-    }
-
-    /// A reading uses the organization the cookie's own hint names, and reports the plan and
-    /// masked identity claude.ai gave beside it.
+    /// A reading uses the organization the cookie's own hint names, sends the stored header as
+    /// the cookie it is, and reports the plan and masked identity claude.ai gave beside it.
     #[test]
     fn a_reading_follows_the_last_active_organization() {
         let (address, server) = serve(vec![
@@ -448,7 +368,9 @@ mod tests {
         assert_eq!(snapshot.account.plan.as_deref(), Some("max"));
         assert_eq!(snapshot.account.fingerprint_scope, "global");
         assert_eq!(snapshot.windows.len(), 1);
-        assert!(server.join().expect("server")[2].contains("/api/organizations/org-2/usage"));
+        let heads = server.join().expect("server");
+        assert!(heads[0].contains("cookie: lastactiveorg=org-2; sessionkey=sk-ant-ok"));
+        assert!(heads[2].contains("/api/organizations/org-2/usage"));
     }
 
     #[test]

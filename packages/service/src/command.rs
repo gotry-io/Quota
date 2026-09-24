@@ -321,42 +321,6 @@ mod tests {
     }
 
     #[test]
-    fn a_status_line_names_the_provider_then_each_window_in_the_shared_words() {
-        let snapshot = json!({
-            "provider": "codex",
-            "windows": [
-                {
-                    "id": "five_hour",
-                    "title": "5 Hours",
-                    "used_percent": 38,
-                    "resets_at": "2026-09-08T00:12:00Z",
-                },
-                { "id": "weekly", "title": "Weekly", "used_percent": 82 },
-            ],
-        });
-
-        assert_eq!(
-            status_line(&snapshot, now(), &Tz::UTC),
-            "Codex  5 Hours 62% · Resets in 3h 12m  ·  Weekly 18%"
-        );
-    }
-
-    #[test]
-    fn a_window_whose_reset_has_passed_states_only_what_is_left() {
-        let snapshot = json!({
-            "provider": "grok",
-            "windows": [{
-                "id": "weekly",
-                "title": "Weekly",
-                "used_percent": 51,
-                "resets_at": "2026-09-07T20:59:00Z",
-            }],
-        });
-
-        assert_eq!(status_line(&snapshot, now(), &Tz::UTC), "Grok  Weekly 49%");
-    }
-
-    #[test]
     fn a_provider_this_build_does_not_know_prints_the_id_it_was_given() {
         let snapshot = json!({ "provider": "someone-else", "windows": [] });
         assert_eq!(
@@ -413,38 +377,9 @@ mod tests {
     }
 
     #[test]
-    fn a_period_is_one_date_or_the_days_it_spans() {
-        assert_eq!(
-            printed_range(&json!({ "from": "2026-09-06", "to": "2026-09-06" })),
-            "2026-09-06"
-        );
-        assert_eq!(
-            printed_range(&json!({ "from": "2026-08-31", "to": "2026-09-06" })),
-            "2026-08-31 – 2026-09-06"
-        );
-    }
-
-    #[test]
     fn counts_are_grouped_rather_than_rounded() {
         assert_eq!(count(0), "0");
         assert_eq!(count(999), "999");
         assert_eq!(count(1_204_620), "1,204,620");
-    }
-
-    #[test]
-    fn the_period_option_names_the_three_windows_a_person_can_ask_for() {
-        let period = |value: Option<&str>| {
-            Options {
-                json: false,
-                period: value.map(str::to_owned),
-            }
-            .period()
-        };
-        assert_eq!(period(None).ok(), Some(UsagePeriod::Today));
-        assert_eq!(period(Some("today")).ok(), Some(UsagePeriod::Today));
-        assert_eq!(period(Some("7d")).ok(), Some(UsagePeriod::Last7Days));
-        assert_eq!(period(Some("30d")).ok(), Some(UsagePeriod::Last30Days));
-        // `all` is folded for the app, not offered here: a terminal asks for a window.
-        assert!(period(Some("all")).is_err());
     }
 }

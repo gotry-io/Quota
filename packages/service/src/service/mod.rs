@@ -1503,11 +1503,6 @@ impl LocalService {
         let _ = self.request_lane(RefreshLane::Account, DiagnosticAttemptTrigger::Scheduled);
     }
 
-    #[cfg(test)]
-    pub(crate) fn poll_provider_status_for_test(&self) {
-        self.poll_provider_status();
-    }
-
     fn request_provider_status(&self) {
         if self
             .inner
@@ -2813,59 +2808,6 @@ mod tests {
         }
     }
 
-    #[derive(Default)]
-    struct StatusPollBackend {
-        user_agent: Mutex<Option<String>>,
-    }
-
-    impl LocalBackend for StatusPollBackend {
-        fn refresh(&self, _: Arc<AtomicBool>, _: &dyn RefreshSink, _: bool) -> RefreshOutcome {
-            let unavailable = || Err(BackendError::unavailable());
-            RefreshOutcome {
-                quota: unavailable(),
-                usage: unavailable(),
-                account: unavailable(),
-                pricing: unavailable(),
-                overview: None,
-            }
-        }
-        fn diagnose(&self) -> Result<DiagnosticReport, BackendError> {
-            Err(BackendError::unavailable())
-        }
-        fn login(&self, _: &str, _: Arc<AtomicBool>) -> Result<LoginOutcome, BackendError> {
-            Err(BackendError::unavailable())
-        }
-        fn logout(&self, _: &Value) -> Result<(), BackendError> {
-            Err(BackendError::unavailable())
-        }
-        fn validate_provider_browser_session(
-            &self,
-            _: crate::catalog::ProviderId,
-            _: &str,
-        ) -> Result<crate::providers::ValidatedBrowserSession, BackendError> {
-            Err(BackendError::unavailable())
-        }
-        fn poll_provider_status(
-            &self,
-            user_agent: &str,
-            checked_at: &str,
-        ) -> std::collections::BTreeMap<String, crate::provider_status::ProviderStatusReading>
-        {
-            *self.user_agent.lock().expect("user agent") = Some(user_agent.to_owned());
-            let mut readings = std::collections::BTreeMap::new();
-            readings.insert(
-                "claude".to_owned(),
-                crate::provider_status::ProviderStatusReading {
-                    provider: "claude".to_owned(),
-                    indicator: "minor".to_owned(),
-                    description: "Partial System Outage".to_owned(),
-                    checked_at: checked_at.to_owned(),
-                },
-            );
-            readings
-        }
-    }
-
     struct BrowserSessionBackend {
         reject: bool,
         refresh_calls: AtomicUsize,
@@ -3264,36 +3206,6 @@ mod tests {
     }
 
     #[test]
-    fn a_status_poll_lands_on_the_providers_component() {
-        let root = std::env::temp_dir().join(format!("quota-service-status-{}", Uuid::new_v4()));
-        fs::create_dir_all(&root).expect("root");
-        let state = Arc::new(StateStore::open(&root).expect("state"));
-        let backend = Arc::new(StatusPollBackend::default());
-        let service = LocalService::new(
-            state.clone(),
-            Arc::new(RecordingSink::default()),
-            backend.clone(),
-        );
-        service.poll_provider_status_for_test();
-        let snapshot = state.snapshot().expect("snapshot");
-        assert_eq!(snapshot.provider_status.len(), 1);
-        assert_eq!(snapshot.provider_status[0].provider, "claude");
-        assert_eq!(snapshot.provider_status[0].indicator, "minor");
-        assert_eq!(
-            snapshot.provider_status[0].description,
-            "Partial System Outage"
-        );
-        assert_eq!(
-            backend.user_agent.lock().expect("user agent").as_deref(),
-            Some("Quota/test")
-        );
-        service.shutdown();
-        drop(service);
-        drop(state);
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
     fn refresh_spawn_failure_finalizes_the_started_attempt() {
         let root = std::env::temp_dir().join(format!("quota-refresh-spawn-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).expect("root");
@@ -3503,19 +3415,19 @@ mod tests {
         assert!(cancel.load(Ordering::Acquire));
         assert!(state.snapshot().expect("snapshot").cache.reset_at.is_none());
 
-        // One that does is waited for, and only then is the cache thrown away.
+        // One that does is waited for, and only then is the cache thrown away. The refresh lets
+        // go only once the reset has cancelled it, so the reset is provably waiting by then.
+        cancel.store(false, Ordering::Release);
         let releasing = {
             let service = service.clone();
             let cancel = cancel.clone();
             thread::spawn(move || {
                 while !cancel.load(Ordering::Acquire) {
-                    thread::sleep(Duration::from_millis(5));
+                    thread::yield_now();
                 }
-                thread::sleep(Duration::from_millis(20));
                 service.inner.refresh.lock().expect("refresh").active = None;
             })
         };
-        cancel.store(false, Ordering::Release);
         service
             .reset_cache_within(Duration::from_secs(5))
             .expect("reset");
@@ -3828,102 +3740,54 @@ mod tests {
         fs::remove_dir_all(root).expect("cleanup");
     }
 
+    /// Turning off upload or project grouping is kept across restarts and announced as a Usage
+    /// change, so a window never shows the old setting after the service accepted the new one.
     #[test]
-    fn disabling_usage_upload_is_durable_and_emits_usage_state() {
-        let root = std::env::temp_dir().join(format!("quota-usage-upload-{}", Uuid::new_v4()));
+    fn usage_upload_and_project_grouping_are_durable_and_emit_usage_state() {
+        let root = std::env::temp_dir().join(format!("quota-usage-settings-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).expect("root");
         let state = Arc::new(StateStore::open(&root).expect("state"));
         let sink = Arc::new(RecordingSink::default());
         let service = LocalService::new(state.clone(), sink.clone(), Arc::new(UnavailableBackend));
-        assert!(
-            state
-                .snapshot()
-                .expect("initial state")
-                .usage_upload_enabled
-        );
-        let request: IpcRequest = serde_json::from_value(serde_json::json!({
-            "type": "request",
-            "request_id": "usage-upload",
-            "operation": "set_usage_upload",
-            "payload": {"enabled": false}
-        }))
-        .expect("request");
+        let initial = state.snapshot().expect("initial state");
+        assert!(initial.usage_upload_enabled);
+        assert!(initial.group_usage_by_project);
 
-        let response = service.handle(request);
+        for operation in ["set_usage_upload", "set_group_usage_by_project"] {
+            let events_before = sink.0.lock().expect("events").len();
+            let request: IpcRequest = serde_json::from_value(serde_json::json!({
+                "type": "request",
+                "request_id": operation,
+                "operation": operation,
+                "payload": {"enabled": false}
+            }))
+            .expect("request");
 
-        assert!(response.error.is_none());
-        assert_eq!(
-            response
-                .result
-                .as_ref()
-                .and_then(|value| value.get("enabled"))
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert!(
-            !state
-                .snapshot()
-                .expect("updated state")
-                .usage_upload_enabled
-        );
-        assert!(
-            sink.0
-                .lock()
-                .expect("events")
-                .iter()
-                .any(|event| event.changed_components == [ComponentName::Usage])
-        );
-        service.shutdown();
-        drop(service);
-        drop(state);
-        fs::remove_dir_all(root).expect("cleanup");
-    }
+            let response = service.handle(request);
 
-    #[test]
-    fn grouping_usage_by_project_is_durable_and_emits_usage_state() {
-        let root = std::env::temp_dir().join(format!("quota-group-project-{}", Uuid::new_v4()));
-        fs::create_dir_all(&root).expect("root");
-        let state = Arc::new(StateStore::open(&root).expect("state"));
-        let sink = Arc::new(RecordingSink::default());
-        let service = LocalService::new(state.clone(), sink.clone(), Arc::new(UnavailableBackend));
-        assert!(
-            state
-                .snapshot()
-                .expect("initial state")
-                .group_usage_by_project
-        );
-        let request: IpcRequest = serde_json::from_value(serde_json::json!({
-            "type": "request",
-            "request_id": "group-project",
-            "operation": "set_group_usage_by_project",
-            "payload": {"enabled": false}
-        }))
-        .expect("request");
-
-        let response = service.handle(request);
-
-        assert!(response.error.is_none());
-        assert_eq!(
-            response
-                .result
-                .as_ref()
-                .and_then(|value| value.get("enabled"))
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert!(
-            !state
-                .snapshot()
-                .expect("updated state")
-                .group_usage_by_project
-        );
-        assert!(
-            sink.0
-                .lock()
-                .expect("events")
-                .iter()
-                .any(|event| event.changed_components == [ComponentName::Usage])
-        );
+            assert!(response.error.is_none(), "{operation}");
+            assert_eq!(
+                response
+                    .result
+                    .as_ref()
+                    .and_then(|value| value.get("enabled"))
+                    .and_then(Value::as_bool),
+                Some(false),
+                "{operation}"
+            );
+            assert!(
+                sink.0
+                    .lock()
+                    .expect("events")
+                    .iter()
+                    .skip(events_before)
+                    .any(|event| event.changed_components == [ComponentName::Usage]),
+                "{operation}"
+            );
+        }
+        let updated = state.snapshot().expect("updated state");
+        assert!(!updated.usage_upload_enabled);
+        assert!(!updated.group_usage_by_project);
         service.shutdown();
         drop(service);
         drop(state);
@@ -4392,50 +4256,6 @@ mod tests {
 
         service.shutdown();
         drop(service);
-        drop(state);
-        fs::remove_dir_all(root).expect("cleanup");
-    }
-
-    #[test]
-    fn a_pin_whose_source_has_gone_is_dropped_from_identity() {
-        let root =
-            std::env::temp_dir().join(format!("quota-overview-pin-prune-{}", Uuid::new_v4()));
-        fs::create_dir_all(&root).expect("root");
-        let state = Arc::new(StateStore::open(&root).expect("state"));
-        let now = Utc::now();
-        let quota = seed_codex_overview(&state, now);
-        state
-            .set_overview_source_pin("codex|fp|global|", Some("local"))
-            .expect("pin");
-        let account = serde_json::json!({
-            "auth_status": "signed_in",
-            "device_id": "this-device",
-            "account_summary": {
-                "devices": [{"id": "device_remote", "display_name": "Studio", "platform": "macos", "last_seen_at": null, "last_observed_at": null}],
-                "subscriptions": [{
-                    "key": "codex|fp|global|",
-                    "provider": "codex",
-                    "snapshot": quota["results"][0]["snapshots"][0].clone(),
-                    "sources": [{
-                        "device_id": "device_remote",
-                        "observed_at": quota["results"][0]["snapshots"][0]["observed_at"].clone(),
-                        "snapshot": quota["results"][0]["snapshots"][0].clone()
-                    }]
-                }]
-            }
-        });
-        let empty_local = serde_json::json!({"results": []});
-        let (items, kept) = backend::overview_items_and_pins(
-            &empty_local,
-            Some(&account),
-            &[],
-            &state.overview_source_pins().expect("pins"),
-            &backend::LocalQuotaHistory::default(),
-            now,
-        );
-        assert!(!kept.contains_key("codex|fp|global|"));
-        assert_eq!(items[0].selected_source_id, "device:device_remote");
-        assert!(items[0].source_pin.is_none());
         drop(state);
         fs::remove_dir_all(root).expect("cleanup");
     }

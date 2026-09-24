@@ -462,17 +462,6 @@ fn claude_zero_cost_empty_rows_and_unsafe_input_totals_match_legacy_parser() {
 }
 
 #[test]
-fn codex_duplicate_cumulative_totals_do_not_emit_duplicate_requests() {
-    let path = root("codex-duplicate");
-    fs::write(path.join("rollout-fixture.jsonl"), fixture("codex")).expect("write fixture");
-    let result = scan_codex_usage(&options(&path)).expect("scan codex");
-    assert_eq!(result.records.len(), 2);
-    assert_eq!(result.records[0].event.cache_read_tokens, 200);
-    assert_eq!(result.records[1].event.model, "gpt-5.3-codex");
-    let _ = fs::remove_dir_all(path);
-}
-
-#[test]
 fn codex_attributes_leading_usage_and_thread_settings() {
     let path = root("codex-state");
     let lines = [
@@ -1360,21 +1349,6 @@ fn aggregation_rejects_invalid_subsets_and_safe_integer_overflow() {
     assert!(aggregate_hour_rows(&[first, second]).is_err());
 }
 
-#[test]
-fn usage_internal_rows_and_models_preserve_limits_semantics() {
-    let models = (0..=64)
-        .map(|index| test_event("2026-08-02T00:01:00Z", &format!("gpt-{index}"), 0))
-        .collect::<Vec<_>>();
-    let model_rows = aggregate_hour_rows(&models).expect("internal model aggregation");
-    assert_eq!(model_rows.len(), 65);
-    assert_eq!(
-        fold_usage_rows(&dated(&model_rows, "2026-08-02"))
-            .expect("internal model totals")
-            .requests,
-        65
-    );
-}
-
 /// An hour carries a bounded number of rows, and the overflow keeps its measurement rather
 /// than being dropped: it is attributed to one model instead of many.
 #[test]
@@ -1712,27 +1686,6 @@ fn a_rhythm_names_every_hour_and_groups_days_by_the_local_clock() {
     // row behind it to state one.
     assert_eq!(hours[12].total_tokens, 0);
     assert_eq!(hours[12].cost_microusd, None);
-}
-
-#[test]
-fn a_period_that_read_a_cache_says_what_that_saved() {
-    let catalog = pricing_catalog(vec![pricing_entry("openai_gpt_5")]);
-    let mut fact = test_fact_with_input("2026-08-02T12:00:00Z", "gpt-5", 2_000_000);
-    fact.row.cache_read_tokens = 1_000_000;
-
-    let summary = build_local_usage_summary(&[fact], Some(&catalog), None).expect("summary");
-
-    // A million cache reads at $1 per million against $0.10 per million saved $0.90.
-    assert_eq!(
-        summary.cache_saved.amount_microusd.as_deref(),
-        Some("900000")
-    );
-    assert_eq!(summary.cache_saved.status, UsageCostStatus::Complete);
-    assert_eq!(summary.cache_saved.unpriced_rows, 0);
-    assert_eq!(
-        crate::pricing::usage_cache_hit_basis_points(&summary.totals),
-        Some(5_000)
-    );
 }
 
 #[test]

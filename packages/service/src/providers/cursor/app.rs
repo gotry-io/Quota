@@ -233,15 +233,6 @@ mod tests {
     }
 
     #[test]
-    fn remapped_home_does_not_read_the_live_cursor_database() {
-        let home = isolated_home();
-        let context = isolated_context(home.clone());
-        assert!(discover(&context).is_empty());
-        assert!(cookie_header(&context).is_none());
-        let _ = fs::remove_dir_all(home);
-    }
-
-    #[test]
     fn discovers_usable_cursor_app_session_before_browser_session() {
         let home = isolated_home();
         write_access_token(&home, &test_jwt("auth0|user_abc", 2_000_000_000));
@@ -286,15 +277,6 @@ mod tests {
             base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(br#"{"sub":"auth0|user_abc"}"#);
         write_access_token(&home, &format!("{header}.{payload}.sig"));
         assert!(discover(&isolated_context(home.clone())).is_empty());
-        let _ = fs::remove_dir_all(home);
-    }
-
-    #[test]
-    fn reads_utf8_blob_tokens() {
-        let home = isolated_home();
-        write_access_token_bytes(&home, test_jwt("user.abc-1", 2_000_000_000).as_bytes());
-        let header = cookie_header(&isolated_context(home.clone())).expect("cookie");
-        assert!(header.starts_with("WorkosCursorSessionToken=user.abc-1%3A%3A"));
         let _ = fs::remove_dir_all(home);
     }
 

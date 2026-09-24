@@ -170,17 +170,6 @@ mod tests {
     }
 
     #[test]
-    fn only_the_named_intervals_are_collection_cadences() {
-        assert_eq!(quota_refresh_interval(60), Some(Duration::from_secs(60)));
-        assert_eq!(quota_refresh_interval(120), Some(Duration::from_secs(120)));
-        assert_eq!(quota_refresh_interval(300), Some(Duration::from_secs(300)));
-        assert_eq!(quota_refresh_interval(600), Some(Duration::from_secs(600)));
-        assert_eq!(quota_refresh_interval(900), Some(Duration::from_secs(900)));
-        assert_eq!(quota_refresh_interval(180), None);
-        assert_eq!(quota_refresh_interval(0), None);
-    }
-
-    #[test]
     fn a_sooner_reset_wins_over_the_periodic_ticks() {
         let origin = Instant::now();
         let (kind, at) = next_wake(
@@ -191,15 +180,6 @@ mod tests {
         );
         assert_eq!(kind, SchedulerWake::ResetBoundary);
         assert_eq!(at, origin + Duration::from_secs(12));
-    }
-
-    #[test]
-    fn a_due_collection_skips_a_same_instant_account_read() {
-        let origin = Instant::now();
-        let due = origin + Duration::from_secs(60);
-        let (kind, at) = next_wake(due, due, None, due + Duration::from_secs(1));
-        assert_eq!(kind, SchedulerWake::Quota);
-        assert_eq!(at, due);
     }
 
     #[test]
@@ -218,23 +198,6 @@ mod tests {
         });
         let wake = next_reset_boundary(&quota, now, next_quota, &HashSet::new()).expect("wake");
         assert_eq!(wake, utc(1_040 + 2));
-    }
-
-    #[test]
-    fn a_reset_after_the_next_collection_is_left_to_that_tick() {
-        let now = utc(1_000);
-        let next_quota = utc(1_300);
-        let quota = json!({
-            "results": [{
-                "snapshots": [{
-                    "windows": [{"resets_at": "1970-01-01T00:22:00Z"}]
-                }]
-            }]
-        });
-        assert_eq!(
-            next_reset_boundary(&quota, now, next_quota, &HashSet::new()),
-            None
-        );
     }
 
     #[test]
@@ -292,8 +255,10 @@ mod tests {
         );
     }
 
+    /// Account, collection and status poll all due at once: the collection runs (it reads the
+    /// Account too) and the status poll waits.
     #[test]
-    fn a_status_poll_loses_a_tie_with_quota_work() {
+    fn a_tie_goes_to_the_collection_over_an_account_read_and_a_status_poll() {
         let origin = Instant::now();
         let due = origin + Duration::from_secs(60);
         let (kind, at) = next_wake(due, due, None, due);

@@ -457,13 +457,6 @@ mod tests {
     }
 
     #[test]
-    fn the_bundled_catalog_is_the_checked_in_one() {
-        let bundled = bundled_model_catalog();
-        assert!(validate_model_catalog(&bundled).valid);
-        assert!(!bundled.families.is_empty());
-    }
-
-    #[test]
     fn rejects_overlapping_alias_scopes() {
         let mut value = serde_json::to_value(catalog()).expect("json");
         value["models"][0]["aliases"] = json!([
@@ -491,6 +484,8 @@ mod tests {
             "invalid checked-in catalog: {:?}",
             result.issues
         );
+        // With no families every vendor would resolve to unknown.
+        assert!(!bundled_model_catalog().families.is_empty());
     }
 
     fn row(model: &str) -> UsageRow {

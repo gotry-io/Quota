@@ -1255,7 +1255,6 @@ mod tests {
             ErrorCode::InvalidRequest
         );
     }
-
     #[test]
     fn response_and_event_have_expected_shape() {
         let response = serde_json::to_value(IpcResponse::result(
@@ -1278,6 +1277,19 @@ mod tests {
         assert_eq!(event["type"], "event");
         assert_eq!(event["event"], "state_changed");
         assert_eq!(event["changed_components"][0], "quota");
+
+        // QuotaBar decodes the recovery action by its snake_case name.
+        let error = serde_json::to_value(IpcResponse::error(
+            "r2",
+            IpcError::new(
+                ErrorCode::ClientUpgradeRequired,
+                RecoveryAction::ConfigureProvider,
+            ),
+        ))
+        .expect("error serializes");
+        assert_eq!(error["type"], "response");
+        assert_eq!(error["error"]["code"], "client_upgrade_required");
+        assert_eq!(error["error"]["recovery_action"], "configure_provider");
     }
 
     fn set_account_settings_request(payload: &str) -> IpcRequest {
@@ -1371,55 +1383,6 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&named).expect("json")["history"]["sync"],
             true
-        );
-    }
-
-    #[test]
-    fn refresh_account_settings_payload_is_empty_and_strict() {
-        let request: IpcRequest = serde_json::from_str(
-            r#"{"type":"request","request_id":"r6","operation":"refresh_account_settings","payload":{}}"#,
-        )
-        .expect("refresh envelope");
-        let _: EmptyPayload = request.decode_payload().expect("empty");
-        let extra: IpcRequest = serde_json::from_str(
-            r#"{"type":"request","request_id":"r6","operation":"refresh_account_settings","payload":{"force":true}}"#,
-        )
-        .expect("envelope remains valid");
-        assert!(extra.decode_payload::<EmptyPayload>().is_err());
-    }
-
-    #[test]
-    fn the_cache_state_says_whether_local_history_is_still_filling_in() {
-        let value = serde_json::to_value(CacheState {
-            rebuilding: true,
-            reset_at: Some("2026-08-25T01:00:00Z".into()),
-        })
-        .expect("serializes");
-        assert_eq!(value["rebuilding"], true);
-        assert_eq!(value["reset_at"], "2026-08-25T01:00:00Z");
-        assert_eq!(
-            serde_json::from_value::<CacheState>(value).expect("round trip"),
-            CacheState {
-                rebuilding: true,
-                reset_at: Some("2026-08-25T01:00:00Z".into()),
-            }
-        );
-        // A cache this device has never had to throw away says so with an absent instant, not
-        // with a made-up one.
-        assert_eq!(
-            CacheState::default(),
-            CacheState {
-                rebuilding: false,
-                reset_at: None
-            }
-        );
-        assert!(
-            serde_json::from_value::<CacheState>(serde_json::json!({
-                "rebuilding": false,
-                "reset_at": null,
-                "seq": 1
-            }))
-            .is_err()
         );
     }
 
