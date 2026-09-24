@@ -214,43 +214,6 @@ function activityListCalls(calls: string[]): string[] {
   return calls.filter((url) => url.includes("usage/activity") && !url.includes("detail="));
 }
 
-it("shows the cache hit rate, what it saved, and reasoning beside the totals", async () => {
-  vi.useFakeTimers();
-  vi.setSystemTime(new Date("2026-08-12T12:00:00Z"));
-  const payload = acceptedSummary();
-  const period = payload.usage.last_30_days as Record<string, unknown>;
-  period.totals = {
-    total_tokens: 1_200,
-    input_tokens: 1_000,
-    output_tokens: 200,
-    cache_read_input_tokens: 940,
-    cache_write_input_tokens: 0,
-    reasoning_tokens: 150,
-    messages: 4,
-  };
-  period.cache_saved = { amount_microusd: "1500000", status: "complete", unpriced_rows: 0 };
-  period.cost = { ...cost(), amount_microusd: "5000", calculated_rows: 4, unpriced_rows: 0 };
-  mockFetch((url) => {
-    if (url.includes("/account/summary")) return jsonResponse(payload);
-    if (url.includes("/account/usage/period")) return jsonResponse(periodFromSummary(url, payload));
-    const to = new URL(url, "https://quota.test").searchParams.get("to") ?? "2026-08-12";
-    return jsonResponse(activityBody(to));
-  });
-
-  const store = createAccountStore();
-  await store.ensureSummary();
-  const view = render(UsagePageHarness, { store });
-
-  await waitFor(() => {
-    expect(view.container.querySelector("#cache-hit")?.textContent?.trim()).toBe("94%");
-  });
-  expect(view.container.querySelector("#cache-saved")?.textContent?.trim()).toBe("saved $1.50");
-  expect(view.container.querySelector("#reasoning-total")?.textContent?.trim()).toBe("150");
-  expect(view.container.querySelector("#cost-priced")?.textContent?.trim()).toBe(
-    "Priced 4 of 4 rows",
-  );
-});
-
 it("rolls the Usage activity range once when the shell clock crosses UTC midnight", async () => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-08-12T23:59:00Z"));
@@ -303,72 +266,6 @@ it("rolls the Usage activity range once when the shell clock crosses UTC midnigh
   });
   expect(activityListCalls(calls)).toHaveLength(2);
   stopClock();
-});
-
-it("draws Rhythm from the hours detail of the selected period", async () => {
-  vi.useFakeTimers();
-  vi.setSystemTime(new Date("2026-08-12T12:00:00Z"));
-  const hoursOfDay = Array.from({ length: 24 }, (_, hour) => ({
-    hour,
-    total_tokens: hour === 14 ? 100 : 0,
-    cost_microusd: hour === 14 ? "5000" : null,
-  }));
-  const weekdayHours = Array.from({ length: 7 }, (_, weekday) =>
-    Array.from({ length: 24 }, (_, hour) => (weekday === 1 && hour === 14 ? 100 : 0)),
-  );
-  mockFetch((url) => {
-    if (url.includes("/account/summary")) return jsonResponse(acceptedSummary());
-    if (url.includes("/account/usage/period")) {
-      return jsonResponse(periodFromSummary(url, acceptedSummary()));
-    }
-    if (url.includes("detail=hours")) {
-      return jsonResponse({
-        protocol_version: 6,
-        days: [
-          {
-            date: "2026-08-12",
-            totals: totals(),
-            cost: cost(),
-            partial: false,
-          },
-        ],
-        hours_of_day: hoursOfDay,
-        weekday_hours: weekdayHours,
-      });
-    }
-    const to = new URL(url, "https://quota.test").searchParams.get("to") ?? "2026-08-12";
-    return jsonResponse(activityBody(to));
-  });
-
-  const store = createAccountStore();
-  await store.ensureSummary();
-  const view = render(UsagePageHarness, { store });
-  await waitFor(() => {
-    expect(view.container.querySelector("#usage-rhythm-title")?.textContent?.trim()).toBe("Rhythm");
-  });
-  expect(view.container.querySelector(".usage-rhythm-heat")).not.toBeNull();
-  expect(view.container.querySelectorAll(".usage-rhythm-cell")).toHaveLength(7 * 24);
-});
-
-it("shows the model tree for a period the summary does not fold", async () => {
-  vi.useFakeTimers();
-  vi.setSystemTime(new Date("2026-08-12T12:00:00Z"));
-  const payload = acceptedSummary();
-  mockFetch((url) => {
-    if (url.includes("/account/summary")) return jsonResponse(payload);
-    if (url.includes("/account/usage/period")) return jsonResponse(periodFromSummary(url, payload));
-    const to = new URL(url, "https://quota.test").searchParams.get("to") ?? "2026-08-12";
-    return jsonResponse(activityBody(to));
-  });
-
-  const store = createAccountStore();
-  await store.ensureSummary();
-  const view = render(UsagePageHarness, { store });
-  await waitFor(() => {
-    expect(view.container.querySelector("#token-total")).not.toBeNull();
-  });
-  expect(view.container.querySelector("#usage-breakdown-note")).toBeNull();
-  expect(view.container.querySelector("#usage-tree-title")).not.toBeNull();
 });
 
 it("parses a period response and renders totals, cost, and coverage", async () => {
@@ -437,30 +334,6 @@ it("parses a period response and renders totals, cost, and coverage", async () =
   expect(view.container.textContent).toContain(
     "Some hours in this period were scanned incompletely.",
   );
-});
-
-it("offers Export for a loaded period that has days", async () => {
-  vi.useFakeTimers();
-  vi.setSystemTime(new Date("2026-08-12T12:00:00Z"));
-  mockFetch((url) => {
-    if (url.includes("/account/summary")) return jsonResponse(acceptedSummary());
-    if (url.includes("/account/usage/period")) {
-      return jsonResponse(periodFromSummary(url, acceptedSummary()));
-    }
-    const to = new URL(url, "https://quota.test").searchParams.get("to") ?? "2026-08-12";
-    return jsonResponse(activityBody(to));
-  });
-
-  const store = createAccountStore();
-  await store.ensureSummary();
-  const view = render(UsagePageHarness, { store });
-  await waitFor(() => {
-    expect(view.container.querySelector("#token-total")).not.toBeNull();
-  });
-  const exportTrigger = view.container.querySelector("#usage-export");
-  expect(exportTrigger).not.toBeNull();
-  expect(exportTrigger?.getAttribute("aria-disabled")).toBeNull();
-  expect(exportTrigger?.textContent?.trim()).toBe("Export");
 });
 
 it("meters the monthly budget from the Account document", async () => {

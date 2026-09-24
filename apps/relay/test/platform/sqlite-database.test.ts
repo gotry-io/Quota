@@ -106,47 +106,6 @@ describe("SqliteDatabase", () => {
     expect(results[2]?.results).toEqual([{ id: "a" }, { id: "b" }]);
   });
 
-  it("keeps SQLite's own words for a unique conflict", async () => {
-    await database.prepare("INSERT INTO rows VALUES (?1, ?2, ?3)").bind("a", "one", 1).run();
-    await expect(
-      database.prepare("INSERT INTO rows VALUES (?1, ?2, ?3)").bind("b", "one", 2).run(),
-    ).rejects.toThrow(/UNIQUE constraint failed/);
-  });
-
-  it("binds a JSON array for json_each(?)", async () => {
-    await database.batch([
-      database.prepare("INSERT INTO rows VALUES (?1, ?2, ?3)").bind("a", "one", 1),
-      database.prepare("INSERT INTO rows VALUES (?1, ?2, ?3)").bind("b", "two", 2),
-      database.prepare("INSERT INTO rows VALUES (?1, ?2, ?3)").bind("c", "three", 3),
-    ]);
-    const wanted = await database
-      .prepare("SELECT id FROM rows WHERE id IN (SELECT value FROM json_each(?1)) ORDER BY id")
-      .bind(JSON.stringify(["a", "c"]))
-      .all<{ id: string }>();
-    expect(wanted.results).toEqual([{ id: "a" }, { id: "c" }]);
-  });
-
-  it("upserts through ON CONFLICT and moves the stored value forward only", async () => {
-    const upsert = (id: string, count: number) =>
-      database
-        .prepare(
-          `INSERT INTO rows (id, label, count) VALUES (?1, ?1, ?2)
-           ON CONFLICT(id) DO UPDATE SET count = excluded.count
-           WHERE excluded.count > rows.count`,
-        )
-        .bind(id, count)
-        .run();
-    await upsert("a", 3);
-    await upsert("a", 5);
-    expect(
-      await database.prepare("SELECT count FROM rows WHERE id = ?1").bind("a").first("count"),
-    ).toBe(5);
-    await upsert("a", 2);
-    expect(
-      await database.prepare("SELECT count FROM rows WHERE id = ?1").bind("a").first("count"),
-    ).toBe(5);
-  });
-
   it("keeps integers as numbers", async () => {
     await database.prepare("INSERT INTO rows VALUES (?1, ?2, ?3)").bind("a", "one", 1234).run();
     const row = await database

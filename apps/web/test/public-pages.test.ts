@@ -8,7 +8,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 const pages = ["download", "support", "privacy", "terms"] as const;
 
-test("public pages exist and set head metadata", () => {
+test("every public page states a canonical URL and /my is noindex", () => {
   for (const page of pages) {
     const file = join(root, "src/routes", page, "+page.svelte");
     assert.equal(existsSync(file), true, file);
@@ -17,13 +17,12 @@ test("public pages exist and set head metadata", () => {
     assert.match(source, /<title>/);
     assert.match(source, /rel="canonical"/);
   }
-});
-
-test("footer links to the public pages", () => {
-  const layout = readFileSync(join(root, "src/routes/+layout.svelte"), "utf8");
-  for (const href of ["/download", "/support", "/privacy", "/terms"]) {
-    assert.match(layout, new RegExp(`href="${href}"`));
-  }
+  const landing = readFileSync(join(root, "src/routes/+page.svelte"), "utf8");
+  assert.match(landing, /rel="canonical"/);
+  assert.match(landing, /property="og:title"/);
+  assert.match(landing, /property="og:url"/);
+  const dashboard = readFileSync(join(root, "src/routes/my/+page.svelte"), "utf8");
+  assert.match(dashboard, /noindex/);
 });
 
 test("the published Usage page states its own head and loads only through the document port", () => {

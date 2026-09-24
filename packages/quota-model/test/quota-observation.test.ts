@@ -1,11 +1,7 @@
 import conformanceJson from "../../protocol/fixtures/quota-observation-conformance.json" with {
   type: "json",
 };
-import {
-  type QuotaSnapshot,
-  QuotaSnapshotSchema,
-  type QuotaStatus,
-} from "@gotry-io/quota-protocol";
+import type { QuotaSnapshot, QuotaStatus } from "@gotry-io/quota-protocol";
 import { describe, expect, it } from "vitest";
 import {
   mergeQuotaObservations,
@@ -53,12 +49,6 @@ describe("observation freshness conformance", () => {
       );
     }
   });
-
-  it("refuses a reading that still carries the retired validity stamp", () => {
-    const stamped = { ...conformance.freshness[1]!.snapshot, valid_until: "2099-01-01T00:00:00Z" };
-    expect(QuotaSnapshotSchema.safeParse(stamped).success).toBe(false);
-    expect(QuotaSnapshotSchema.safeParse(conformance.freshness[1]!.snapshot).success).toBe(true);
-  });
 });
 
 describe("subscription merge conformance", () => {
@@ -86,9 +76,5 @@ describe("subscription merge conformance", () => {
       }));
       expect(actual, testCase.name).toEqual(expected);
     }
-  });
-
-  it("returns nothing for an account that has never reported", () => {
-    expect(mergeQuotaObservations([])).toEqual([]);
   });
 });

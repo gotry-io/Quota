@@ -1,8 +1,5 @@
 import {
-  type BillingAgent,
   type BillingChannel,
-  type ChannelSource,
-  type ContextBucket,
   type DatedUsageRow,
   DatedUsageRowSchema,
   HOURS_OF_DAY,
@@ -16,7 +13,6 @@ import {
   type ModelCatalog,
   ModelCatalogSchema,
   type QuotaSnapshotRead,
-  Rfc3339InstantSchema,
   type UsageCostAssumption,
   type UsageCostMode,
   type UsageCacheSaved,
@@ -25,7 +21,6 @@ import {
   UsageCostOutcomeSchema,
   type UsageHourOfDay,
   type UsageRow,
-  UsageRowSchema,
   type UsageSummaryTotals,
   type UsageUnpricedItem,
   type UsageUnpricedItemRead,
@@ -396,83 +391,6 @@ function compareIdentity(left: MergedQuotaObservation, right: MergedQuotaObserva
 function compareText(left: string, right: string): number {
   if (left === right) return 0;
   return left < right ? -1 : 1;
-}
-
-export interface NormalizedUsageEvent {
-  occurred_at: string;
-  agent: BillingAgent;
-  model: string;
-  billing_channel: BillingChannel;
-  channel_source: ChannelSource;
-  input_tokens: number;
-  cache_read_tokens: number;
-  cache_write_5m_tokens: number;
-  cache_write_1h_tokens: number;
-  cache_write_inferred_tokens: number;
-  output_tokens: number;
-  reasoning_tokens: number;
-  requests: number;
-  context_bucket: ContextBucket;
-  service_tier: string;
-  speed: string;
-  inference_geo: string;
-  billable_tools: Readonly<Partial<Record<"web_search" | "web_fetch", number>>>;
-  source_cost_microusd?: bigint;
-  source_cost_covered_requests: number;
-}
-
-/** One aggregated hour of one device's own collection, before it is uploaded. */
-export interface BucketedUsageRow extends UsageRow {
-  bucket_start_utc: string;
-}
-
-/** Aggregate validated request facts into deterministic sparse UTC-hour rows. */
-export function aggregateUsageEvents(events: readonly NormalizedUsageEvent[]): BucketedUsageRow[] {
-  const rows = new Map<string, MutableUsageFact>();
-
-  for (const event of events) {
-    const instant = Date.parse(Rfc3339InstantSchema.parse(event.occurred_at));
-    if (!Number.isFinite(instant)) {
-      throw new RangeError("Usage event carries an instant that cannot be placed in time.");
-    }
-    const bucketStart = new Date(Math.floor(instant / 3_600_000) * 3_600_000)
-      .toISOString()
-      .replace(".000Z", "Z");
-    const row = UsageRowSchema.parse({
-      agent: event.agent,
-      billing_channel: event.billing_channel,
-      channel_source: event.channel_source,
-      model: event.model,
-      context_bucket: event.context_bucket,
-      service_tier: event.service_tier,
-      speed: event.speed,
-      inference_geo: event.inference_geo,
-      input_tokens: event.input_tokens,
-      cache_read_tokens: event.cache_read_tokens,
-      cache_write_5m_tokens: event.cache_write_5m_tokens,
-      cache_write_1h_tokens: event.cache_write_1h_tokens,
-      cache_write_inferred_tokens: event.cache_write_inferred_tokens,
-      output_tokens: event.output_tokens,
-      reasoning_tokens: event.reasoning_tokens,
-      requests: event.requests,
-      web_search_requests: event.billable_tools.web_search ?? 0,
-      web_fetch_requests: event.billable_tools.web_fetch ?? 0,
-      ...(event.source_cost_microusd === undefined
-        ? {}
-        : { source_cost_microusd: event.source_cost_microusd.toString() }),
-      source_cost_covered_requests: event.source_cost_covered_requests,
-    });
-    const fact = { bucket_start_utc: bucketStart, ...row };
-    const key = usageFactSortKey(fact);
-    const existing = rows.get(key);
-    if (existing) {
-      addFact(existing, fact);
-    } else {
-      rows.set(key, mutableFact(fact));
-    }
-  }
-
-  return [...rows.values()].sort(compareUsageFacts).map((row) => serializedFact(row));
 }
 
 export type PricingCatalogValidationIssue =
@@ -1034,95 +952,6 @@ export function calculateUsageRowCost(
   input: DatedUsageRow,
 ): CalculatedUsageRowCost {
   return calculateRowFromCatalog(catalog, DatedUsageRowSchema.parse(input));
-}
-
-interface MutableUsageTotals {
-  input_tokens: number;
-  cache_read_tokens: number;
-  cache_write_5m_tokens: number;
-  cache_write_1h_tokens: number;
-  cache_write_inferred_tokens: number;
-  output_tokens: number;
-  reasoning_tokens: number;
-  requests: number;
-  web_search_requests: number;
-  web_fetch_requests: number;
-  source_cost_microusd: bigint;
-  source_cost_covered_requests: number;
-}
-
-interface MutableUsageFact
-  extends Omit<BucketedUsageRow, "source_cost_microusd">,
-    MutableUsageTotals {}
-
-function mutableFact(fact: BucketedUsageRow): MutableUsageFact {
-  return {
-    ...fact,
-    source_cost_microusd: BigInt(fact.source_cost_microusd ?? "0"),
-  };
-}
-
-function serializedFact(fact: MutableUsageFact): BucketedUsageRow {
-  const { source_cost_microusd, ...rest } = fact;
-  return {
-    ...rest,
-    ...(fact.source_cost_covered_requests === 0
-      ? {}
-      : { source_cost_microusd: source_cost_microusd.toString() }),
-  };
-}
-
-const COUNT_KEYS = [
-  "input_tokens",
-  "cache_read_tokens",
-  "cache_write_5m_tokens",
-  "cache_write_1h_tokens",
-  "cache_write_inferred_tokens",
-  "output_tokens",
-  "reasoning_tokens",
-  "requests",
-  "web_search_requests",
-  "web_fetch_requests",
-  "source_cost_covered_requests",
-] as const;
-
-function addFact(target: MutableUsageFact, source: BucketedUsageRow): void {
-  addCounts(target, source);
-  const { bucket_start_utc: _bucket, ...row } = serializedFact(target);
-  UsageRowSchema.parse(row);
-}
-
-function addCounts(target: MutableUsageTotals, source: BucketedUsageRow): void {
-  for (const key of COUNT_KEYS) {
-    target[key] = addSafeIntegers(target[key], source[key]);
-  }
-  target.source_cost_microusd += BigInt(source.source_cost_microusd ?? "0");
-}
-
-function addSafeIntegers(left: number, right: number): number {
-  const result = left + right;
-  if (!Number.isSafeInteger(result)) {
-    throw new RangeError("Usage count exceeds the JSON safe-integer range.");
-  }
-  return result;
-}
-
-function compareUsageFacts(left: MutableUsageFact, right: MutableUsageFact): number {
-  return usageFactSortKey(left).localeCompare(usageFactSortKey(right));
-}
-
-function usageFactSortKey(fact: Omit<BucketedUsageRow, "source_cost_microusd">): string {
-  return JSON.stringify([
-    fact.bucket_start_utc,
-    fact.agent,
-    fact.billing_channel,
-    fact.channel_source,
-    fact.model,
-    fact.context_bucket,
-    fact.service_tier,
-    fact.speed,
-    fact.inference_geo,
-  ]);
 }
 
 function pricingEntriesAreAmbiguous(

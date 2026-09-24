@@ -105,24 +105,9 @@ beforeEach(async () => {
 });
 
 describe("Account usage period conformance", () => {
-  it("names every case the period read has to answer", () => {
+  it("answers every fixture case as producer", async () => {
     expect(conformance.hour_grid_rule).toBe(USAGE_HOUR_GRID_RULE);
     expect(conformance.maximum_local_days).toBe(366);
-    expect(conformance.cases.map((item) => item.name)).toEqual([
-      "preset_equals_custom",
-      "adjacent_no_overlap",
-      "missing_is_not_zero",
-      "dst_forward",
-      "dst_back",
-      "offset_plus_0530",
-      "offset_plus_0545",
-      "offset_minus_0330",
-      "deletion",
-      "retention_edge",
-    ]);
-  });
-
-  it("answers every fixture case as producer", async () => {
     for (const testCase of conformance.cases) {
       await db.batch(
         ["usage_daily", "usage_hourly", "usage_hour_scans", "devices", "accounts"].map((table) =>

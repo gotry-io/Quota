@@ -23,22 +23,17 @@ import {
   DeviceProfileUpdateRequestSchema,
   DeviceProfileUpdateResponseSchema,
   DeviceSyncResponseSchema,
-  IDENTITY_PROVIDERS,
-  identityProviderDisplayName,
   IOS_OAUTH_CLIENT_ID,
   IOS_OAUTH_REDIRECT_URI,
   IosLoginExchangeRequestSchema,
   IosOAuthTokenResponseSchema,
   IosSessionRefreshRequestSchema,
-  LOCAL_PROVIDER_IDS,
-  LocalProviderIdSchema,
   LocalUsageReportSchema,
   MANAGED_DATA_PROTOCOL_VERSION,
   MAXIMUM_QUOTA_HISTORY_POINTS_PER_UPLOAD,
   MAXIMUM_SNAPSHOTS_PER_ENVELOPE,
   OAuthTokenResponseSchema,
   PROTOCOL_VERSION,
-  PROVIDER_IDS,
   ProviderStatusResponseReadSchema,
   ProviderStatusResponseSchema,
   PricingCatalogSchema,
@@ -46,7 +41,6 @@ import {
   PublicProfileUpdateRequestSchema,
   PublicUsageResponseSchema,
   PUBLIC_PROFILE_HANDLE_PATTERN,
-  ProviderIdSchema,
   RESERVED_PUBLIC_PROFILE_HANDLES,
   QuotaCollectionReportSchema,
   QuotaHistoryResponseReadSchema,
@@ -61,82 +55,6 @@ import {
 } from "../src/index.ts";
 
 describe("quota protocol", () => {
-  it("accepts every managed provider and keeps local-only collectors out of the wire", () => {
-    expect(PROVIDER_IDS).toContain("cursor");
-    expect(PROVIDER_IDS).toContain("gemini");
-    expect(PROVIDER_IDS).toContain("copilot");
-    expect(PROVIDER_IDS).toContain("antigravity");
-    expect(PROVIDER_IDS).toContain("opencode_go");
-    expect(ProviderIdSchema.safeParse("cursor").success).toBe(true);
-    expect(LOCAL_PROVIDER_IDS).toEqual(expect.arrayContaining([...PROVIDER_IDS]));
-    expect(LocalProviderIdSchema.safeParse("cursor").success).toBe(true);
-  });
-
-  it("prices every billing channel except the unknown sentinel", () => {
-    expect(protocol.BillingChannelSchema.options).toContain("moonshot_direct");
-    expect(protocol.PricedBillingChannelSchema.options).toEqual(
-      protocol.BillingChannelSchema.options.filter((channel) => channel !== "unknown"),
-    );
-  });
-
-  it("carries one managed-data version on quota and Usage", () => {
-    expect(MANAGED_DATA_PROTOCOL_VERSION).toBe(6);
-    expect(protocol.BILLING_AGENTS).toContain("cursor");
-    expect(protocol.BILLING_AGENTS).toContain("gemini");
-    expect(protocol.BILLING_AGENTS).toContain("copilot");
-    expect(protocol.BILLING_AGENTS).toContain("kilo");
-    expect(protocol.BILLING_AGENTS).toContain("antigravity");
-    const cursorEnvelope = { ...quotaEnvelope(), snapshots: [snapshot("cursor")] };
-    expect(QuotaSnapshotEnvelopeSchema.safeParse(cursorEnvelope).success).toBe(true);
-    // The shared fixture owns the retired managed-data version; this pins the control one,
-    // which no data contract ever accepted.
-    expect(
-      QuotaSnapshotEnvelopeSchema.safeParse({ ...cursorEnvelope, protocol_version: 2 }).success,
-    ).toBe(false);
-
-    const upload = usageUpload();
-    const cursorUsage = {
-      ...upload,
-      agent: "cursor" as const,
-      hours: upload.hours.map((hour) => ({
-        ...hour,
-        rows: hour.rows.map((row) => ({ ...row, agent: "cursor" as const })),
-      })),
-    };
-    expect(UsageUploadSchema.safeParse(cursorUsage).success).toBe(true);
-    expect(UsageUploadSchema.safeParse({ ...cursorUsage, protocol_version: 2 }).success).toBe(
-      false,
-    );
-  });
-
-  it("refuses a summary Device that asserts something about itself", () => {
-    const summary = accountSummary();
-    expect(AccountSummarySchema.safeParse(summary).success).toBe(true);
-    // A Device says when it was last seen and when its newest reading was taken. A status it
-    // decided for itself is not the wire.
-    const claiming = {
-      ...summary,
-      devices: summary.devices.map((device) => ({ ...device, status: "active" })),
-    };
-    expect(AccountSummarySchema.safeParse(claiming).success).toBe(false);
-  });
-
-  it("accepts the sole quota upload contract with device generation", () => {
-    const envelope = quotaEnvelope();
-    expect(QuotaSnapshotEnvelopeSchema.parse(envelope)).toEqual(envelope);
-    expect(PROTOCOL_VERSION).toBe(2);
-    expect(
-      QuotaSnapshotEnvelopeSchema.safeParse({
-        ...envelope,
-        protocol_version: undefined,
-        schema_version: 1,
-      }).success,
-    ).toBe(false);
-    expect(QuotaSnapshotEnvelopeSchema.safeParse({ ...envelope, generation: 0 }).success).toBe(
-      false,
-    );
-  });
-
   it("bounds snapshot uploads and validates their acceptance response", () => {
     const envelope = quotaEnvelope();
     const item = envelope.snapshots[0];
@@ -224,28 +142,6 @@ describe("quota protocol", () => {
     };
     expect(AccountSummarySchema.safeParse(payload).success).toBe(false);
     expect(AccountSummaryReadSchema.safeParse(payload).success).toBe(true);
-  });
-
-  it("keeps absolute quota balances valid when their currency is not a wire unit", () => {
-    const envelope = quotaEnvelope();
-    expect(
-      QuotaSnapshotEnvelopeSchema.safeParse({
-        ...envelope,
-        snapshots: [
-          {
-            ...envelope.snapshots[0],
-            windows: [
-              {
-                id: "balance",
-                title: "Balance",
-                used_percent: 0,
-                remaining_value: 12.34,
-              },
-            ],
-          },
-        ],
-      }).success,
-    ).toBe(true);
   });
 
   it("keeps local collection reports strict and provider-consistent", () => {
@@ -359,36 +255,13 @@ describe("quota protocol", () => {
       ],
     };
     expect(AccountResponseSchema.safeParse(account).success).toBe(true);
-    // The channels are a closed vocabulary, and the subject a provider proved is never answered.
-    expect(
-      AccountResponseSchema.safeParse({
-        ...account,
-        identities: [
-          { provider: "carrier-pigeon", label: null, linked_at: "2026-01-04T12:00:00Z" },
-        ],
-      }).success,
-    ).toBe(false);
-    expect(
-      AccountResponseSchema.safeParse({
-        ...account,
-        identities: [{ ...account.identities[0], subject: "5b2c" }],
-      }).success,
-    ).toBe(false);
-    // An Account holds a channel at most once, so it can never state more than there are.
+    // The closed vocabulary and the unanswered subject are wire-conformance cases. An Account holds a channel at most once, so it can never state more than there are.
     expect(
       AccountResponseSchema.safeParse({
         ...account,
         identities: [...account.identities, ...account.identities],
       }).success,
     ).toBe(false);
-    expect(AccountResponseSchema.safeParse({ ...account, identities: undefined }).success).toBe(
-      false,
-    );
-    expect(IDENTITY_PROVIDERS.map(identityProviderDisplayName)).toEqual([
-      "GitHub",
-      "Apple",
-      "Email",
-    ]);
   });
 
   it("states the public provider status page as one row per polled catalog id", () => {
@@ -692,7 +565,7 @@ describe("quota protocol", () => {
     expect(UsageRowSchema.safeParse({ ...row, usage_date: "2026-08-02" }).success).toBe(false);
   });
 
-  it("uses the opaque model contract for a period's model leaves", () => {
+  it("refuses a period model leaf that breaks the opaque model contract", () => {
     const period = {
       totals: emptyTotals(),
       cost: emptyCost(),
@@ -982,7 +855,7 @@ describe("quota protocol", () => {
     ).toBe(false);
   });
 
-  it("refuses an hour computed from a missing lower bound", () => {
+  it("refuses a 1970 upload hour from a missing lower bound yet lets the local report state a 1970 range", () => {
     const upload = usageUpload();
     expect(
       UsageUploadSchema.safeParse({

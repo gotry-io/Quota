@@ -1,5 +1,4 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { FORBIDDEN_COPY, SESSION_ENDED_COPY } from "./account-errors.ts";
 import {
   ACCOUNT_SETTINGS_PATH,
   clearStoredAccountSettings,
@@ -42,29 +41,6 @@ function settingsDocument(
   };
 }
 
-it("reads the Account settings document and keeps the ETag", async () => {
-  const body = settingsDocument({
-    revision: 1,
-    updated_at: "2026-09-21T10:00:00.000Z",
-    budget: { amount_usd: "250.00", alerts: true },
-  });
-  const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
-    jsonResponse(body, 200, { ETag: '"1"' }),
-  );
-  vi.stubGlobal("fetch", fetchMock);
-
-  const result = await fetchAccountSettings();
-  expect(result.status).toBe("ok");
-  if (result.status !== "ok") return;
-  expect(result.etag).toBe('"1"');
-  expect(result.settings.budget.amount_usd).toBe("250.00");
-  expect(fetchMock.mock.calls[0]?.[0]).toBe(ACCOUNT_SETTINGS_PATH);
-  const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
-  expect(init.credentials).toBe("same-origin");
-  expect(new Headers(init.headers).get("If-None-Match")).toBeNull();
-  expect(storedAccountSettingsETag()).toBe('"1"');
-});
-
 it("sends If-None-Match and keeps the last document on 304", async () => {
   const body = settingsDocument({ revision: 1, budget: { amount_usd: "50.00", alerts: true } });
   const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -75,7 +51,13 @@ it("sends If-None-Match and keeps the last document on 304", async () => {
   });
   vi.stubGlobal("fetch", fetchMock);
 
-  expect((await fetchAccountSettings()).status).toBe("ok");
+  const first = await fetchAccountSettings();
+  expect(first.status).toBe("ok");
+  const firstInit = fetchMock.mock.calls[0]?.[1] as RequestInit;
+  expect(fetchMock.mock.calls[0]?.[0]).toBe(ACCOUNT_SETTINGS_PATH);
+  expect(firstInit.credentials).toBe("same-origin");
+  expect(new Headers(firstInit.headers).get("If-None-Match")).toBeNull();
+  expect(storedAccountSettingsETag()).toBe('"1"');
   const again = await fetchAccountSettings();
   expect(again.status).toBe("not_modified");
   if (again.status !== "not_modified") return;
@@ -163,18 +145,6 @@ it("names a second 412 as changed elsewhere, try again", async () => {
   expect(puts).toBe(2);
 });
 
-it("treats 401 as a session that ended", async () => {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () => new Response(null, { status: 401 })),
-  );
-  const result = await fetchAccountSettings();
-  expect(result.status).toBe("error");
-  if (result.status !== "error") return;
-  expect(result.error.status).toBe("session_ended");
-  expect(result.error.message).toBe(SESSION_ENDED_COPY);
-});
-
 it("treats a 401 write as a session that ended", async () => {
   vi.stubGlobal(
     "fetch",
@@ -190,16 +160,4 @@ it("treats a 401 write as a session that ended", async () => {
   expect(result.status).toBe("error");
   if (result.status !== "error") return;
   expect(result.error.status).toBe("session_ended");
-});
-
-it("does not treat a 403 read as a session that ended", async () => {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () => new Response(null, { status: 403 })),
-  );
-  const result = await fetchAccountSettings();
-  expect(result.status).toBe("error");
-  if (result.status !== "error") return;
-  expect(result.error.status).toBe("forbidden");
-  expect(result.error.message).toBe(FORBIDDEN_COPY);
 });

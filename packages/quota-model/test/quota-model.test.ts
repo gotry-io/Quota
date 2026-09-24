@@ -9,11 +9,9 @@ import type {
 } from "@gotry-io/quota-protocol";
 import { describe, expect, it } from "vitest";
 import {
-  aggregateUsageEvents,
   calculateUsageCost,
   calculateUsageRowCost,
   foldPreparedUsageCosts,
-  type NormalizedUsageEvent,
   prepareUsageCosts,
   remainingPercent,
   resolvePricingEntry,
@@ -87,7 +85,7 @@ describe("pricing conformance", () => {
     }
   });
 
-  it("prices one anthropic_direct Claude Code row on its own at the Anthropic list rate", () => {
+  it("prices one anthropic_direct Claude row on its own through calculateUsageRowCost at the list rate", () => {
     const catalog = pricingConformance.catalogs.anthropic_claude!;
     expect(calculateUsageRowCost(catalog, pricingConformance.rows.claude_opus_5!)).toEqual({
       status: "priced",
@@ -115,107 +113,7 @@ describe("quota calculations", () => {
   });
 });
 
-describe("Usage aggregation", () => {
-  it("places every event by the UTC hour it happened in", () => {
-    const rows = aggregateUsageEvents([
-      event({ occurred_at: "2026-08-02T00:10:00Z", input_tokens: 100 }),
-      event({ occurred_at: "2026-08-02T00:20:00Z", input_tokens: 200 }),
-      event({ occurred_at: "2026-08-02T01:05:00Z", input_tokens: 400 }),
-    ]);
-
-    // The two events inside one UTC hour are one row now: nothing splits them by a local
-    // clock the row no longer carries.
-    expect(rows.map((row) => row.bucket_start_utc)).toEqual([
-      "2026-08-02T00:00:00Z",
-      "2026-08-02T01:00:00Z",
-    ]);
-    expect(rows.map((row) => row.input_tokens)).toEqual([300, 400]);
-  });
-
-  it("merges identical dimensions and conserves every token/source-cost subset", () => {
-    const rows = aggregateUsageEvents([
-      event({
-        occurred_at: "2026-08-02T00:01:00Z",
-        input_tokens: 1_000,
-        cache_read_tokens: 100,
-        output_tokens: 200,
-        reasoning_tokens: 50,
-        source_cost_microusd: 123n,
-        source_cost_covered_requests: 1,
-      }),
-      event({
-        occurred_at: "2026-08-02T00:02:00Z",
-        input_tokens: 2_000,
-        cache_write_5m_tokens: 500,
-        output_tokens: 300,
-        reasoning_tokens: 75,
-        source_cost_microusd: 456n,
-        source_cost_covered_requests: 1,
-      }),
-    ]);
-
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({
-      input_tokens: 3_000,
-      cache_read_tokens: 100,
-      cache_write_5m_tokens: 500,
-      output_tokens: 500,
-      reasoning_tokens: 125,
-      requests: 2,
-      source_cost_microusd: "579",
-      source_cost_covered_requests: 2,
-    });
-  });
-
-  it("sorts multiple agents and dimensions deterministically for every input order", () => {
-    const events = [
-      event({
-        agent: "codex",
-        model: "gpt-5",
-        service_tier: "priority",
-      }),
-      event({
-        agent: "claude_code",
-        billing_channel: "anthropic_direct",
-        model: "claude-sonnet-4",
-      }),
-      event({
-        agent: "codex",
-        model: "gpt-5",
-        service_tier: "default",
-      }),
-    ];
-
-    const forward = aggregateUsageEvents(events);
-    const reversed = aggregateUsageEvents([...events].reverse());
-
-    expect(reversed).toEqual(forward);
-    expect(forward.map((row) => `${row.agent}:${row.model}:${row.service_tier}`)).toEqual([
-      "claude_code:claude-sonnet-4:default",
-      "codex:gpt-5:default",
-      "codex:gpt-5:priority",
-    ]);
-  });
-
-  it("rejects invalid instants, token subsets, and safe-integer overflow", () => {
-    expect(() => aggregateUsageEvents([event({ occurred_at: "2026-08-02" })])).toThrow();
-    expect(() =>
-      aggregateUsageEvents([event({ input_tokens: 1, cache_read_tokens: 2 })]),
-    ).toThrow();
-    expect(() =>
-      aggregateUsageEvents([
-        event({ input_tokens: Number.MAX_SAFE_INTEGER }),
-        event({ occurred_at: "2026-08-02T00:02:00Z", input_tokens: 1 }),
-      ]),
-    ).toThrow(/safe-integer/);
-  });
-});
-
 describe("pricing catalog", () => {
-  it("accepts an empty catalog", () => {
-    expect(validatePricingCatalog(catalog([]))).toMatchObject({ valid: true });
-  });
-
   it("allows an explicit wildcard fallback and selects the more specific entry", () => {
     const priceCatalog = catalog([
       priceEntry({
@@ -411,96 +309,6 @@ describe("Usage cost", () => {
     expect(() => foldPreparedUsageCosts(prepared, [3])).toThrow(RangeError);
   });
 
-  it("values an unnamed-channel grok-4.5 row at the xAI official rate", () => {
-    const priceCatalog = catalog([
-      priceEntry({
-        entry_id: "xai_grok_45",
-        billing_channel: "xai_direct",
-        model: "grok-4.5",
-        rates: rates({
-          uncached_input_per_million: "2",
-          cache_read_per_million: "0.3",
-          cache_write_5m_per_million: null,
-          cache_write_1h_per_million: null,
-          cache_write_inferred_per_million: "2",
-          output_per_million: "6",
-        }),
-      }),
-    ]);
-    const cost = calculateUsageCost(
-      [
-        usageRow({
-          agent: "grok",
-          billing_channel: "unknown",
-          channel_source: "unknown",
-          model: "grok-4.5",
-          input_tokens: 1_000_000,
-          output_tokens: 1_000_000,
-        }),
-      ],
-      priceCatalog,
-    );
-    expect(cost).toMatchObject({
-      status: "complete",
-      amount_microusd: "8000000",
-    });
-    expect(cost.assumptions).toContain("vendor_official_price");
-    expect(cost.assumptions).not.toContain("agent_default_channel");
-    expect(
-      resolvePricingEntry(
-        priceCatalog,
-        usageRow({
-          agent: "grok",
-          billing_channel: "unknown",
-          channel_source: "unknown",
-          model: "grok-4.5",
-        }),
-      ),
-    ).toMatchObject({
-      status: "priced",
-      entry: { entry_id: "xai_grok_45" },
-      assumptions: ["vendor_official_price"],
-    });
-  });
-
-  it("leaves an unnamed-channel row unpriced when two vendor-direct channels match", () => {
-    const priceCatalog = catalog([
-      priceEntry({
-        entry_id: "openai_shared",
-        billing_channel: "openai_direct",
-        model: "shared-model",
-      }),
-      priceEntry({
-        entry_id: "anthropic_shared",
-        billing_channel: "anthropic_direct",
-        model: "shared-model",
-      }),
-    ]);
-    expect(
-      resolvePricingEntry(
-        priceCatalog,
-        usageRow({
-          billing_channel: "unknown",
-          channel_source: "unknown",
-          model: "shared-model",
-        }),
-      ),
-    ).toEqual({ status: "unpriced", reason: "unknown_channel" });
-  });
-
-  it("reports unknown_model when an unnamed-channel row matches no vendor-direct entry", () => {
-    expect(
-      resolvePricingEntry(
-        catalog([priceEntry()]),
-        usageRow({
-          billing_channel: "unknown",
-          channel_source: "unknown",
-          model: "not-cataloged",
-        }),
-      ),
-    ).toEqual({ status: "unpriced", reason: "unknown_model" });
-  });
-
   it("surfaces reviewed wildcard and agent-default assumptions", () => {
     const priceCatalog = catalog([
       priceEntry({
@@ -524,31 +332,6 @@ describe("Usage cost", () => {
     });
   });
 });
-
-function event(overrides: Partial<NormalizedUsageEvent> = {}): NormalizedUsageEvent {
-  return {
-    occurred_at: "2026-08-02T00:01:00Z",
-    agent: "codex",
-    model: "gpt-5",
-    billing_channel: "openai_direct",
-    channel_source: "agent_default",
-    input_tokens: 0,
-    cache_read_tokens: 0,
-    cache_write_5m_tokens: 0,
-    cache_write_1h_tokens: 0,
-    cache_write_inferred_tokens: 0,
-    output_tokens: 0,
-    reasoning_tokens: 0,
-    requests: 1,
-    context_bucket: "le_128k",
-    service_tier: "default",
-    speed: "standard",
-    inference_geo: "global",
-    billable_tools: {},
-    source_cost_covered_requests: 0,
-    ...overrides,
-  };
-}
 
 function usageRow(overrides: Partial<DatedUsageRow> = {}): DatedUsageRow {
   return {

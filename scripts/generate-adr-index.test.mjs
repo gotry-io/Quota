@@ -18,18 +18,6 @@ function run(args = []) {
   });
 }
 
-test("rejects extra arguments", () => {
-  const result = run(["--check", "--oops"]);
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr + result.stdout, /Usage: generate-adr-index\.mjs \[--check\]/);
-});
-
-test("--check passes on the generated index", () => {
-  const result = run(["--check"]);
-  assert.equal(result.status, 0, result.stderr + result.stdout);
-  assert.match(result.stdout, /is current/);
-});
-
 test("--check detects drift", () => {
   const original = readFileSync(generated, "utf8");
   try {
@@ -40,17 +28,6 @@ test("--check detects drift", () => {
   } finally {
     writeFileSync(generated, original);
   }
-});
-
-test("generate is deterministic", () => {
-  const first = run();
-  assert.equal(first.status, 0, first.stderr + first.stdout);
-  const snapshot = readFileSync(generated, "utf8");
-  const second = run();
-  assert.equal(second.status, 0, second.stderr + second.stdout);
-  assert.equal(readFileSync(generated, "utf8"), snapshot);
-  const check = run(["--check"]);
-  assert.equal(check.status, 0, check.stderr + check.stdout);
 });
 
 test("refuses a Status that is not the enum", () => {

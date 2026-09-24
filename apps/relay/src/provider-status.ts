@@ -28,10 +28,6 @@ const STATUSPAGE_V2_ENDPOINTS = (catalog.providers as CatalogProvider[]).flatMap
   return [{ id: id.data, url: page.url }];
 });
 
-export function statuspageV2Endpoints(): ReadonlyArray<{ id: ProviderId; url: string }> {
-  return STATUSPAGE_V2_ENDPOINTS;
-}
-
 export interface ProviderStatusPorts {
   fetch: typeof fetch;
   cache: LastReadingCache;

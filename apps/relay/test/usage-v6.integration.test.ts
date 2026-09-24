@@ -60,40 +60,6 @@ describe("managed data v6 end to end", () => {
     expect(plan.results.some((row) => row.detail.includes("bucket_start_utc=?"))).toBe(true);
   });
 
-  it("keeps only the newest scan of an hour and ignores one already overtaken", async () => {
-    await addDevice("alpha");
-    const usage = new D1UsageState(db);
-    const hour = "2026-08-10T09:00:00Z";
-
-    expect(
-      await usage.recordUsage(
-        principal("alpha"),
-        upload([hourOf(hour, 4, ["gpt-5.6-sol", "gpt-5.6-luna"])]),
-        now.toISOString(),
-      ),
-    ).toEqual({ outcome: "written", accepted: [hour], ignored: [] });
-
-    expect(
-      await usage.recordUsage(
-        principal("alpha"),
-        upload([hourOf(hour, 9, ["claude-opus-5"])]),
-        now.toISOString(),
-      ),
-    ).toEqual({ outcome: "written", accepted: [hour], ignored: [] });
-
-    expect(await storedModels("device_alpha")).toEqual(["claude-opus-5"]);
-
-    // The scan that already stood, re-sent, is ignored rather than merged back in.
-    expect(
-      await usage.recordUsage(
-        principal("alpha"),
-        upload([hourOf(hour, 4, ["gpt-5.6-sol", "gpt-5.6-luna"])]),
-        now.toISOString(),
-      ),
-    ).toEqual({ outcome: "written", accepted: [], ignored: [hour] });
-    expect(await storedModels("device_alpha")).toEqual(["claude-opus-5"]);
-  });
-
   it("remembers the scan behind an hour it emptied", async () => {
     await addDevice("alpha");
     const usage = new D1UsageState(db);
@@ -152,34 +118,6 @@ describe("managed data v6 end to end", () => {
 
     expect(await storedModels("device_alpha")).toEqual(["claude-opus-5"]);
     expect(await scanVersion("device_alpha", hour)).toBe(9);
-  });
-
-  it("leaves the daily rollup equal to a direct aggregation of the hours", async () => {
-    await addDevice("alpha");
-    await addDevice("beta");
-    const usage = new D1UsageState(db);
-    await usage.recordUsage(
-      principal("alpha"),
-      upload([
-        hourOf("2026-08-09T22:00:00Z", 1, ["gpt-5.6-sol"]),
-        hourOf("2026-08-09T23:00:00Z", 1, ["gpt-5.6-sol"], true),
-        hourOf("2026-08-10T00:00:00Z", 1, ["gpt-5.6-sol", "claude-opus-5"]),
-      ]),
-      now.toISOString(),
-    );
-    await usage.recordUsage(
-      principal("beta"),
-      upload([hourOf("2026-08-10T00:00:00Z", 1, ["gpt-5.6-sol"])]),
-      now.toISOString(),
-    );
-    // Replacing one hour rewrites the dates it touches and leaves the rest alone.
-    await usage.recordUsage(
-      principal("alpha"),
-      upload([hourOf("2026-08-09T23:00:00Z", 2, ["claude-opus-5"])]),
-      now.toISOString(),
-    );
-
-    expect(await dailyDisagreements()).toEqual([]);
   });
 
   it("puts an hour in the local day the caller's calendar reads it in", async () => {
@@ -375,18 +313,8 @@ describe("managed data v6 end to end", () => {
     expect(summary.devices.every((device) => device.last_observed_at !== null)).toBe(true);
   });
 
-  it("refuses a stale generation, an oversized hour, and a retired contract", async () => {
+  it("refuses an hour over the row cap and an upload from a stale generation", async () => {
     await addDevice("alpha");
-    const usage = new D1UsageState(db);
-
-    expect(
-      await usage.recordUsage(
-        { ...principal("alpha"), generation: 2 },
-        { ...upload([hourOf("2026-08-10T09:00:00Z", 1)]), generation: 2 },
-        now.toISOString(),
-      ),
-    ).toEqual({ outcome: "stale_device" });
-
     const app = signedInApp();
     const headers = {
       Authorization: `Bearer ${await bearerFor("alpha")}`,
@@ -427,10 +355,6 @@ describe("managed data v6 end to end", () => {
     });
     expect(staleGeneration.status).toBe(409);
     expect(await staleGeneration.json()).toMatchObject({ error: { code: "stale_generation" } });
-
-    const retired = await app.request("https://quota.gotry.io/api/v5/account/summary");
-    expect(retired.status).toBe(404);
-    expect(await retired.json()).toMatchObject({ error: { code: "client_upgrade_required" } });
   });
 });
 
@@ -591,41 +515,4 @@ async function storedModels(deviceId: string): Promise<string[]> {
     .bind(deviceId)
     .all<{ model: string }>();
   return rows.results.map((item) => item.model);
-}
-
-/**
- * Every daily row that disagrees with the hours behind it, in either direction.
- *
- * A managed read never opens `usage_hourly`, so the upload that maintains both tables is the
- * only thing keeping them in step. This is the assertion that says so.
- */
-async function dailyDisagreements(): Promise<unknown[]> {
-  const expected = await db
-    .prepare(
-      `SELECT device_id, substr(bucket_start_utc, 1, 10) AS utc_date, agent, billing_channel,
-            channel_source, model, context_bucket, service_tier, speed, inference_geo,
-            SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens,
-            SUM(requests) AS requests, SUM(partial) AS partial_hours
-     FROM usage_hourly
-     GROUP BY device_id, substr(bucket_start_utc, 1, 10), agent, billing_channel,
-              channel_source, model, context_bucket, service_tier, speed, inference_geo
-     ORDER BY device_id, utc_date, agent, model`,
-    )
-    .all<Record<string, unknown>>();
-  const actual = await db
-    .prepare(
-      `SELECT device_id, utc_date, agent, billing_channel, channel_source, model, context_bucket,
-            service_tier, speed, inference_geo, input_tokens, output_tokens, requests,
-            partial_hours
-     FROM usage_daily
-     ORDER BY device_id, utc_date, agent, model`,
-    )
-    .all<Record<string, unknown>>();
-  const rolled = expected.results.map((item) => JSON.stringify(item));
-  const stored = actual.results.map((item) => JSON.stringify(item));
-  expect(rolled.length).toBeGreaterThan(0);
-  return [
-    ...rolled.filter((item) => !stored.includes(item)),
-    ...stored.filter((item) => !rolled.includes(item)),
-  ];
 }

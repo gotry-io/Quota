@@ -6,53 +6,25 @@ import {
   subscriptionSelectorPreimage,
 } from "../src/lib/subscription-selector.ts";
 
-test("hashes a known global subscription to twelve lowercase hex characters", async () => {
-  assert.equal(
-    await subscriptionSelector({
-      provider: "codex",
-      fingerprint: "account_test",
-      fingerprint_scope: "global",
-    }),
-    "ccfc96629357",
-  );
-});
-
-test("treats a missing source id the same as an empty one", async () => {
-  const omitted = await subscriptionSelector({
+// The same selectors are pinned in the Rust service and the Swift clients: a changed preimage
+// orphans every threshold stored under the old key.
+test("hashes global and source-scoped subscriptions to the selectors Rust and Swift produce", async () => {
+  const global = {
     provider: "codex",
     fingerprint: "account_test",
     fingerprint_scope: "global",
-  });
-  const empty = await subscriptionSelector({
-    provider: "codex",
-    fingerprint: "account_test",
-    fingerprint_scope: "global",
-    source_id: "",
-  });
-  assert.equal(omitted, empty);
-});
-
-test("includes a source-scoped identity in the preimage", async () => {
-  assert.equal(
-    subscriptionSelectorPreimage({
-      provider: "grok",
-      fingerprint: "fp-source",
-      fingerprint_scope: "source",
-      source_id: "local",
-    }),
-    "grok|fp-source|source|local",
-  );
-  assert.equal(
-    await subscriptionSelector({
-      provider: "grok",
-      fingerprint: "fp-source",
-      fingerprint_scope: "source",
-      source_id: "local",
-    }),
-    "bf475adb085d",
-  );
-});
-
-test("hashes a summary key as the same preimage", async () => {
+  } as const;
+  assert.equal(await subscriptionSelector(global), "ccfc96629357");
+  assert.equal(await subscriptionSelector({ ...global, source_id: "" }), "ccfc96629357");
+  // The account store hashes the summary's own `key`, which must be this preimage.
   assert.equal(await hashSelectorPreimage("codex|account_test|global|"), "ccfc96629357");
+
+  const scoped = {
+    provider: "grok",
+    fingerprint: "fp-source",
+    fingerprint_scope: "source",
+    source_id: "local",
+  } as const;
+  assert.equal(subscriptionSelectorPreimage(scoped), "grok|fp-source|source|local");
+  assert.equal(await subscriptionSelector(scoped), "bf475adb085d");
 });

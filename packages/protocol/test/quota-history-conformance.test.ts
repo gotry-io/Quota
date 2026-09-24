@@ -48,12 +48,6 @@ const conformance = conformanceJson as unknown as {
  * `packages/service`'s and `packages/apple-shared`'s test against this same file.
  */
 describe("quota history conformance", () => {
-  it("states enough cases to pin the fold", () => {
-    expect(conformance.cases.length).toBeGreaterThanOrEqual(8);
-    expect(conformance.decimation_seconds).toBe(300);
-    expect(conformance.retention_days).toBe(30);
-  });
-
   it("names a real quota window, a placeable clock, and stored samples in every case", () => {
     for (const testCase of conformance.cases) {
       expect(Rfc3339InstantSchema.safeParse(testCase.now).success, testCase.name).toBe(true);
@@ -110,6 +104,9 @@ describe("quota history conformance", () => {
   });
 
   it("covers a fold with no history, a curve with no projection, and several windows today", () => {
+    expect(conformance.cases.length).toBeGreaterThanOrEqual(8);
+    expect(conformance.decimation_seconds).toBe(300);
+    expect(conformance.retention_days).toBe(30);
     expect(conformance.cases.some((testCase) => testCase.expected === null)).toBe(true);
     expect(
       conformance.cases.some(
@@ -121,22 +118,5 @@ describe("quota history conformance", () => {
         (testCase) => testCase.expected !== null && testCase.expected.windows_today.length >= 3,
       ),
     ).toBe(true);
-  });
-
-  it("keeps two subscriptions of one provider apart at equal times", () => {
-    const testCase = conformance.cases.find((entry) =>
-      entry.name.includes("two subscriptions of one provider"),
-    );
-    expect(testCase).toBeDefined();
-    expect(testCase?.identity?.provider).toBe("codex");
-    expect(testCase?.peer?.identity.provider).toBe("codex");
-    expect(testCase?.identity?.fingerprint).not.toBe(testCase?.peer?.identity.fingerprint);
-    const sample = testCase?.samples[0];
-    const peer = testCase?.peer?.samples[0];
-    expect(sample?.observed_at).toBe(peer?.observed_at);
-    expect(sample?.resets_at).toBe(peer?.resets_at);
-    expect(sample?.used_percent).not.toBe(peer?.used_percent);
-    expect(testCase?.expected?.points[0]?.used_percent).toBe(sample?.used_percent);
-    expect(testCase?.peer?.expected?.points[0]?.used_percent).toBe(peer?.used_percent);
   });
 });

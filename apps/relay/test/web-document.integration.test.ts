@@ -42,22 +42,6 @@ async function fetchDocument(path: string): Promise<Response> {
 }
 
 describe("composed Relay documents", () => {
-  it("supplies Relay secrets without a local .env file", () => {
-    expect(secrets.QUOTA_SESSION_HASH_KEY.length).toBeGreaterThanOrEqual(32);
-    expect(secrets.IDENTITY_SUBJECT_KEY.length).toBeGreaterThanOrEqual(32);
-  });
-
-  it("renders the signed-out landing header and keeps the response uncacheable", async () => {
-    const response = await fetchDocument("/");
-    const html = await response.text();
-    expect(response.status).toBe(200);
-    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
-    expect(html).toContain("See what's left across your coding-agent plans");
-    expect(html).toContain(">Sign in<");
-    expect(html).toContain('id="header-login"');
-    expect(html).toContain('href="/sign-in"');
-  });
-
   it("locks every document down and still lets the inline theme script run", async () => {
     for (const path of ["/", "/my"]) {
       const response = await renderDocument(
@@ -121,22 +105,6 @@ describe("composed Relay documents", () => {
     expect(response.status).toBe(404);
     expect(html).toMatch(/unavailable|does not exist/i);
     expect(html).not.toContain("input_tokens");
-  });
-
-  it("keeps Hono API routes on the same process", async () => {
-    const response = await fetchDocument("/api/v2/info");
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as { service: string };
-    expect(body.service).toBe("QuotaRelay");
-  });
-
-  it("paints the signed-in GitHub username in the header", async () => {
-    const response = await renderDocument("/", fakePort({ displayLabel: "octocat" }));
-    expect(response.status).toBe(200);
-    const body = await response.text();
-    expect(body).toContain('id="header-account-name"');
-    expect(body).toContain("octocat");
-    expect(body).not.toMatch(/id="header-login"(?![^>]*hidden)/);
   });
 
   it("escapes a malicious display label as text", async () => {

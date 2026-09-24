@@ -1,4 +1,4 @@
-import { MAXIMUM_USAGE_PERIOD_LEAVES, MODEL_CATALOG } from "@gotry-io/quota-protocol";
+import { MODEL_CATALOG } from "@gotry-io/quota-protocol";
 import type { StoredUsageDailyRow } from "@gotry-io/relay-core";
 import { describe, expect, it } from "vitest";
 import { PRICING_CATALOG } from "../src/pricing-catalog.ts";
@@ -112,27 +112,16 @@ describe("Account Usage periods", () => {
     expect(usage.all.totals.messages).toBe(1);
   });
 
-  it("marks a period partial when any hour behind it was scanned incompletely", () => {
+  it("marks a period and an activity day partial when any hour behind it was scanned incompletely", () => {
     const partialToday = { ...usageRow(null, 0), date: today, partial_hours: 2 };
     const usage = accountUsage([usageRow(null, 1), partialToday]);
     expect(usage.today.partial).toBe(true);
     expect(usage.all.partial).toBe(true);
 
     expect(accountUsage([usageRow(null, 1)]).all.partial).toBe(false);
-  });
 
-  it("keeps every request when the tree exceeds its leaf bound", () => {
-    const rows = Array.from({ length: MAXIMUM_USAGE_PERIOD_LEAVES + 40 }, (_, index) => ({
-      ...usageRow(null, index, true),
-      date: today,
-    }));
-    const usage = accountUsage(rows);
-    const found = leaves(usage.all);
-
-    expect(found.length).toBeLessThanOrEqual(MAXIMUM_USAGE_PERIOD_LEAVES);
-    expect(found.some((leaf) => leaf.model === "other")).toBe(true);
-    expect(found.reduce((total, leaf) => total + leaf.messages, 0)).toBe(rows.length);
-    expect(usage.all.totals.messages).toBe(rows.length);
+    const days = buildActivityDays({ rows: [partialToday], catalog: PRICING_CATALOG });
+    expect(days[0]?.partial).toBe(true);
   });
 
   it("normalizes a leaf's model without changing what it totals or costs", () => {
@@ -210,41 +199,9 @@ describe("Account Usage activity", () => {
     expect(days[1]?.totals.messages).toBe(1);
     expect(days.every((day) => day.partial === false)).toBe(true);
   });
-
-  it("reports a day as partial when an hour behind it came up short", () => {
-    const days = buildActivityDays({
-      rows: [{ ...usageRow(null, 0), date: "2026-08-10", partial_hours: 1 }],
-      catalog: PRICING_CATALOG,
-    });
-    expect(days[0]?.partial).toBe(true);
-  });
-
-  it("attaches a period's agent tree when a catalog is supplied, without changing the day's totals", () => {
-    const rows = [
-      { ...usageRow(null, 0), date: "2026-08-10" },
-      { ...usageRow(null, 1), date: "2026-08-10" },
-    ];
-    const without = buildActivityDays({ rows, catalog: PRICING_CATALOG });
-    const withAgents = buildActivityDays({
-      rows,
-      catalog: PRICING_CATALOG,
-      modelCatalog: MODEL_CATALOG,
-    });
-
-    expect(Object.hasOwn(without[0] ?? {}, "agents")).toBe(false);
-    expect(withAgents).toHaveLength(1);
-    expect(withAgents[0]?.totals).toEqual(without[0]?.totals);
-    expect(withAgents[0]?.cost).toEqual(without[0]?.cost);
-    expect(withAgents[0]?.partial).toBe(without[0]?.partial);
-    const tree = withAgents[0]?.agents ?? [];
-    expect(tree.length).toBeGreaterThan(0);
-    expect(leaves({ agents: tree }).reduce((total, leaf) => total + leaf.messages, 0)).toBe(
-      withAgents[0]?.totals.messages,
-    );
-  });
 });
 
-function usageRow(_: unknown, index = 0, uniqueModel = false): StoredUsageDailyRow {
+function usageRow(_: unknown, index = 0): StoredUsageDailyRow {
   const codex = index % 2 === 0;
   return {
     device_id: "device-production-sized",
@@ -252,7 +209,7 @@ function usageRow(_: unknown, index = 0, uniqueModel = false): StoredUsageDailyR
     agent: codex ? "codex" : "claude_code",
     billing_channel: codex ? "openai_direct" : "anthropic_direct",
     channel_source: "agent_default",
-    model: uniqueModel ? `model-${index}` : codex ? "gpt-5.6-sol" : "claude-opus-4-6",
+    model: codex ? "gpt-5.6-sol" : "claude-opus-4-6",
     context_bucket: "le_128k",
     service_tier: "unknown",
     speed: "unknown",

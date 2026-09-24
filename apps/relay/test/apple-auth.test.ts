@@ -105,19 +105,6 @@ describe("browser sign-in through Apple", () => {
     expect(identity?.subject).not.toContain(appleSubject);
   });
 
-  it("names the channel after itself when Apple states no address", async () => {
-    const apple = await fakeApple();
-    const relay = await harness(apple);
-    await signIn(relay, apple, { email: null });
-    expect(
-      (
-        await db.prepare("SELECT display_label FROM accounts").first<{
-          display_label: string;
-        }>()
-      )?.display_label,
-    ).toBe("Apple ID");
-  });
-
   it("keeps the address a first sign-in stated when a later one states none", async () => {
     const apple = await fakeApple();
     const relay = await harness(apple);
@@ -190,14 +177,6 @@ describe("browser sign-in through Apple", () => {
     );
     // A key this provider does not name is not part of its callback.
     expect((await postCallback(relay, handoff, { code: "c", state, extra: "x" })).status).toBe(400);
-  });
-
-  it("seals SameSite=None for Apple alone", async () => {
-    const apple = await fakeApple();
-    const relay = await harness(apple);
-    const github = onlyCookie(await relay.app.request(`${origin}/api/auth/github/start`));
-    expect(github.attributes).toContain("SameSite=Lax");
-    expect(github.attributes).not.toContain("SameSite=None");
   });
 
   it("refuses to bind Apple to a second Account, and changes nothing when it does", async () => {

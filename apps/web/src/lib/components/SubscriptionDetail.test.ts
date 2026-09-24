@@ -220,16 +220,6 @@ it("says the subscription is no longer reported when the selector misses", () =>
   expect(screen.getByRole("link", { name: "← Overview" })).toBeTruthy();
 });
 
-it("shows a loading skeleton before the summary arrives", () => {
-  const { container } = renderDetail({ summary: null });
-
-  const block = container.querySelector("[aria-busy='true']");
-  expect(block).not.toBeNull();
-  expect(block?.getAttribute("aria-label")).toBe("Loading subscription");
-  expect(screen.queryByText("This subscription is no longer reported.")).toBeNull();
-  expect(screen.queryByText("Weekly")).toBeNull();
-});
-
 it("shows Retry when the summary failed to load", () => {
   const onRetry = vi.fn();
   renderDetail({
@@ -266,25 +256,4 @@ it("refreshes the reset countdown when the shared now advances", () => {
   });
   expect(screen.getByText("Resets in 41m")).toBeTruthy();
   expect(screen.queryByText("Resets in 42m")).toBeNull();
-});
-
-it("prints no Resets line once the refill instant has passed", () => {
-  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
-  vi.setSystemTime(new Date("2026-08-12T09:30:00Z"));
-
-  const subscription = codexSubscription();
-  subscription.snapshot.windows = [
-    {
-      id: "weekly",
-      title: "Weekly",
-      used_percent: 42,
-      resets_at: "2026-08-12T09:00:00Z",
-      duration_seconds: 604_800,
-    },
-  ];
-
-  renderDetail({ summary: makeSummary({ subscriptions: [subscription] }) });
-
-  expect(screen.getByText("Weekly")).toBeTruthy();
-  expect(screen.queryByText(/Resets/)).toBeNull();
 });

@@ -14,11 +14,9 @@ it("marks the current account route", () => {
   expect(
     screen.getByRole("link", { name: "Overview" }).getAttribute("data-sveltekit-preload-data"),
   ).toBe("hover");
-});
 
-it("marks Overview only on /my", () => {
+  cleanup();
   render(AccountNav, { currentPath: "/my" });
-
   expect(screen.getByRole("link", { name: "Overview" }).getAttribute("aria-current")).toBe("page");
   expect(screen.getByRole("link", { name: "Usage" }).getAttribute("aria-current")).toBeNull();
 });

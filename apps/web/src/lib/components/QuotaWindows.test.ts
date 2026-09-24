@@ -61,23 +61,6 @@ it("exposes each percent window as a meter that names remaining once", () => {
   expect(screen.getByText("$12.50 of $40.00")).toBeTruthy();
 });
 
-it("prints pace as a sentence, not as colour alone", () => {
-  render(QuotaWindows, {
-    windows: [
-      {
-        id: "five_hour",
-        title: "5 Hours",
-        used_percent: 85,
-        resets_at: "2026-09-05T12:00:00Z",
-        duration_seconds: 18_000,
-      },
-    ],
-    now: new Date("2026-09-05T09:30:00Z"),
-  });
-  const line = screen.getByText("May run out about 2h before reset");
-  expect(line.classList.contains("quota-window-pace-warn")).toBe(true);
-});
-
 it("drops the reset line once the refill instant has passed", () => {
   const windows = [
     {

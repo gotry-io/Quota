@@ -21,8 +21,6 @@ export type UsagePeriodSelection =
   | { segment: "all" }
   | { segment: "custom"; from: string; to: string };
 
-export type UsageSummaryPeriodKey = "today" | "last_7_days" | "last_30_days" | "all";
-
 export interface UsageDateRange {
   from: string;
   to: string;
@@ -126,24 +124,6 @@ export function nextUsagePeriod(selection: UsagePeriodSelection): UsagePeriodSel
     return null;
   }
   return { ...selection, offset: selection.offset - 1 };
-}
-
-/** The four periods the Account summary still carries. Usage reads only `all` from there. */
-export function usagePeriodSummaryKey(
-  selection: UsagePeriodSelection,
-): UsageSummaryPeriodKey | null {
-  switch (selection.segment) {
-    case "day":
-      return selection.offset === 0 ? "today" : null;
-    case "7d":
-      return "last_7_days";
-    case "30d":
-      return "last_30_days";
-    case "all":
-      return "all";
-    default:
-      return null;
-  }
 }
 
 /** Whether the Usage page takes this selection from the summary instead of the period read. */

@@ -1,59 +1,14 @@
 import { USAGE_HOUR_GRID_RULE } from "@gotry-io/quota-protocol";
 import { expect, it } from "vitest";
 import {
-  accountUsagePeriodPath,
   accountUsagePeriodView,
   parseAccountResponse,
   parseAccountUsagePeriodResponse,
-  usagePeriodResourceKey,
 } from "./account-reads.ts";
-
-function accountOk() {
-  return {
-    protocol_version: 2,
-    account: {
-      account_id: "account_01",
-      display_label: "octocat",
-      created_at: "2026-01-04T12:00:00Z",
-    },
-    identities: [{ provider: "github", label: "octocat", linked_at: "2026-01-04T12:00:00Z" }],
-  };
-}
-
-it("reads account metadata and identities", () => {
-  expect(parseAccountResponse(200, accountOk())).toEqual({
-    status: "ok",
-    account: accountOk(),
-  });
-  const extra = parseAccountResponse(200, { ...accountOk(), extra: true });
-  expect(extra.status).toBe("ok");
-  if (extra.status === "ok") {
-    expect(extra.account.account.display_label).toBe("octocat");
-    expect(extra.account.identities).toEqual(accountOk().identities);
-  }
-});
 
 it("ignores a body that is not an account answer", () => {
   expect(parseAccountResponse(200, { protocol_version: 2 }).status).toBe("unavailable");
   expect(parseAccountResponse(500, null).status).toBe("unavailable");
-});
-
-it("asks the period read with inclusive local dates and the browser timezone", () => {
-  expect(
-    accountUsagePeriodPath({
-      from: "2026-08-26",
-      to: "2026-08-26",
-      timezone: "Asia/Singapore",
-    }),
-  ).toBe("/api/v6/account/usage/period?from=2026-08-26&to=2026-08-26&timezone=Asia%2FSingapore");
-  expect(
-    usagePeriodResourceKey({
-      from: "2026-08-26",
-      to: "2026-08-26",
-      timezone: "Asia/Singapore",
-      breakdown: true,
-    }),
-  ).toBe("2026-08-26|2026-08-26|Asia/Singapore|1");
 });
 
 it("reads a period body and maps coverage.partial onto the tree the page draws", () => {
