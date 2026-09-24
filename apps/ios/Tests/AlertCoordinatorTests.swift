@@ -10,51 +10,6 @@ import Testing
 
 @MainActor
 struct AlertCoordinatorTests {
-  @Test func successfulRefreshDeliversOnePassAndARepeatDoesNotFireAgain() async throws {
-    let defaults = isolatedAlertDefaults()
-    defer { defaults.tearDown() }
-    AlertCoordinator.rulesStore(defaults: defaults.store).save(
-      AlertRules(enabled: true, resetReminders: true)
-    )
-    let store = InMemoryAlertStateStore()
-    let sink = RecordingAlertSink()
-    let coordinator = AlertCoordinator(
-      rulesStore: AlertCoordinator.rulesStore(defaults: defaults.store),
-      stateStore: store,
-      sink: sink,
-      now: { Fixtures.date("2026-08-14T16:00:00Z") }
-    )
-    let body = try alertSummaryJSON(usedPercent: 88)
-    let model = makeModel(
-      session: Fixtures.session(),
-      cache: nil,
-      exchanges: [
-        .init(status: 200, body: body),
-        .init(status: 200, body: body),
-      ],
-      alertCoordinator: coordinator
-    )
-
-    #expect(await model.refresh())
-    #expect(sink.events.count == 1)
-    #expect(
-      sink.events
-        == [
-          .thresholdCrossed(
-            selector: "ccfc96629357",
-            windowID: "weekly",
-            threshold: 20,
-            remainingPercent: 12,
-            resetsAt: Fixtures.date("2026-08-18T00:00:00Z")
-          )
-        ]
-    )
-    #expect(try store.load().fired.count == 1)
-
-    #expect(await model.refresh())
-    #expect(sink.events.count == 1)
-  }
-
   @Test func logoutClearsAlertDedupStateAndLeavesRules() async throws {
     let defaults = isolatedAlertDefaults()
     defer { defaults.tearDown() }

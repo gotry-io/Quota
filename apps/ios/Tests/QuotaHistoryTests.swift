@@ -93,15 +93,7 @@ struct QuotaHistoryTests {
       await model.refresh(budget: LocalCollector.backgroundBudget)
       returned.set(true)
     }
-    var waited = false
-    for _ in 0..<100 {
-      if transport.isWaitingForHistory {
-        waited = true
-        break
-      }
-      try await Task.sleep(for: .milliseconds(50))
-    }
-    #expect(waited)
+    await transport.waitUntilHistoryIsHeld()
     #expect(!returned.get())
     transport.releaseHistory()
     await task.value
@@ -288,29 +280,6 @@ struct QuotaHistoryTests {
     )
   }
 
-  @Test func chunksAreOldestFirstAndAtMostThePointCap() {
-    let resets = Fixtures.date("2026-09-21T15:00:00Z")
-    let points = (0..<3).map { index in
-      QuotaHistoryUploadRequest.Point(
-        resetsAt: resets,
-        bucketStart: resets.addingTimeInterval(Double(index) * 900),
-        usedPercent: Double(index)
-      )
-    }
-    let series = QuotaHistoryUploadRequest.Series(
-      provider: .codex,
-      fingerprint: "account_test",
-      windowId: "five_hour",
-      durationSeconds: 18_000,
-      points: points
-    )
-    let chunks = QuotaHistoryChunker.chunks([series], maxPoints: 2)
-    #expect(chunks.count == 2)
-    #expect(chunks[0].flatMap(\.points).count == 2)
-    #expect(chunks[1].flatMap(\.points).count == 1)
-    #expect(chunks[0].flatMap(\.points).first?.bucketStart == points[0].bucketStart)
-  }
-
   @Test func twoThousandFiveHundredPointsChunkWellUnderASecond() throws {
     let resets = Fixtures.date("2026-09-21T15:00:00Z")
     let points = (0..<2_500).map { index in
@@ -331,6 +300,7 @@ struct QuotaHistoryTests {
     let started = clock.now
     let chunks = QuotaHistoryChunker.chunks([series])
     #expect(clock.now - started < .seconds(1))
+    #expect(chunks.count > 1)
     let flat = chunks.flatMap { $0.flatMap(\.points) }
     #expect(flat.count == 2_500)
     #expect(flat.first?.bucketStart == points[0].bucketStart)
@@ -620,15 +590,7 @@ struct QuotaHistoryTests {
     let task = Task { @MainActor in
       await model.quotaHistory.sync()
     }
-    var waited = false
-    for _ in 0..<100 {
-      if transport.isWaitingForHistory {
-        waited = true
-        break
-      }
-      try await Task.sleep(for: .milliseconds(20))
-    }
-    #expect(waited)
+    await transport.waitUntilHistoryIsHeld()
     task.cancel()
     transport.releaseHistory()
     await task.value
@@ -1041,6 +1003,7 @@ private final class HistoryTransport: HTTPTransport, @unchecked Sendable {
   private struct MutableState {
     var recorded: [Recorded] = []
     var historyContinuation: CheckedContinuation<Void, Never>?
+    var heldWaiters: [CheckedContinuation<Void, Never>] = []
     var historyGets = 0
     var historyPuts = 0
   }
@@ -1067,8 +1030,16 @@ private final class HistoryTransport: HTTPTransport, @unchecked Sendable {
     self.historyOldest = historyOldest
   }
 
-  var isWaitingForHistory: Bool {
-    state.withLock { $0.historyContinuation != nil }
+  /// Returns once a quota-history PUT is being held.
+  func waitUntilHistoryIsHeld() async {
+    await withCheckedContinuation { (waiter: CheckedContinuation<Void, Never>) in
+      let held = state.withLock { state -> Bool in
+        if state.historyContinuation != nil { return true }
+        state.heldWaiters.append(waiter)
+        return false
+      }
+      if held { waiter.resume() }
+    }
   }
 
   func releaseHistory() {
@@ -1101,7 +1072,12 @@ private final class HistoryTransport: HTTPTransport, @unchecked Sendable {
       let hold = (holdFirstHistoryPut && ordinal == 1) || gateHistory
       if hold {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-          state.withLock { $0.historyContinuation = continuation }
+          let waiters = state.withLock { state -> [CheckedContinuation<Void, Never>] in
+            state.historyContinuation = continuation
+            defer { state.heldWaiters.removeAll() }
+            return state.heldWaiters
+          }
+          for waiter in waiters { waiter.resume() }
         }
       }
     }

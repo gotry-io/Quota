@@ -16,44 +16,52 @@ struct MenuBarLabelLayoutTests {
   private let tolerance: CGFloat = 0.25
 
   @Test
-  func theMarkAndTheNumberShareACenter() throws {
-    let ink = try #require(itemInk(of: iconAndPercent))
-    let mark = try #require(ink.mark)
-    let text = try #require(ink.text)
+  func theNumberCentersOnTheMarkAndTheItemInEveryStyle() throws {
+    for label in [iconAndPercent, todayCost, todayTokens] {
+      let ink = try #require(itemInk(of: label))
+      let mark = try #require(ink.mark)
+      let text = try #require(ink.text)
+      #expect(abs(text.midY - mark.midY) <= tolerance)
+      #expect(abs(mark.midY - ink.height / 2) <= tolerance)
+    }
 
-    #expect(abs(text.midY - mark.midY) <= tolerance)
-    #expect(abs(mark.midY - ink.height / 2) <= tolerance)
+    // With no mark beside it, the number centers on the item.
+    let alone = try #require(itemInk(of: percentOnly))
+    let text = try #require(alone.text)
+    #expect(alone.mark == nil)
+    #expect(abs(text.midY - alone.height / 2) <= tolerance)
   }
 
   @Test
-  func theMarkIsTheSizeOfAMenuBarGlyphAndNotTheWholeItem() throws {
-    let ink = try #require(itemInk(of: iconAndPercent))
-    let mark = try #require(ink.mark)
-
-    #expect(mark.height >= 14)
-    #expect(mark.height <= 15.5)
-    #expect(mark.height < ink.height)
-  }
-
-  @Test
-  func everyMarkLandsAtTheSameSize() throws {
-    let provider = try #require(itemInk(of: iconAndPercent)).mark
-    let quota = try #require(itemInk(of: iconOnly)).mark
+  func everyMarkIsOneMenuBarGlyphSize() throws {
     let claudeLabel = MenuBarLabelModel(
       icon: .provider(.claude),
       text: "27%",
       accessibilityLabel: "QuotaBar, Claude Code 27% remaining"
     )
-    let claude = try #require(itemInk(of: claudeLabel)).mark
-
-    let heights = [provider, quota, claude].compactMap { $0?.height }
-    #expect(heights.count == 3)
+    var heights: [CGFloat] = []
+    for label in [iconAndPercent, iconOnly, claudeLabel] {
+      let ink = try #require(itemInk(of: label))
+      let mark = try #require(ink.mark)
+      // A menu-bar glyph, not a mark scaled to the whole item.
+      #expect(mark.height >= 14)
+      #expect(mark.height <= 15.5)
+      #expect(mark.height < ink.height)
+      heights.append(mark.height)
+    }
     #expect((heights.max() ?? 0) - (heights.min() ?? 0) <= tolerance)
   }
 
   @Test
   func theItemIsTheStandardStatusItemHeightInEveryStyle() throws {
-    for label in [iconAndPercent, percentOnly, iconOnly, todayCost, todayTokens] {
+    let packed = MenuBarLabelModel(
+      cells: [
+        MenuBarLabelCell(icon: .provider(.codex), text: "68%"),
+        MenuBarLabelCell(icon: .provider(.claude), text: "27%"),
+      ],
+      accessibilityLabel: "QuotaBar, Codex 68% remaining, Claude Code 27% remaining"
+    )
+    for label in [iconAndPercent, percentOnly, iconOnly, todayCost, todayTokens, packed] {
       let image = MenuBarItemImage.make(label)
       #expect(image.size.height == MenuBarItemImage.height)
       #expect(image.isTemplate)
@@ -61,15 +69,6 @@ struct MenuBarLabelLayoutTests {
     // 18pt in the 22pt bar macOS ships, and never smaller than a glyph needs.
     #expect(MenuBarItemImage.height >= 16)
     #expect(MenuBarItemImage.height <= 20)
-  }
-
-  @Test
-  func theNumberIsCenteredWithNoMarkBesideIt() throws {
-    let ink = try #require(itemInk(of: percentOnly))
-    let text = try #require(ink.text)
-
-    #expect(ink.mark == nil)
-    #expect(abs(text.midY - ink.height / 2) <= tolerance)
   }
 
   /// DESIGN.md says the stacked size has a ceiling and that 9pt sits inside it with room to
@@ -195,22 +194,6 @@ struct MenuBarLabelLayoutTests {
     )
   }
 
-  @Test
-  func packedReadingsShareOneTemplateImageTallerThanNeitherCellAlone() {
-    let packed = MenuBarLabelModel(
-      cells: [
-        MenuBarLabelCell(icon: .provider(.codex), text: "68%"),
-        MenuBarLabelCell(icon: .provider(.claude), text: "27%"),
-      ],
-      accessibilityLabel: "QuotaBar, Codex 68% remaining, Claude Code 27% remaining"
-    )
-    let one = MenuBarItemImage.make(iconAndPercent)
-    let two = MenuBarItemImage.make(packed)
-    #expect(two.isTemplate)
-    #expect(two.size.height == one.size.height)
-    #expect(two.size.width > one.size.width + MenuBarItemImage.cellSpacing)
-  }
-
   /// One raster per display scale: a 1x screen must get glyphs drawn at 1x, not a
   /// downsampled retina bitmap.
   @Test
@@ -221,17 +204,6 @@ struct MenuBarLabelLayoutTests {
       .map { CGFloat($0.pixelsWide) / $0.size.width }
       .sorted()
     #expect(scales == [1, 2])
-  }
-
-  @Test
-  func todayCostAndTokensShareACenterWithTheMarkOnOneLine() throws {
-    for label in [todayCost, todayTokens] {
-      let ink = try #require(itemInk(of: label))
-      let mark = try #require(ink.mark)
-      let text = try #require(ink.text)
-      #expect(abs(text.midY - mark.midY) <= tolerance)
-      #expect(abs(mark.midY - ink.height / 2) <= tolerance)
-    }
   }
 
   private var iconAndPercent: MenuBarLabelModel {

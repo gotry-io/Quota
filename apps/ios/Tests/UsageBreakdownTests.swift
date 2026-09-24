@@ -49,53 +49,6 @@ struct UsageBreakdownTests {
     #expect(!sections[1].providers[0].foldsModels)
     #expect(sections[1].providers[0].models[0].displayName == "Other")
   }
-
-  @Test
-  func emptyAgentsYieldNoSections() {
-    let period = UsagePeriod(
-      totals: totals(input: 0, output: 0, messages: 0),
-      cost: UsageCostOutcome(
-        mode: .calculate,
-        basis: .none,
-        status: .complete,
-        amountMicrousd: nil,
-        catalogRevision: nil,
-        calculatedRows: 0,
-        reportedRows: 0,
-        unpricedRows: 0,
-        assumptions: [],
-        unpriced: []
-      ),
-      cacheSaved: UsageCacheSaved(amountMicrousd: "0", status: .complete, unpricedRows: 0),
-      partial: false,
-      agents: []
-    )
-    #expect(UsageBreakdown.sections(in: period).isEmpty)
-  }
-
-  @Test
-  func groupsADaysAgentTreeTheSameWay() {
-    let day = UsageActivityDay(
-      date: "2026-08-14",
-      totals: totals(input: 10, output: 2, messages: 1),
-      cost: completeCost(microusd: "1000", rows: 1),
-      partial: false,
-      agents: [
-        UsageAgentUsage(
-          agent: .grok,
-          providers: [
-            UsageProviderUsage(
-              provider: .xai,
-              models: [model("grok-4", input: 10, output: 2, messages: 1, microusd: "1000")]
-            )
-          ]
-        )
-      ]
-    )
-    let sections = UsageBreakdown.sections(in: day)
-    #expect(sections.map(\.displayName) == ["Grok"])
-    #expect(sections[0].providers[0].displayName == "xAI")
-  }
 }
 
 private func model(

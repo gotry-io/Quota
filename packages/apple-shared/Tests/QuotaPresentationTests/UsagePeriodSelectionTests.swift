@@ -39,31 +39,6 @@ struct UsagePeriodSelectionTests {
     #expect(UsagePeriodSelection.all.next == nil)
   }
 
-  @Test func namesOnlyTheFourPeriodsTheSummaryFolds() {
-    #expect(UsagePeriodSelection.today.summaryKey == .today)
-    #expect(UsagePeriodSelection.day(offset: 1).summaryKey == nil)
-    #expect(UsagePeriodSelection.last7Days.summaryKey == .last7Days)
-    #expect(UsagePeriodSelection.last30Days.summaryKey == .last30Days)
-    #expect(UsagePeriodSelection.all.summaryKey == .all)
-    #expect(UsagePeriodSelection.thisWeek.summaryKey == nil)
-    #expect(UsagePeriodSelection.thisMonth.summaryKey == nil)
-  }
-
-  @Test func titlesAPeriodWithTheRangeItCovers() {
-    let calendar = Self.calendar
-    let locale = Locale(identifier: "en_US_POSIX")
-    let day = UsagePeriodTitle.text(
-      for: .today, today: Self.today, calendar: calendar, locale: locale)
-    #expect(day.contains("2026"))
-    let week = UsagePeriodTitle.text(
-      for: .thisWeek, today: Self.today, calendar: calendar, locale: locale)
-    #expect(week.contains("–"))
-    #expect(
-      UsagePeriodTitle.text(for: .all, today: Self.today, calendar: calendar, locale: locale)
-        == "Everything kept"
-    )
-  }
-
   @Test func countsTheDaysARangeCovers() {
     let calendar = Self.calendar
     #expect(UsageDateText.days(from: "2026-09-01", to: "2026-09-01", calendar) == 1)

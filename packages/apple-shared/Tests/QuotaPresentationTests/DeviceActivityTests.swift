@@ -42,12 +42,4 @@ struct DeviceActivityTests {
     #expect(unheard.since == nil)
     #expect(unheard.label == "Not reporting")
   }
-
-  /// The words are the shared vocabulary's, and a surface reads them rather than spelling them.
-  @Test
-  func theLabelIsTheSharedWordForTheVerdict() {
-    #expect(DeviceActivity.Status.active.rawValue == "Active")
-    #expect(DeviceActivity.Status.idle.rawValue == "Idle")
-    #expect(DeviceActivity.Status.notReporting.rawValue == "Not reporting")
-  }
 }

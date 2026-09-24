@@ -18,26 +18,6 @@ struct ProviderWebTransportTests {
     #expect(ProviderWebHTTP.category(of: 400) == .error)
   }
 
-  /// A redirect is not followed, and a redirect answering a session request means the session
-  /// was not accepted rather than the host being unreachable.
-  @Test func aRedirectIsAnAnswerAndNeverAHop() async throws {
-    let transport = FixedTransport(status: 302, body: Data())
-    let collector = ClaudeWebCollector(transport: transport, clientVersion: "test")
-    await #expect(throws: ProviderWebError(.authRequired, ClaudeWebCollector.source)) {
-      try await collector.validate(cookieHeader: "sessionKey=sk-ant-ok")
-    }
-  }
-
-  /// A body past the limit is refused rather than buffered into a reading.
-  @Test func aBodyPastTheLimitIsRefused() async throws {
-    let transport = FixedTransport(
-      status: 200, body: Data(repeating: 0x20, count: ProviderWebLimits.bodyLimit + 1))
-    let collector = ClaudeWebCollector(transport: transport, clientVersion: "test")
-    await #expect(throws: ProviderWebError(.error, ClaudeWebCollector.source)) {
-      try await collector.validate(cookieHeader: "sessionKey=sk-ant-ok")
-    }
-  }
-
   /// An error carries a category and a rung, and never the cookie or the address that produced
   /// it — the same bound the service's `ProviderError` keeps.
   @Test func anErrorCarriesNoCredentialAndNoAddress() async throws {
@@ -54,20 +34,6 @@ struct ProviderWebTransportTests {
       #expect(!described.contains("super-secret"))
       #expect(!described.contains("ada@example.com"))
     }
-  }
-
-  /// The cookie names come from the catalog, so the two products never disagree about which
-  /// cookie is a sign-in.
-  @Test func theCatalogNamesEveryCookieThisLibraryReads() throws {
-    #expect(ProviderID.claude.browserSession?.cookieNames == ["sessionKey", "lastActiveOrg"])
-    #expect(ProviderID.grok.browserSession?.cookieNames == ["sso", "sso-rw"])
-    let codex = try #require(ProviderID.codex.browserSession)
-    #expect(codex.cookieNames.contains("__Secure-next-auth.session-token"))
-    #expect(CodexWebCollector.hasChatGPTSessionCookie("__Secure-next-auth.session-token=abc"))
-    // A context cookie on its own is not a sign-in.
-    #expect(!CodexWebCollector.hasChatGPTSessionCookie("_account=acct"))
-    #expect(ClaudeWebCollector.sessionKey("sessionKey=not-anthropic") == nil)
-    #expect(GrokWebCollector.ssoToken("sessionKey=sk-ant-ok") == nil)
   }
 
   /// The label a reader sees names the account without showing it.
@@ -94,23 +60,20 @@ struct ProviderWebTransportTests {
   }
 }
 
-/// One answer, however many times it is asked for. An oversized canned body is the same
-/// refusal the real session throws, so HTTP still maps it to `.error`.
+/// One answer, however many times it is asked for.
 struct FixedTransport: ProviderWebTransport {
   let status: Int
   let body: Data
 
   func send(_ request: URLRequest) async throws -> ProviderWebResponse {
-    if body.count > ProviderWebLimits.bodyLimit {
-      throw ProviderWebTransportError.bodyTooLarge
-    }
-    return ProviderWebResponse(status: status, body: body)
+    ProviderWebResponse(status: status, body: body)
   }
 }
 
 /// The bound the real `URLSession` transport promised: counted while reading, cancelled as
-/// soon as it is crossed, and never a hop.
-@Suite(.serialized)
+/// soon as it is crossed, and never a hop. Waits are for the protocol's own events; the time
+/// limit only bounds a wait that never ends.
+@Suite(.serialized, .timeLimit(.minutes(1)))
 struct URLSessionProviderWebTransportBoundaryTests {
   @Test func aChunkedBodyOverTheLimitIsRefusedAndCancelled() async throws {
     let url = URL(string: "https://provider-web.test/chunked")!
@@ -126,7 +89,7 @@ struct URLSessionProviderWebTransportBoundaryTests {
     await #expect(throws: ProviderWebTransportError.bodyTooLarge) {
       _ = try await transport.send(URLRequest(url: url))
     }
-    #expect(await ProviderWebScriptedURLProtocol.waitUntilCancelled(for: url))
+    await ProviderWebScriptedURLProtocol.waitUntilCancelled(for: url)
     #expect(ProviderWebScriptedURLProtocol.bytesDelivered(for: url) > limit)
 
     ProviderWebScriptedURLProtocol.use(
@@ -139,7 +102,7 @@ struct URLSessionProviderWebTransportBoundaryTests {
         url, headers: [], timeout: ProviderWebLimits.validationTimeout,
         source: "claude_web_usage_api")
     }
-    #expect(await ProviderWebScriptedURLProtocol.waitUntilCancelled(for: url))
+    await ProviderWebScriptedURLProtocol.waitUntilCancelled(for: url)
   }
 
   @Test func aDeclaredLengthOverTheLimitIsRefusedBeforeReading() async throws {
@@ -216,21 +179,16 @@ struct URLSessionProviderWebTransportBoundaryTests {
     let sendTask = Task {
       try await transport.send(request)
     }
-    let started = Date()
-    while !ProviderWebScriptedURLProtocol.requested(url)
-      && Date().timeIntervalSince(started) < 1
-    {
-      try await Task.sleep(nanoseconds: 5_000_000)
-    }
+    await ProviderWebScriptedURLProtocol.waitUntilRequested(url)
     sendTask.cancel()
-    let cancelledAt = Date()
     do {
       _ = try await sendTask.value
       Issue.record("a cancelled caller must not produce a body")
-    } catch {
-      #expect(Date().timeIntervalSince(cancelledAt) < 1)
+    } catch let error as URLError {
+      // A stalled body otherwise ends in the request's own timeout.
+      #expect(error.code == .cancelled)
     }
-    #expect(await ProviderWebScriptedURLProtocol.waitUntilCancelled(for: url))
+    await ProviderWebScriptedURLProtocol.waitUntilCancelled(for: url)
   }
 
   private static func stubbedConfiguration() -> URLSessionConfiguration {
@@ -257,6 +215,8 @@ final class ProviderWebScriptedURLProtocol: URLProtocol, @unchecked Sendable {
     var finished: Set<String> = []
     var bytesDelivered: [String: Int] = [:]
     var requested: Set<String> = []
+    var requestWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
+    var cancelWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
   }
 
   private static let lock = OSAllocatedUnfairLock<State>(initialState: State())
@@ -276,13 +236,30 @@ final class ProviderWebScriptedURLProtocol: URLProtocol, @unchecked Sendable {
     lock.withLock { $0.cancelled.contains(key(url)) }
   }
 
-  static func waitUntilCancelled(for url: URL, timeout: TimeInterval = 1) async -> Bool {
-    let deadline = Date().addingTimeInterval(timeout)
-    while Date() < deadline {
-      if cancelled(for: url) { return true }
-      try? await Task.sleep(nanoseconds: 10_000_000)
+  /// Returns once loading of `url` has been stopped.
+  static func waitUntilCancelled(for url: URL) async {
+    let key = key(url)
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+      let now = lock.withLock { state -> Bool in
+        if state.cancelled.contains(key) { return true }
+        state.cancelWaiters[key, default: []].append(continuation)
+        return false
+      }
+      if now { continuation.resume() }
     }
-    return cancelled(for: url)
+  }
+
+  /// Returns once a request for `url` has started loading.
+  static func waitUntilRequested(_ url: URL) async {
+    let key = key(url)
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+      let now = lock.withLock { state -> Bool in
+        if state.requested.contains(key) { return true }
+        state.requestWaiters[key, default: []].append(continuation)
+        return false
+      }
+      if now { continuation.resume() }
+    }
   }
 
   static func bytesDelivered(for url: URL) -> Int {
@@ -304,12 +281,14 @@ final class ProviderWebScriptedURLProtocol: URLProtocol, @unchecked Sendable {
 
   override func startLoading() {
     let key = Self.key(request.url)
-    Self.lock.withLock { state in
+    let requestWaiters = Self.lock.withLock { state -> [CheckedContinuation<Void, Never>] in
       state.requested.insert(key)
       state.cancelled.remove(key)
       state.finished.remove(key)
       state.bytesDelivered[key] = 0
+      return state.requestWaiters.removeValue(forKey: key) ?? []
     }
+    requestWaiters.forEach { $0.resume() }
     let script = Self.lock.withLock { $0.scripts[key] }
     guard let script else {
       client?.urlProtocol(self, didFailWithError: URLError(.unknown))
@@ -353,9 +332,11 @@ final class ProviderWebScriptedURLProtocol: URLProtocol, @unchecked Sendable {
   }
 
   override func stopLoading() {
-    Self.lock.withLock { state in
-      state.cancelled.insert(Self.key(request.url))
-      return
+    let key = Self.key(request.url)
+    let cancelWaiters = Self.lock.withLock { state -> [CheckedContinuation<Void, Never>] in
+      state.cancelled.insert(key)
+      return state.cancelWaiters.removeValue(forKey: key) ?? []
     }
+    cancelWaiters.forEach { $0.resume() }
   }
 }

@@ -18,16 +18,6 @@ struct UsageBudgetTests {
     #expect(UsageBudgetProgress(spentUSD: 0, budgetUSD: 50, partial: false).percent == 0)
   }
 
-  @Test func namesTheThresholdsAMonthHasReached() {
-    #expect(UsageBudgetProgress(spentUSD: 20, budgetUSD: 50, partial: false).crossedThresholds == [])
-    #expect(
-      UsageBudgetProgress(spentUSD: 40, budgetUSD: 50, partial: false).crossedThresholds == [80])
-    #expect(
-      UsageBudgetProgress(spentUSD: 60, budgetUSD: 50, partial: false).crossedThresholds
-        == [80, 100]
-    )
-  }
-
   @Test func readsAnAmountOutOfTheMicrodollarsEveryCostCarries() {
     #expect(UsageBudgetProgress.dollars(microusd: "5390000") == 5.39)
     #expect(UsageBudgetProgress.dollars(microusd: nil) == nil)

@@ -52,16 +52,6 @@ public enum RemainingQuotaFormat: Sendable {
     return !isBalanceOnly(remainingValue: remainingValue, hasLimit: hasLimit)
   }
 
-  public static func showsPercentMeter(remainingValue: Double?, hasLimit: Bool) -> Bool {
-    showsPercentMeter(
-      remainingPercent: 0,
-      remainingValue: remainingValue,
-      limitValue: hasLimit ? 0 : nil,
-      hasLimit: hasLimit,
-      unit: nil
-    )
-  }
-
   public static func percent(_ value: Double) -> String {
     let remaining = min(max(value, 0), 100)
     if abs(remaining.rounded() - remaining) < 0.05 {

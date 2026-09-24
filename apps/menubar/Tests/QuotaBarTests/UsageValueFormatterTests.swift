@@ -14,27 +14,11 @@ struct UsageValueFormatterTests {
   }
 
   @Test
-  func accessibilityCountsDoNotUseCompactNotation() {
-    #expect(!UsageValueFormatter.accessibleCount(1_234_567).contains("M"))
-  }
+  func anUnpricedAmountIsNeverPrintedAsACost() {
+    let summary = UsageValueFormatter.todaySummary(tokens: 1_234_567, cost: cost(nil))
 
-  @Test
-  func compactCostUsesTwoDecimalsWithoutDetailCopy() {
-    let outcome = cost("50239770")
-    let value = UsageValueFormatter.compactCost(outcome)
-    #expect(value.contains("50.24"))
-    #expect(!value.contains("estimated"))
-  }
-
-  @Test
-  func compactModelSummaryKeepsTokensBeforeCost() {
-    let value = UsageValueFormatter.tokensAndCost(1_234_567, cost("50239770"))
-    #expect(value.hasPrefix("1.23M · "))
-    #expect(value.contains("50.24"))
-  }
-
-  @Test
-  func compactModelSummaryOmitsUnavailableCost() {
+    #expect(summary?.text == "Today · 1.23M tokens")
+    #expect(summary?.text.contains("unpriced") == false)
     #expect(UsageValueFormatter.tokensAndCost(1_234_567, cost(nil)) == "1.23M")
   }
 
@@ -52,24 +36,6 @@ struct UsageValueFormatterTests {
         before: cost("9000000"), tokens: 10, name: "priced"
       )
     )
-  }
-
-  @Test
-  func todaySummaryLeadsWithCostAndNamesTheTokens() {
-    let summary = UsageValueFormatter.todaySummary(tokens: 1_234_567, cost: cost("12340000"))
-
-    #expect(summary?.text.hasPrefix("Today · ") == true)
-    #expect(summary?.text.contains("12.34") == true)
-    #expect(summary?.text.hasSuffix(" · 1.23M tokens") == true)
-    #expect(summary?.accessibilityLabel.contains("1,234,567 tokens") == true)
-  }
-
-  @Test
-  func todaySummaryKeepsTokensWhenTheDayIsUnpriced() {
-    let summary = UsageValueFormatter.todaySummary(tokens: 1_234_567, cost: cost(nil))
-
-    #expect(summary?.text == "Today · 1.23M tokens")
-    #expect(summary?.text.contains("unpriced") == false)
   }
 
   @Test

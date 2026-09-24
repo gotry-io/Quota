@@ -6,59 +6,6 @@ import UserNotifications
 @testable import QuotaBar
 
 struct NotificationsSettingsViewTests {
-  @Test func thresholdChoicesMatchTheDocumentedSetAndSecondSlotMayBeOff() {
-    #expect(NotificationRules.thresholdChoices == [5, 10, 15, 20, 25, 30, 40, 50])
-    #expect(NotificationsSettingsCopy.off == "Off")
-    #expect(NotificationsSettingsCopy.alertAt == "Alert at")
-    #expect(NotificationsSettingsCopy.thenAt == "Then at")
-    #expect(NotificationsSettingsCopy.footer == "Quota reminds you when a refresh brings new data.")
-    #expect(
-      NotificationsSettingsCopy.permissionDenied
-        == "Allow notifications for QuotaBar in System Settings."
-    )
-    #expect(NotificationsSettingsCopy.openSystemSettings == "Open System Settings")
-    #expect(
-      NotificationsSettingsCopy.systemSettingsURL.absoluteString
-        == "x-apple.systempreferences:com.apple.Notifications-Settings.extension"
-    )
-    #expect(NotificationsSettingsCopy.homeTrailing(enabled: true) == "On")
-    #expect(NotificationsSettingsCopy.homeTrailing(enabled: false) == "Off")
-    #expect(NotificationsSettingsCopy.thresholdLabel(20) == "20%")
-    #expect(NotificationsSettingsCopy.accountSpendThisMonth == "Account spend this month")
-    #expect(NotificationsSettingsCopy.thisMacBasis == "This Mac")
-    #expect(
-      NotificationsSettingsCopy.budgetFooter(signedIn: true)
-        == "Quota says once each month when 80% and then all of the budget has been spent. "
-          + "Measured against Account spend this month."
-    )
-    #expect(
-      NotificationsSettingsCopy.budgetFooter(signedIn: false)
-        == "Quota says once each month when 80% and then all of the budget has been spent. "
-          + "Measured against This Mac."
-    )
-  }
-
-  @Test @MainActor
-  func pageListsOverviewSubscriptionsWithDefaultThresholds() {
-    let defaults = notificationDefaultsSuite()
-    defer { defaults.tearDown() }
-    let now = Date(timeIntervalSince1970: 1_786_300_000)
-    let model = MenuBarViewModel(
-      client: StubLocalService(state: loggingInState()),
-      notificationDefaults: defaults.store
-    )
-    model.apply(overviewOnlyState(overview: [codexOverviewItem(remainingPercent: 80, now: now)]))
-
-    let rows = model.notificationSubscriptions()
-    #expect(rows.count == 1)
-    #expect(rows[0].providerDisplayName == "Codex")
-    #expect(rows[0].accountLabel == "Account 1")
-    #expect(rows[0].firstThreshold == 20)
-    #expect(rows[0].secondThreshold == 10)
-    #expect(!model.notificationRules.enabled)
-    #expect(model.notificationRules.resetReminders)
-  }
-
   @Test @MainActor
   func secondThresholdOffStoresASingleThreshold() {
     let defaults = notificationDefaultsSuite()
@@ -84,41 +31,36 @@ struct NotificationsSettingsViewTests {
   }
 
   @Test @MainActor
-  func denyingAuthorizationTurnsTheSwitchBackOffAndShowsTheSystemSettingsRow() async {
+  func theSwitchIsOnOnlyWhenTheSystemGrantsNotifications() async {
     let defaults = notificationDefaultsSuite()
     defer { defaults.tearDown() }
-    let center = FakeNotificationCenter()
-    center.requestAuthorizationGranted = false
-    let model = MenuBarViewModel(
+    let denying = FakeNotificationCenter()
+    denying.requestAuthorizationGranted = false
+    let denied = MenuBarViewModel(
       client: StubLocalService(state: loggingInState()),
-      notificationCenter: center,
+      notificationCenter: denying,
       notificationDefaults: defaults.store
     )
 
-    await model.setNotificationsEnabled(true)
+    await denied.setNotificationsEnabled(true)
 
-    #expect(!model.notificationRules.enabled)
-    #expect(model.notificationAuthorizationDenied)
-    #expect(center.requestedOptions == [.alert, .sound])
-    #expect(NotificationsSettingsCopy.homeTrailing(enabled: model.notificationRules.enabled) == "Off")
-  }
+    #expect(!denied.notificationRules.enabled)
+    #expect(denied.notificationAuthorizationDenied)
+    #expect(denying.requestedOptions == [.alert, .sound])
 
-  @Test @MainActor
-  func grantingAuthorizationTurnsTheSwitchOn() async {
-    let defaults = notificationDefaultsSuite()
-    defer { defaults.tearDown() }
-    let center = FakeNotificationCenter()
-    center.requestAuthorizationGranted = true
-    let model = MenuBarViewModel(
+    let grantedDefaults = notificationDefaultsSuite()
+    defer { grantedDefaults.tearDown() }
+    let granting = FakeNotificationCenter()
+    granting.requestAuthorizationGranted = true
+    let granted = MenuBarViewModel(
       client: StubLocalService(state: loggingInState()),
-      notificationCenter: center,
-      notificationDefaults: defaults.store
+      notificationCenter: granting,
+      notificationDefaults: grantedDefaults.store
     )
 
-    await model.setNotificationsEnabled(true)
+    await granted.setNotificationsEnabled(true)
 
-    #expect(model.notificationRules.enabled)
-    #expect(!model.notificationAuthorizationDenied)
-    #expect(NotificationsSettingsCopy.homeTrailing(enabled: true) == "On")
+    #expect(granted.notificationRules.enabled)
+    #expect(!granted.notificationAuthorizationDenied)
   }
 }

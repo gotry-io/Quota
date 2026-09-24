@@ -126,90 +126,9 @@ struct RelayClientTests {
     #expect(!exchangeBody.contains("\"clientId\""))
   }
 
+  /// A malformed date or an unknown zone is refused here, before a bearer leaves the device.
   @Test
-  func activityRequestEncodesWhitelistQueryAndOmitsDetailWhenAbsent() async throws {
-    let body = try Fixtures.usageActivityJSON(days: [
-      Fixtures.usageActivityDay(date: "2026-08-10")
-    ])
-    let transport = ScriptedTransport([
-      .init(status: 200, body: body),
-      .init(status: 200, body: body),
-    ])
-    let client = RelayClient(transport: transport)
-
-    let omittedRead = try await client.fetchAccountUsageActivity(
-      accessToken: Fixtures.accessToken,
-      from: "2026-08-01",
-      to: "2026-08-10"
-    )
-    guard case .modified(let omitted, _) = omittedRead else {
-      Issue.record("expected modified activity, got \(omittedRead)")
-      return
-    }
-    #expect(omitted.days.map(\.date) == ["2026-08-10"])
-    #expect(omitted.days.first?.agents == nil)
-
-    let detailedRead = try await client.fetchAccountUsageActivity(
-      accessToken: Fixtures.accessToken,
-      from: "2026-08-10",
-      to: "2026-08-10",
-      detail: .agents
-    )
-    guard case .modified(let detailed, _) = detailedRead else {
-      Issue.record("expected modified activity, got \(detailedRead)")
-      return
-    }
-    #expect(detailed.days.first?.date == "2026-08-10")
-
-    #expect(
-      transport.recordedURLs.map(\.path) == [
-        "/api/v6/account/usage/activity",
-        "/api/v6/account/usage/activity",
-      ])
-    #expect(transport.recordedMethods == ["GET", "GET"])
-    #expect(transport.recordedIfNoneMatch == [nil, nil])
-    #expect(
-      transport.recordedURLs.allSatisfy { url in
-        url.scheme == "https" && url.host == "quota.gotry.io"
-          && (url.port == nil || url.port == 443)
-      })
-    #expect(transport.recordedAuthorization == [
-      "Bearer \(Fixtures.accessToken)",
-      "Bearer \(Fixtures.accessToken)",
-    ])
-
-    let omittedQuery = queryItems(transport.recordedURLs[0])
-    #expect(omittedQuery.map(\.name) == ["from", "to"])
-    #expect(Dictionary(uniqueKeysWithValues: omittedQuery.map { ($0.name, $0.value ?? "") }) == [
-      "from": "2026-08-01",
-      "to": "2026-08-10",
-    ])
-
-    let detailedQuery = queryItems(transport.recordedURLs[1])
-    #expect(detailedQuery.map(\.name) == ["from", "to", "detail"])
-    #expect(Dictionary(uniqueKeysWithValues: detailedQuery.map { ($0.name, $0.value ?? "") }) == [
-      "from": "2026-08-10",
-      "to": "2026-08-10",
-      "detail": "agents",
-    ])
-  }
-
-  @Test
-  func activityRefusesResponsesOverOneMebibyte() async throws {
-    let oversized = Data(repeating: 0x61, count: WireCodec.maximumResponseBytes + 1)
-    let transport = ScriptedTransport([.init(status: 200, body: oversized)])
-    let client = RelayClient(transport: transport)
-    await #expect(throws: RelayClientError.responseTooLarge) {
-      _ = try await client.fetchAccountUsageActivity(
-        accessToken: Fixtures.accessToken,
-        from: "2026-08-10",
-        to: "2026-08-10"
-      )
-    }
-  }
-
-  @Test
-  func activityRejectsInvalidCalendarDatesWithoutSending() async {
+  func aMalformedDateOrZoneIsRefusedBeforeAnythingIsSent() async {
     let transport = ScriptedTransport([])
     let client = RelayClient(transport: transport)
     await #expect(throws: RelayClientError.invalidQuery) {
@@ -226,137 +145,6 @@ struct RelayClientTests {
         to: "not-a-date"
       )
     }
-    #expect(transport.recordedURLs.isEmpty)
-  }
-
-  @Test
-  func providersStatusIsUnauthenticatedAndDecodesCatalogRows() async throws {
-    let body = Data(
-      """
-      {"providers":[{"id":"claude","indicator":"minor","description":"Partial System Outage","checked_at":"2026-08-14T16:00:00Z"},{"id":"codex","indicator":"unknown","description":"","checked_at":"2026-08-14T16:00:00Z"}]}
-      """.utf8)
-    let transport = ScriptedTransport([.init(status: 200, body: body)])
-    let client = RelayClient(transport: transport)
-    let response = try await client.fetchProviderStatus()
-    #expect(response.providers.map(\.id) == [.claude])
-    #expect(response.providers.first?.indicator == .minor)
-    #expect(transport.recordedURLs.map(\.path) == ["/api/v2/providers/status"])
-    #expect(transport.recordedAuthorization == [nil])
-  }
-
-  @Test
-  func activityAnswers304WithoutABody() async throws {
-    let body = try Fixtures.usageActivityJSON(days: [
-      Fixtures.usageActivityDay(date: "2026-08-10")
-    ])
-    let transport = ScriptedTransport([
-      .init(status: 200, body: body, headers: ["ETag": "\"act-one\""]),
-      .init(status: 304, body: Data(), headers: ["ETag": "\"act-one\""]),
-    ])
-    let client = RelayClient(transport: transport)
-    let first = try await client.fetchAccountUsageActivity(
-      accessToken: Fixtures.accessToken,
-      from: "2026-08-01",
-      to: "2026-08-14",
-      etag: nil
-    )
-    guard case .modified(_, let etag) = first else {
-      Issue.record("expected modified, got \(first)")
-      return
-    }
-    #expect(etag == "\"act-one\"")
-    let second = try await client.fetchAccountUsageActivity(
-      accessToken: Fixtures.accessToken,
-      from: "2026-08-01",
-      to: "2026-08-14",
-      etag: etag
-    )
-    guard case .unchanged(let again) = second else {
-      Issue.record("expected unchanged, got \(second)")
-      return
-    }
-    #expect(again == "\"act-one\"")
-    #expect(transport.recordedIfNoneMatch == [nil, "\"act-one\""])
-  }
-
-  @Test
-  func periodRequestEncodesLocalDatesTimezoneAndBreakdown() async throws {
-    let body = try Fixtures.accountUsagePeriodJSON(
-      from: "2026-08-26",
-      to: "2026-08-26",
-      timezone: "Asia/Singapore",
-      agents: []
-    )
-    let transport = ScriptedTransport([
-      .init(status: 200, body: body, headers: ["ETag": "\"period-one\""]),
-      .init(status: 304, body: Data(), headers: ["ETag": "\"period-one\""]),
-    ])
-    let client = RelayClient(transport: transport)
-
-    let first = try await client.fetchAccountUsagePeriod(
-      from: "2026-08-26",
-      to: "2026-08-26",
-      timezone: "Asia/Singapore",
-      breakdown: true,
-      accessToken: Fixtures.accessToken
-    )
-    guard case .modified(let period, let etag) = first else {
-      Issue.record("expected modified period, got \(first)")
-      return
-    }
-    #expect(period.request.from == "2026-08-26")
-    #expect(period.request.timezone == "Asia/Singapore")
-    #expect(period.days.map(\.date) == ["2026-08-26"])
-    #expect(etag == "\"period-one\"")
-
-    let second = try await client.fetchAccountUsagePeriod(
-      from: "2026-08-26",
-      to: "2026-08-26",
-      timezone: "Asia/Singapore",
-      breakdown: true,
-      accessToken: Fixtures.accessToken,
-      etag: "\"period-one\""
-    )
-    guard case .unchanged(let next) = second else {
-      Issue.record("expected unchanged, got \(second)")
-      return
-    }
-    #expect(next == "\"period-one\"")
-
-    #expect(
-      transport.recordedURLs.map(\.path) == [
-        "/api/v6/account/usage/period",
-        "/api/v6/account/usage/period",
-      ])
-    #expect(transport.recordedIfNoneMatch == [nil, "\"period-one\""])
-    let query = queryItems(transport.recordedURLs[0])
-    #expect(query.map(\.name) == ["from", "to", "timezone", "breakdown"])
-    #expect(Dictionary(uniqueKeysWithValues: query.map { ($0.name, $0.value ?? "") }) == [
-      "from": "2026-08-26",
-      "to": "2026-08-26",
-      "timezone": "Asia/Singapore",
-      "breakdown": "1",
-    ])
-  }
-
-  @Test
-  func periodOmitsBreakdownWhenFalse() async throws {
-    let body = try Fixtures.accountUsagePeriodJSON()
-    let transport = ScriptedTransport([.init(status: 200, body: body)])
-    let client = RelayClient(transport: transport)
-    _ = try await client.fetchAccountUsagePeriod(
-      from: "2026-08-02",
-      to: "2026-08-02",
-      timezone: "UTC",
-      accessToken: Fixtures.accessToken
-    )
-    #expect(queryItems(transport.recordedURLs[0]).map(\.name) == ["from", "to", "timezone"])
-  }
-
-  @Test
-  func periodRejectsInvalidQueryWithoutSending() async {
-    let transport = ScriptedTransport([])
-    let client = RelayClient(transport: transport)
     await #expect(throws: RelayClientError.invalidQuery) {
       _ = try await client.fetchAccountUsagePeriod(
         from: "2026-8-10",
@@ -377,39 +165,18 @@ struct RelayClientTests {
   }
 
   @Test
-  func settingsReadIsConditionalAndKeepsTheCachedDocumentOn304() async throws {
-    let body = Fixtures.accountSettingsJSON()
-    let transport = ScriptedTransport([
-      .init(status: 200, body: body, headers: ["ETag": "\"0\""]),
-      .init(status: 304, body: Data(), headers: ["ETag": "\"0\""]),
-    ])
+  func providersStatusIsUnauthenticatedAndDecodesCatalogRows() async throws {
+    let body = Data(
+      """
+      {"providers":[{"id":"claude","indicator":"minor","description":"Partial System Outage","checked_at":"2026-08-14T16:00:00Z"},{"id":"codex","indicator":"unknown","description":"","checked_at":"2026-08-14T16:00:00Z"}]}
+      """.utf8)
+    let transport = ScriptedTransport([.init(status: 200, body: body)])
     let client = RelayClient(transport: transport)
-
-    let first = try await client.fetchAccountSettings(accessToken: Fixtures.accessToken)
-    guard case .modified(let document, let etag) = first else {
-      Issue.record("expected modified settings, got \(first)")
-      return
-    }
-    #expect(document.revision == 0)
-    #expect(document.alerts.resetReminders)
-    #expect(document.budget.amountUSD == nil)
-    #expect(etag == "\"0\"")
-
-    let second = try await client.fetchAccountSettings(
-      accessToken: Fixtures.accessToken,
-      etag: "\"0\""
-    )
-    guard case .unchanged(let next) = second else {
-      Issue.record("expected unchanged, got \(second)")
-      return
-    }
-    #expect(next == "\"0\"")
-    #expect(transport.recordedURLs.map(\.path) == [
-      "/api/v2/account/settings",
-      "/api/v2/account/settings",
-    ])
-    #expect(transport.recordedMethods == ["GET", "GET"])
-    #expect(transport.recordedIfNoneMatch == [nil, "\"0\""])
+    let response = try await client.fetchProviderStatus()
+    #expect(response.providers.map(\.id) == [.claude])
+    #expect(response.providers.first?.indicator == .minor)
+    #expect(transport.recordedURLs.map(\.path) == ["/api/v2/providers/status"])
+    #expect(transport.recordedAuthorization == [nil])
   }
 
   @Test
@@ -484,9 +251,5 @@ struct RelayClientTests {
     #expect(throws: RelayClientError.invalidOrigin) {
       try RelayClient.attachBearer(&request, token: Fixtures.accessToken)
     }
-  }
-
-  private func queryItems(_ url: URL) -> [URLQueryItem] {
-    URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
   }
 }

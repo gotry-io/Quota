@@ -68,12 +68,19 @@ struct AccountSettingsModelTests {
       revision: 1
     )
     model.apply(signedInSettingsState(settings: settings))
-    await Task.yield()
-    try await Task.sleep(for: .milliseconds(30))
-
-    #expect(await record.calls.isEmpty)
     #expect(!model.notificationRules.resetReminders)
     #expect(model.usage.budget.amountUSD == 250)
+
+    // A first-sync write, had adopting scheduled one, would hold the only write slot and reach
+    // the service first; the edit made next could only follow it. So the first call is the
+    // edit's own, over the adopted row.
+    model.setPaceAlerts(false)
+    try await waitUntil { await record.calls.count >= 1 }
+    let first = try #require(await record.calls.first)
+    #expect(first.ifMatch == "\"1\"")
+    #expect(!first.document.alerts.paceAlerts)
+    #expect(!first.document.alerts.resetReminders)
+    #expect(first.document.budget.amountUSD == 250)
   }
 
   @Test
@@ -101,32 +108,6 @@ struct AccountSettingsModelTests {
     let call = try #require(await record.calls.first)
     #expect(call.ifMatch == "\"4\"")
     #expect(call.document.alerts.thresholds[selector] == [30])
-  }
-
-  @Test
-  func aLocalEditWritesAndKeepsTheWrittenDocument() async throws {
-    let record = AccountSettingsWriteRecord()
-    let defaults = notificationDefaultsSuite()
-    defer { defaults.tearDown() }
-    let written = accountSettingsDocument(revision: 2, resetReminders: false)
-    await record.queue(.success(.written(written)))
-    let model = settingsModel(record: record, defaults: defaults.store)
-    model.apply(
-      signedInSettingsState(
-        settings: LocalServiceAccountSettingsState(
-          document: accountSettingsDocument(revision: 1),
-          revision: 1
-        )
-      )
-    )
-    model.setResetReminders(false)
-    try await waitUntil { await record.calls.count == 1 }
-    try await waitUntil { await record.results.isEmpty }
-
-    #expect(!model.notificationRules.resetReminders)
-    let call = try #require(await record.calls.first)
-    #expect(call.ifMatch == "\"1\"")
-    #expect(!call.document.alerts.resetReminders)
   }
 
   @Test
@@ -184,57 +165,6 @@ struct AccountSettingsModelTests {
 
     #expect(!model.notificationRules.resetReminders)
     #expect(await record.calls.count == 2)
-  }
-
-  @Test
-  func aFailedWriteIsRetriedWhenTheNextStateArrives() async throws {
-    let record = AccountSettingsWriteRecord()
-    let defaults = notificationDefaultsSuite()
-    defer { defaults.tearDown() }
-    await record.queue(.failure(LocalServiceClientError.connectionClosed))
-    let model = settingsModel(record: record, defaults: defaults.store)
-    let settings = LocalServiceAccountSettingsState(
-      document: accountSettingsDocument(revision: 1),
-      revision: 1
-    )
-    model.apply(signedInSettingsState(settings: settings, revision: 2))
-    model.setResetReminders(false)
-    try await waitUntil { await record.calls.count == 1 }
-
-    model.apply(signedInSettingsState(settings: settings, revision: 3))
-    try await waitUntil { await record.calls.count == 2 }
-
-    #expect(!model.notificationRules.resetReminders)
-    let retry = await record.calls[1]
-    #expect(!retry.document.alerts.resetReminders)
-  }
-
-  @Test
-  func aWriteThatLandsAfterSignOutWritesNothing() async throws {
-    let record = AccountSettingsWriteRecord()
-    let gate = TestGate()
-    await record.setGate(gate)
-    let defaults = notificationDefaultsSuite()
-    defer { defaults.tearDown() }
-    let model = settingsModel(record: record, defaults: defaults.store)
-    model.apply(
-      signedInSettingsState(
-        settings: LocalServiceAccountSettingsState(
-          document: accountSettingsDocument(revision: 1),
-          revision: 1
-        )
-      )
-    )
-    model.setResetReminders(false)
-    try await waitUntil { await record.calls.count == 1 }
-
-    model.apply(signedOutWithSessionEndedState())
-    await gate.open()
-    await Task.yield()
-    try await Task.sleep(for: .milliseconds(40))
-
-    #expect(!model.notificationRules.resetReminders)
-    #expect(await record.calls.count == 1)
   }
 
   @Test
@@ -335,9 +265,8 @@ struct AccountSettingsModelTests {
     model.setResetReminders(false)
     model.setPaceAlerts(false)
     try await waitUntil { await record.calls.count == 1 }
-    await Task.yield()
-    try await Task.sleep(for: .milliseconds(30))
 
+    // Two writes would have sent the first edit alone; the first call carrying both is the proof.
     #expect(await record.calls.count == 1)
     let call = try #require(await record.calls.first)
     #expect(!call.document.alerts.resetReminders)
@@ -362,9 +291,8 @@ struct AccountSettingsModelTests {
     model.setNotificationFirstThreshold(15, for: selector)
     model.setNotificationFirstThreshold(25, for: selector)
     try await waitUntil { await record.calls.count == 1 }
-    await Task.yield()
-    try await Task.sleep(for: .milliseconds(30))
 
+    // Two writes would have sent 15 first; the first call carrying 25 is the proof.
     #expect(await record.calls.count == 1)
     let call = try #require(await record.calls.first)
     #expect(call.document.alerts.thresholds[selector] == [25, 10])
@@ -450,10 +378,14 @@ struct AccountSettingsModelTests {
     model.setResetReminders(false)
     try await waitUntil { await record.calls.count == 1 }
 
+    // The write sign-out abandoned lands after it. Once the stub has handed back its answer, one
+    // main-actor turn is the model taking it: it writes nothing, and the local value stays.
     model.apply(signedOutWithSessionEndedState())
     await gate.open()
-    await Task.yield()
-    try await Task.sleep(for: .milliseconds(40))
+    try await waitUntil { await record.returned == 1 }
+    await Task { @MainActor in }.value
+    #expect(!model.notificationRules.resetReminders)
+    #expect(await record.calls.count == 1)
 
     model.apply(
       signedInSettingsState(
@@ -464,11 +396,17 @@ struct AccountSettingsModelTests {
         )
       )
     )
-    await Task.yield()
-    try await Task.sleep(for: .milliseconds(40))
-
-    #expect(await record.calls.count == 1)
     #expect(model.usage.budget.amountUSD == 40)
+
+    // The next write is account_2's own edit, and it carries nothing account_1 left pending: had
+    // that edit been sent for account_2, it would be this call, with reset reminders off.
+    model.setPaceAlerts(false)
+    try await waitUntil { await record.calls.count >= 2 }
+    let second = await record.calls[1]
+    #expect(second.ifMatch == "\"2\"")
+    #expect(second.document.alerts.resetReminders)
+    #expect(!second.document.alerts.paceAlerts)
+    #expect(await record.calls.count == 2)
   }
 
   @Test

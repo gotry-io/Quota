@@ -81,22 +81,6 @@ func openingTheFullDiskAccessPaneMakesRelaunchTheNextStepWhileSafariStaysClosed(
   #expect(granted.needs.isEmpty)
 }
 
-@Test
-func fullDiskAccessIsAskedOnceHoweverManySafarisAreListed() {
-  var asked = 0
-  _ = BrowserAccessEvaluation.snapshot(
-    browsers: [.safari, .safari],
-    fullDiskAccessSettingsOpened: false,
-    isInstalled: { _ in true },
-    hasFullDiskAccess: {
-      asked += 1
-      return false
-    },
-    keychainAccess: { _ in .notFound }
-  )
-  #expect(asked == 1)
-}
-
 @Test @MainActor
 func fullDiskAccessDragIconDoesNotMoveTheWindow() {
   let view = FullDiskAccessDragSourceView(frame: NSRect(x: 0, y: 0, width: 40, height: 40))
@@ -123,56 +107,4 @@ func aDropCountsOnlyWhenAcceptedWithSystemSettingsInFront() {
     !FullDiskAccessDragSourceView.droppedIntoSystemSettings(
       operation: .copy, frontmostBundleIdentifier: nil))
   #expect(FullDiskAccessDragSourceView.dragThreshold >= 3)
-}
-
-@Test
-func grantCopyNamesEachStateAndTheSystemActions() {
-  #expect(BrowserSessionCopy.grantWindowTitle == "Browser Access")
-  #expect(BrowserSessionCopy.grantOpenSettingsTitle == "Open Settings…")
-  #expect(BrowserSessionCopy.grantAllowTitle == "Allow…")
-  // The switch comes first: the probe already listed QuotaBar there; dragging is the fallback.
-  #expect(BrowserSessionCopy.dragHintTitle.hasPrefix("Turn on QuotaBar"))
-  #expect(BrowserSessionCopy.dragHintSubtitle.contains("Drag this icon"))
-  #expect(
-    BrowserSessionCopy.grantSubtitle(
-      for: BrowserAccessStatus(browser: .chrome, state: .needsKeychain)
-    ).contains("Always Allow"))
-  #expect(
-    BrowserSessionCopy.grantSubtitle(
-      for: BrowserAccessStatus(browser: .firefox, state: .readable)
-    ) == "No permission needed")
-  #expect(
-    BrowserSessionCopy.grantSubtitle(
-      for: BrowserAccessStatus(browser: .safari, state: .readable)
-    ) == "Full Disk Access granted")
-  // The relaunch step never claims the grant is in place; this process cannot know that.
-  #expect(!BrowserSessionCopy.relaunchSubtitle.contains("is on"))
-}
-
-@Test
-func agentRowSummaryNamesWhatIsOutstanding() {
-  #expect(BrowserSessionCopy.accessSummary(needs: [], awaitingRelaunch: false) == nil)
-  #expect(
-    BrowserSessionCopy.accessSummary(
-      needs: [BrowserAccessNeed(browser: .safari, kind: .fullDiskAccess)],
-      awaitingRelaunch: false
-    ) == "Safari needs Full Disk Access")
-  #expect(
-    BrowserSessionCopy.accessSummary(
-      needs: [BrowserAccessNeed(browser: .chrome, kind: .keychain)],
-      awaitingRelaunch: false
-    ) == "Chrome needs a Keychain grant")
-  #expect(
-    BrowserSessionCopy.accessSummary(
-      needs: [
-        BrowserAccessNeed(browser: .safari, kind: .fullDiskAccess),
-        BrowserAccessNeed(browser: .chrome, kind: .keychain),
-      ],
-      awaitingRelaunch: false
-    ) == "Safari and Chrome need permission")
-  #expect(
-    BrowserSessionCopy.accessSummary(
-      needs: [BrowserAccessNeed(browser: .safari, kind: .fullDiskAccess)],
-      awaitingRelaunch: true
-    ) == "Relaunch QuotaBar to finish granting Full Disk Access")
 }

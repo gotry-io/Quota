@@ -18,31 +18,6 @@ import os
 
 @MainActor
 struct AppModelTests {
-  /// The verdict itself is `DeviceActivityTests` in `packages/apple-shared`; what the card owes
-  /// it is both witnessed instants, so a device quiet for a day but reporting minutes ago is
-  /// still active.
-  @Test
-  func deviceActivityUsesTheNewerOfLastSeenAndLastReading() {
-    let now = Fixtures.date("2026-08-15T08:10:00Z")
-    func device(lastSeenAt: Date?, lastObservedAt: Date? = nil) -> AccountDevice {
-      AccountDevice(
-        id: "device_01",
-        displayName: "Studio Mac",
-        platform: .macos,
-        lastSeenAt: lastSeenAt,
-        lastObservedAt: lastObservedAt
-      )
-    }
-
-    #expect(device(lastSeenAt: now.addingTimeInterval(-300)).activity(now: now).status == .active)
-    #expect(
-      device(
-        lastSeenAt: now.addingTimeInterval(-86_400),
-        lastObservedAt: now.addingTimeInterval(-120)
-      ).activity(now: now).status == .active)
-    #expect(device(lastSeenAt: nil).activity(now: now).status == .notReporting)
-  }
-
   /// Apple is handed the nonce's digest and this device keeps the value, so a token minted for
   /// some earlier request proves nothing about this one.
   @Test
@@ -62,8 +37,9 @@ struct AppModelTests {
   }
 
   /// Cancelling at Apple is where the person started, not a failure with a sentence under it.
+  /// A sheet that failed is, and says the one connect sentence.
   @Test
-  func cancellingAtAppleIsSignedOutWithNothingSaid() async {
+  func cancellingAtAppleSaysNothingAndAFailedSheetSaysTheConnectSentence() async {
     let model = makeModel(session: nil, cache: nil, exchanges: [])
     model.prepareAppleRequest(ASAuthorizationAppleIDProvider().createRequest())
 
@@ -71,13 +47,8 @@ struct AppModelTests {
     #expect(model.phase == .signedOut)
     #expect(model.banner == nil)
     #expect(model.expiredMessage == nil)
-  }
 
-  @Test
-  func aFailedAppleSheetSaysTheOneConnectFailureSentence() async {
-    let model = makeModel(session: nil, cache: nil, exchanges: [])
     model.prepareAppleRequest(ASAuthorizationAppleIDProvider().createRequest())
-
     await model.connectWithApple(.failure(ASAuthorizationError(.failed)))
     #expect(model.phase == .signedOut)
     #expect(model.banner?.text == AuthorizationError.genericConnectFailureMessage)
@@ -107,63 +78,14 @@ struct AppModelTests {
     await model.restore()
     #expect(model.phase == .signedOut)
     #expect(model.summary == nil)
+    // A first launch is not an expiry: nothing is said.
+    #expect(model.expiredMessage == nil)
+    #expect(model.banner == nil)
     #expect(publisher.clearCount == 1)
     #expect(publisher.publishCount == 0)
     // Nothing to read, so nothing to be woken for.
     #expect(scheduler.scheduleCount == 0)
     #expect(scheduler.cancelCount == 1)
-  }
-
-  /// A deliberate logout, or a first launch, is not an expiry. Connect with GitHub says only what
-  /// it always says, and the background window nobody can use any more is withdrawn.
-  @Test
-  func refreshWithoutASessionIsPlainSignedOutAndWithdrawsTheBackgroundWindow() async throws {
-    let publisher = RecordingWidgetSnapshotPublisher()
-    let scheduler = RecordingBackgroundRefreshScheduler()
-    let model = makeModel(
-      session: nil,
-      cache: nil,
-      exchanges: [],
-      widgetPublisher: publisher,
-      backgroundRefresh: scheduler
-    )
-
-    #expect(await model.refresh() == false)
-    #expect(model.phase == .signedOut)
-    #expect(model.expiredMessage == nil)
-    #expect(model.banner == nil)
-    #expect(scheduler.scheduleCount == 0)
-    #expect(scheduler.cancelCount == 1)
-  }
-
-  @Test
-  func refreshStoresLastGoodProviderStatusFromThisDevice() async {
-    let client = ScriptedProviderStatusClient(
-      readings: [
-        ProviderStatusReading(
-          provider: .claude,
-          indicator: .minor,
-          description: "Partial System Outage",
-          checkedAt: Date(timeIntervalSince1970: 0)
-        )
-      ]
-    )
-    let model = makeModel(
-      session: nil,
-      cache: nil,
-      exchanges: [],
-      providerStatusClient: client
-    )
-    #expect(await model.refresh() == false)
-    await model.waitForDetachedLaunchWork()
-    #expect(model.providerStatus[.claude]?.indicator == .minor)
-    #expect(model.providerStatus[.claude]?.description == "Partial System Outage")
-  }
-
-  /// The helper polls every ten minutes; the foreground app holds the same timer.
-  @Test
-  func providerStatusForegroundCadenceMatchesTheHelper() {
-    #expect(AppModel.providerStatusInterval == 600)
   }
 
   @Test
@@ -196,29 +118,6 @@ struct AppModelTests {
     await model.waitForDetachedLaunchWork()
     #expect(client.refreshCount == 2)
     await model.setForeground(false)
-  }
-
-  @Test
-  func restoreShowsCacheThenFreshSummary() async throws {
-    let cachedSummary = try decodeSummary()
-    let freshData = try mutatedSummaryLabel("fresh-label")
-    let publisher = RecordingWidgetSnapshotPublisher()
-    let model = makeModel(
-      session: Fixtures.session(),
-      cache: CachedAccountSummary(
-        summary: cachedSummary,
-        fetchedAt: Fixtures.date("2026-08-14T15:00:00Z")
-      ),
-      exchanges: [.init(status: 200, body: freshData)],
-      widgetPublisher: publisher
-    )
-    await model.restore()
-    #expect(model.phase == .signedIn)
-    #expect(model.accountLabel == "fresh-label")
-    #expect(model.fromCache == false)
-    #expect(publisher.publishCount == 2)
-    #expect(publisher.clearCount == 0)
-    #expect(publisher.lastPublished?.fetchedAt == Fixtures.date("2026-08-14T16:00:00Z"))
   }
 
   @Test
@@ -329,6 +228,7 @@ struct AppModelTests {
     await transport.release()
     await done
     #expect(model.accountLabel == "fresh-label")
+    #expect(model.fromCache == false)
   }
 
   @Test
@@ -617,25 +517,6 @@ struct AppModelTests {
 
   /// The refresh a background app refresh runs is the refresh the pull-to-refresh gesture runs:
   /// it republishes the widget snapshot from the read it just made and asks for the next window.
-  @Test
-  func sharedRefreshRepublishesSnapshotAndSchedulesTheNextWindow() async throws {
-    let publisher = RecordingWidgetSnapshotPublisher()
-    let scheduler = RecordingBackgroundRefreshScheduler()
-    let model = makeModel(
-      session: Fixtures.session(),
-      cache: nil,
-      exchanges: [.init(status: 200, body: try Fixtures.accountSummaryJSON())],
-      widgetPublisher: publisher,
-      backgroundRefresh: scheduler
-    )
-
-    #expect(await model.refresh())
-    #expect(publisher.publishCount == 1)
-    #expect(publisher.clearCount == 0)
-    #expect(publisher.lastPublished?.fetchedAt == Fixtures.date("2026-08-14T16:00:00Z"))
-    #expect(scheduler.scheduleCount == 1)
-  }
-
   /// A refresh that never reaches Relay reports failure — which is the success a background task
   /// completes with — and leaves the snapshot the widget is already drawing in place.
   @Test
@@ -655,7 +536,8 @@ struct AppModelTests {
 
     #expect(await model.refresh())
     let published = publisher.lastPublished
-    #expect(published != nil)
+    #expect(published?.fetchedAt == Fixtures.date("2026-08-14T16:00:00Z"))
+    #expect(scheduler.scheduleCount == 1)
 
     #expect(await model.refresh() == false)
     #expect(model.summary?.account.displayLabel == "fresh-label")
@@ -805,7 +687,7 @@ struct AppModelTests {
   }
 
   @Test
-  func managingSignInMethodsOpensTheWebsiteSignInWithSettingsAsTheReturn() async throws {
+  func accountPagesOnTheWebOpenInTheSharedBrowserWithSettingsAsTheReturn() async throws {
     let sessions = MemoryAccountSessionStore()
     try sessions.save(Fixtures.session())
     let authenticator = ScriptedAuthenticator(results: [])
@@ -833,6 +715,15 @@ struct AppModelTests {
     #expect(authenticator.lastPresentPrefersEphemeral == false)
     // What came back is read rather than assumed.
     #expect(model.identities.identities.map(\.provider) == [.github, .apple])
+
+    await model.presentDeleteAccount()
+    #expect(authenticator.lastPresentURL == QuotaWebLinks.deleteAccountStart)
+    #expect(
+      authenticator.lastPresentURL?.absoluteString
+        == "https://quota.gotry.io/sign-in?return_to=%2Fmy%2Fsettings%3Fdelete%3Daccount"
+    )
+    #expect(authenticator.lastPresentCallbackScheme == nil)
+    #expect(authenticator.lastPresentPrefersEphemeral == false)
   }
 
   @Test
@@ -929,115 +820,7 @@ struct AppModelTests {
   }
 
   @Test
-  func presentDeleteAccountOpensNonEphemeralGitHubStartWithEncodedReturnTo() async {
-    let authenticator = ScriptedAuthenticator(result: .failure(AuthorizationError.cancelled))
-    let model = AppModel(
-      account: AccountClient(
-        relay: RelayClient(transport: ScriptedHTTPTransport([])),
-        sessionStore: MemoryAccountSessionStore(session: Fixtures.session()),
-        summaryStore: MemoryAccountSummaryStore(),
-        now: { Fixtures.date("2026-08-14T16:00:00Z") }
-      ),
-      authenticator: authenticator
-    )
-
-    await model.presentDeleteAccount()
-    #expect(authenticator.lastPresentURL == QuotaWebLinks.deleteAccountStart)
-    #expect(authenticator.lastPresentCallbackScheme == nil)
-    #expect(authenticator.lastPresentPrefersEphemeral == false)
-    #expect(
-      authenticator.lastPresentURL?.absoluteString
-        == "https://quota.gotry.io/sign-in?return_to=%2Fmy%2Fsettings%3Fdelete%3Daccount"
-    )
-  }
-
-  @Test
-  func useDifferentAccountRevokesThenReauthenticatesEphemerally() async throws {
-    let attempt = AuthorizationAttempt(
-      authorizationURL: URL(
-        string:
-          "https://quota.gotry.io/oauth/v2/authorize?response_type=code&client_id=quota-ios&redirect_uri=io.gotry.quota:/oauth/callback&state=client-state-123456789&code_challenge=challenge&code_challenge_method=S256"
-      )!,
-      state: "client-state-123456789",
-      verifier: String(repeating: "a", count: 43),
-      challenge: "challenge"
-    )
-    let callback = URL(
-      string:
-        "io.gotry.quota:/oauth/callback?code=synthetic-login-code&state=client-state-123456789"
-    )!
-    let authenticator = ScriptedAuthenticator(results: [.success(callback), .success(callback)])
-    let transport = ScriptedHTTPTransport([
-      .init(status: 200, body: try tokenResponse()),
-      .init(status: 200, body: try Fixtures.accountSummaryJSON()),
-      .init(status: 204, body: Data()),
-      .init(status: 200, body: try tokenResponse()),
-      .init(status: 200, body: try mutatedSummaryLabel("othercat")),
-    ])
-    let account = AccountClient(
-      relay: RelayClient(transport: transport),
-      sessionStore: MemoryAccountSessionStore(),
-      summaryStore: MemoryAccountSummaryStore(),
-      now: { Fixtures.date("2026-08-14T16:00:00Z") }
-    )
-    let model = AppModel(
-      account: account,
-      authenticator: authenticator,
-      makeAuthorizationAttempt: { attempt }
-    )
-
-    await model.connectAccount()
-    #expect(model.phase == .confirmingAccount(label: "octocat"))
-    #expect(authenticator.prefersEphemeralHistory == [false])
-
-    await model.useDifferentAccount()
-    #expect(authenticator.prefersEphemeralHistory == [false, true])
-    #expect(model.phase == .confirmingAccount(label: "othercat"))
-    #expect(try await account.hasSession())
-  }
-
-  @Test
-  func connectAccountFailureCopyNamesTheCause() async {
-    let attempt = AuthorizationAttempt(
-      authorizationURL: URL(string: "https://quota.gotry.io/oauth/v2/authorize")!,
-      state: "client-state-123456789",
-      verifier: String(repeating: "a", count: 43),
-      challenge: "challenge"
-    )
-
-    func model(throwing error: Error) -> AppModel {
-      AppModel(
-        account: AccountClient(
-          relay: RelayClient(transport: ScriptedHTTPTransport([])),
-          sessionStore: MemoryAccountSessionStore(),
-          summaryStore: MemoryAccountSummaryStore(),
-          now: { Fixtures.date("2026-08-14T16:00:00Z") }
-        ),
-        authenticator: ScriptedAuthenticator(result: .failure(error)),
-        makeAuthorizationAttempt: { attempt }
-      )
-    }
-
-    let unexpected = model(throwing: AuthorizationError.stateMismatch)
-    await unexpected.connectAccount()
-    #expect(unexpected.phase == .signedOut)
-    #expect(unexpected.banner?.text == AuthorizationError.unexpectedBrowserResponseMessage)
-
-    let unreachable = model(throwing: AccountClientError.relay(.unavailable))
-    await unreachable.connectAccount()
-    #expect(unreachable.banner?.text == "Couldn't reach quota.gotry.io.")
-
-    let expired = model(throwing: AccountClientError.relay(.invalidGrant))
-    await expired.connectAccount()
-    #expect(expired.banner?.text == AuthorizationError.expiredSignInMessage)
-
-    let generic = model(throwing: AccountClientError.accountMismatch)
-    await generic.connectAccount()
-    #expect(generic.banner?.text == "Couldn't connect. Try again.")
-  }
-
-  @Test
-  func restorePendingSessionReopensConfirmationAndDoesNotSignIn() async throws {
+  func restoringAPendingSessionReopensConfirmationAndOnlyContinuePromotesIt() async throws {
     let sessions = MemoryAccountSessionStore()
     let cache = MemoryAccountSummaryStore()
     let publisher = RecordingWidgetSnapshotPublisher()
@@ -1077,32 +860,8 @@ struct AppModelTests {
     await restored.refresh()
     #expect(restored.phase == .confirmingAccount(label: "octocat"))
     #expect(try sessions.load()?.activation == .pending)
-  }
 
-  @Test
-  func continueAfterRestorePromotesTheSamePendingSession() async throws {
-    let sessions = MemoryAccountSessionStore()
-    let cache = MemoryAccountSummaryStore()
-    let first = connectModel(
-      sessions: sessions,
-      cache: cache,
-      exchanges: [
-        .init(status: 200, body: try tokenResponse()),
-        .init(status: 200, body: try Fixtures.accountSummaryJSON()),
-      ]
-    )
-    await first.model.connectAccount()
-
-    let restored = AppModel(
-      account: AccountClient(
-        relay: RelayClient(transport: ScriptedHTTPTransport([])),
-        sessionStore: sessions,
-        summaryStore: cache,
-        now: { Fixtures.date("2026-08-14T16:00:00Z") }
-      ),
-      authenticator: ScriptedAuthenticator(result: .failure(AuthorizationError.cancelled))
-    )
-    await restored.restore()
+    // Continue promotes the same pending session rather than asking for a new one.
     await restored.confirmAccount()
     #expect(restored.phase == .signedIn)
     #expect(try sessions.load()?.activation == .active)

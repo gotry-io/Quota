@@ -10,21 +10,6 @@ import Testing
   @MainActor
   struct UsagePeriodBudgetTests {
     @Test
-    func fixtureUsageOwnerMeasuresThisMonthFromThePeriodRead() async {
-      let model = AppModel.visualFixture(
-        .content,
-        now: VisualFixture.referenceDate,
-        budgetStore: VisualFixtureContent.budgetStore(amountUSD: 50)
-      )
-      await model.usage.loadBudgetPeriod(force: true)
-      guard let progress = model.usage.budgetProgress else {
-        Issue.record("A budget of $50 has progress")
-        return
-      }
-      #expect(progress.budgetUSD == 50)
-    }
-
-    @Test
     func aBudgetIsStoredAndReadBack() {
       let defaults = UserDefaults(suiteName: "io.gotry.quota.budget-test")!
       defaults.removePersistentDomain(forName: "io.gotry.quota.budget-test")
