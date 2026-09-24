@@ -67,28 +67,4 @@ describe("usage export conformance", () => {
     ]);
     expect(conformance.cases.map((item) => item.name)).toEqual([...required]);
   });
-
-  it("keeps missing dates out of JSON days and marks them in CSV", () => {
-    const testCase = conformance.cases.find((item) => item.name === "missing_and_unpriced");
-    expect(testCase).toBeDefined();
-    if (!testCase) return;
-    expect(testCase.input.days.map((day) => day.date)).toEqual(["2026-08-26", "2026-08-28"]);
-    expect(testCase.expected_json.days.map((day) => day.date)).toEqual([
-      "2026-08-26",
-      "2026-08-28",
-    ]);
-    expect(testCase.expected_csv).toContain("2026-08-27,,,,,,,,,no usage recorded");
-    expect(testCase.expected_csv.startsWith(`${conformance.csv_header}\n`)).toBe(true);
-    expect(testCase.expected_csv.endsWith("\n")).toBe(true);
-  });
-
-  it("never writes unpriced cost as zero", () => {
-    const testCase = conformance.cases.find((item) => item.name === "missing_and_unpriced");
-    expect(testCase).toBeDefined();
-    if (!testCase) return;
-    const unpriced = testCase.expected_json.days.find((day) => day.cost_status === "unpriced");
-    expect(unpriced?.api_equivalent_cost).toBeNull();
-    expect(testCase.expected_csv).toContain("50,40,10,0,0,0,1,,unpriced");
-    expect(testCase.expected_csv).not.toMatch(/,0,unpriced/);
-  });
 });

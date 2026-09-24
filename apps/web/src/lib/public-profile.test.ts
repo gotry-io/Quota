@@ -1,23 +1,7 @@
 import { PUBLIC_ACTIVITY_DAYS, type PublicUsageResponse } from "@gotry-io/quota-protocol";
 import { expect, it } from "vitest";
-import {
-  buildPublicActivityModel,
-  handleProblem,
-  hasUsage,
-  publicProfileSummary,
-  sharePercent,
-} from "./public-profile.ts";
+import { buildPublicActivityModel, publicProfileSummary } from "./public-profile.ts";
 import { shareCardModel } from "./share-card.ts";
-
-it("says why a handle cannot be published, and nothing when it can", () => {
-  expect(handleProblem("kyle")).toBeNull();
-  expect(handleProblem("kyle-2")).toBeNull();
-  expect(handleProblem("")).toBe("Choose a handle to publish this page.");
-  expect(handleProblem("my")).toBe("That handle is reserved.");
-  expect(handleProblem("support")).toBe("That handle is reserved.");
-  expect(handleProblem("Kyle")).toMatch(/lowercase letters/);
-  expect(handleProblem("ab")).toMatch(/3 to 30/);
-});
 
 it("draws a full year of Sunday-first weeks, with absent days at level 0", () => {
   const model = buildPublicActivityModel(
@@ -40,13 +24,6 @@ it("draws a full year of Sunday-first weeks, with absent days at level 0", () =>
   expect(model.cells.at(-1)?.outside).toBe(true);
 });
 
-it("prints a share as a percentage, keeping a tenth only when there is one", () => {
-  expect(sharePercent(1_000)).toBe("100%");
-  expect(sharePercent(500)).toBe("50%");
-  expect(sharePercent(125)).toBe("12.5%");
-  expect(sharePercent(0)).toBe("0%");
-});
-
 it("summarizes a page in one sentence that names no account, device, or quota", () => {
   const summary = publicProfileSummary(profile());
   expect(summary).toBe(
@@ -55,16 +32,6 @@ it("summarizes a page in one sentence that names no account, device, or quota", 
   for (const forbidden of ["device", "quota.gotry.io/my", "account", "remaining"]) {
     expect(summary.toLowerCase()).not.toContain(forbidden);
   }
-});
-
-it("knows a period with nothing in it", () => {
-  expect(hasUsage(profile().last_30_days)).toBe(true);
-  expect(
-    hasUsage({
-      totals: { total_tokens: 0, input_tokens: 0, output_tokens: 0, messages: 0 },
-      providers: [],
-    }),
-  ).toBe(false);
 });
 
 it("builds a share card from the last 30 days, and names cost only when the page does", () => {

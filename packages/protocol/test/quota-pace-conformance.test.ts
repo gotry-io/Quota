@@ -20,10 +20,6 @@ const conformance = conformanceJson as unknown as { cases: PaceCase[] };
  * `packages/quota-model`'s test, and the same file is answered by Rust and Swift.
  */
 describe("quota pace conformance", () => {
-  it("states enough cases to pin the rule", () => {
-    expect(conformance.cases.length).toBeGreaterThanOrEqual(12);
-  });
-
   it("names a real quota window and a placeable clock in every case", () => {
     for (const testCase of conformance.cases) {
       expect(Rfc3339InstantSchema.safeParse(testCase.now).success, testCase.name).toBe(true);
@@ -63,6 +59,7 @@ describe("quota pace conformance", () => {
   });
 
   it("covers every outcome and tempo the rule can produce", () => {
+    expect(conformance.cases.length).toBeGreaterThanOrEqual(12);
     const kinds = new Set(conformance.cases.map((testCase) => testCase.expected.kind));
     const tempos = new Set(
       conformance.cases.map((testCase) => testCase.expected.tempo).filter(Boolean),

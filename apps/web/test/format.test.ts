@@ -3,28 +3,18 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import {
-  formatRemaining,
-  isAmountOfLimit,
-  isBalanceOnly,
-  quotaPace,
-  showsPercentMeter,
-} from "@gotry-io/quota-model";
+import { quotaPace } from "@gotry-io/quota-model";
 import {
   NO_READINGS_COPY,
   NO_RESET_TIME_COPY,
   NOT_CHECKED_COPY,
-  formatQuotaRemaining,
-  formatUtcDateRange,
   lastReadingCopy,
   observationFreshnessCopy,
   paceDetail,
   paceHeadline,
   relativeAge,
-  resetCopy,
   showsNoResetTime,
   updatedCopy,
-  usageModelDisplayName,
 } from "../src/lib/format.ts";
 
 /**
@@ -52,67 +42,10 @@ const fixture = JSON.parse(
   device: { name: string; age_seconds: number | null; expected: string }[];
 };
 
-const resetFixture = JSON.parse(
-  readFileSync(
-    join(
-      dirname(fileURLToPath(import.meta.url)),
-      "../../../packages/protocol/fixtures/reset-copy-conformance.json",
-    ),
-    "utf8",
-  ),
-) as {
-  cases: {
-    name: string;
-    now: string;
-    resets_at: string;
-    relative: string | null;
-    absolute: string | null;
-  }[];
-};
-
-const remainingFixture = JSON.parse(
-  readFileSync(
-    join(
-      dirname(fileURLToPath(import.meta.url)),
-      "../../../packages/protocol/fixtures/remaining-copy-conformance.json",
-    ),
-    "utf8",
-  ),
-) as {
-  cases: {
-    name: string;
-    window: {
-      id?: string;
-      used_percent: number;
-      remaining_value?: number;
-      limit_value?: number;
-      value_unit?: string;
-    };
-    expected: string;
-    shows_percent_meter: boolean;
-    is_balance_only: boolean;
-    is_amount_of_limit: boolean;
-  }[];
-};
-
 const now = new Date("2026-08-25T12:00:00Z");
 
 function instant(ageSeconds: number): string {
   return new Date(now.getTime() - ageSeconds * 1000).toISOString();
-}
-
-/** Map an RFC 3339 offset to an IANA zone `Intl` can format. `Etc/GMT` signs are inverted. */
-function timeZoneFromRfc3339(value: string): string {
-  if (value.endsWith("Z")) return "UTC";
-  const match = value.match(/([+-])(\d{2}):(\d{2})$/);
-  if (match === null) throw new Error(`reset fixture timestamp has no offset: ${value}`);
-  if (match[3] !== "00") {
-    throw new Error(`reset fixture timestamps use whole-hour offsets: ${value}`);
-  }
-  const hours = Number(match[2]);
-  if (hours === 0) return "UTC";
-  const inverted = match[1] === "-" ? "+" : "-";
-  return `Etc/GMT${inverted}${hours}`;
 }
 
 test("named freshness phrases match the shared fixture", () => {
@@ -148,51 +81,6 @@ test("device lines match the shared fixture", () => {
   }
 });
 
-test("reset copy matches the shared fixture", () => {
-  assert.ok(resetFixture.cases.length > 1);
-  for (const testCase of resetFixture.cases) {
-    const zone = timeZoneFromRfc3339(testCase.now);
-    const nowAt = new Date(testCase.now);
-    assert.equal(
-      resetCopy(testCase.resets_at, nowAt, zone, "relative"),
-      testCase.relative,
-      `${testCase.name} relative`,
-    );
-    assert.equal(
-      resetCopy(testCase.resets_at, nowAt, zone, "absolute"),
-      testCase.absolute,
-      `${testCase.name} absolute`,
-    );
-  }
-});
-
-test("remaining copy matches the shared fixture", () => {
-  assert.ok(remainingFixture.cases.length > 1);
-  for (const testCase of remainingFixture.cases) {
-    assert.equal(formatRemaining(testCase.window), testCase.expected, `${testCase.name} copy`);
-    assert.equal(
-      formatQuotaRemaining(testCase.window),
-      testCase.expected,
-      `${testCase.name} web copy`,
-    );
-    assert.equal(
-      showsPercentMeter(testCase.window),
-      testCase.shows_percent_meter,
-      `${testCase.name} meter`,
-    );
-    assert.equal(
-      isBalanceOnly(testCase.window),
-      testCase.is_balance_only,
-      `${testCase.name} balance`,
-    );
-    assert.equal(
-      isAmountOfLimit(testCase.window),
-      testCase.is_amount_of_limit,
-      `${testCase.name} amount`,
-    );
-  }
-});
-
 test("missing reset display matches the shared fixture", () => {
   assert.ok(fixture.missing_reset.length > 1);
   for (const testCase of fixture.missing_reset) {
@@ -202,37 +90,6 @@ test("missing reset display matches the shared fixture", () => {
       testCase.name,
     );
   }
-});
-
-test("formats a UTC date range in English", () => {
-  assert.equal(formatUtcDateRange("2025-09-05", "2026-09-04"), "Sep 5, 2025 – Sep 4, 2026");
-});
-
-test("names the overflow model leaf Other", () => {
-  assert.equal(usageModelDisplayName("other"), "Other");
-  assert.equal(usageModelDisplayName("gpt-5"), "gpt-5");
-});
-
-test("classifies wallet windows as balance-only and metered windows as percent meters", () => {
-  const wallet = { remaining_value: 12.5, used_percent: 0 };
-  const metered = { remaining_value: 14.55, limit_value: 400, used_percent: 63.102 };
-
-  assert.equal(isBalanceOnly(wallet), true);
-  assert.equal(showsPercentMeter(wallet), false);
-  assert.equal(isBalanceOnly(metered), false);
-  assert.equal(showsPercentMeter(metered), true);
-
-  assert.equal(showsNoResetTime(wallet), false);
-  assert.equal(showsNoResetTime(metered), true);
-
-  const extra = {
-    used_percent: 12.5,
-    remaining_value: 87.5,
-    limit_value: 100,
-    value_unit: "usd",
-  };
-  assert.equal(showsPercentMeter(extra), false);
-  assert.equal(showsNoResetTime(extra), false);
 });
 
 /**

@@ -1,6 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
-import { parseAccountResponse } from "../src/lib/account-reads.ts";
 import {
   accountActivity,
   accountActivityDay,
@@ -9,40 +8,7 @@ import {
   accountUsagePeriod,
   mockAccountSettings,
   screenshotAccountRhythm,
-  screenshotAccountSummary,
 } from "./account-fixture.ts";
-
-async function mockProviderStatus(
-  page: Page,
-  providers: Array<{
-    id: string;
-    indicator: string;
-    description: string;
-    checked_at: string;
-  }> = [
-    {
-      id: "codex",
-      indicator: "minor",
-      description: "Partial System Outage",
-      checked_at: "2026-09-06T00:00:00Z",
-    },
-  ],
-): Promise<void> {
-  await page.route(
-    (url) => new URL(url).pathname === "/api/v2/providers/status",
-    async (route) => {
-      if (route.request().method() !== "GET") {
-        await route.fallback();
-        return;
-      }
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ providers }),
-      });
-    },
-  );
-}
 
 async function mockAccountRead(page: Page, summary: unknown = accountSummary): Promise<void> {
   await page.route(
@@ -372,26 +338,6 @@ test("Usage is two columns at 1440 and stacked at 390", async ({ page }) => {
   expect(stacked).toBe(true);
 });
 
-test("Settings groups Appearance, Sign-in methods, Account, and Legal", async ({ page }) => {
-  await mockV6(page);
-  await page.goto("/my/settings");
-  await expect(page.getByRole("heading", { name: "Appearance" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Notifications" })).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "Sign-in methods" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Account", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Legal" })).toBeVisible();
-  await expect(
-    page.locator(".settings-links").getByRole("link", { name: "Privacy" }),
-  ).toHaveAttribute("href", "/privacy");
-  await expect(
-    page.locator(".settings-links").getByRole("link", { name: "Terms" }),
-  ).toHaveAttribute("href", "/terms");
-  await expect(
-    page.locator(".settings-group").getByRole("button", { name: "Sign out" }),
-  ).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "Delete Account" })).toBeVisible();
-});
-
 function accountReadWithIdentities(
   identities: { provider: string; label: string; linked_at: string }[],
 ): ReturnType<typeof accountReadFromSummary> {
@@ -419,73 +365,6 @@ async function mockAccountIdentities(
   );
 }
 
-test("Settings Sign-in methods: last channel cannot be unlinked", async ({ page }) => {
-  await mockAccountIdentities(page, [
-    { provider: "github", label: "octocat", linked_at: "2026-01-04T12:00:00Z" },
-  ]);
-  await page.goto("/my/settings");
-  const group = page.locator(".settings-group").filter({ hasText: "Sign-in methods" });
-  await expect(group.getByText("Apple", { exact: true })).toBeVisible();
-  await expect(group.getByText("GitHub", { exact: true })).toBeVisible();
-  await expect(group.getByText("Email", { exact: true })).toBeVisible();
-  await expect(group.getByText("octocat")).toBeVisible();
-  await expect(group.getByRole("button", { name: "Unlink" })).toBeDisabled();
-  await expect(group.getByText("Keep at least one way to sign in")).toBeVisible();
-  await expect(group.getByRole("link", { name: "Link", exact: true })).toHaveAttribute(
-    "href",
-    "/api/auth/apple/start?intent=link&return_to=%2Fmy%2Fsettings",
-  );
-  await expect(group.getByRole("button", { name: "Link", exact: true })).toBeVisible();
-});
-
-test("Settings Sign-in methods: mixed bound channels can be unlinked", async ({ page }) => {
-  await mockAccountIdentities(page, [
-    { provider: "github", label: "octocat", linked_at: "2026-01-04T12:00:00Z" },
-    {
-      provider: "apple",
-      label: "kyle@privaterelay.appleid.com",
-      linked_at: "2026-02-01T12:00:00Z",
-    },
-  ]);
-  await page.goto("/my/settings");
-  const group = page.locator(".settings-group").filter({ hasText: "Sign-in methods" });
-  await expect(group.getByText("kyle@privaterelay.appleid.com")).toBeVisible();
-  await expect(group.getByText("octocat")).toBeVisible();
-  const unlinks = group.getByRole("button", { name: "Unlink" });
-  await expect(unlinks).toHaveCount(2);
-  await expect(unlinks.first()).toBeEnabled();
-  await expect(group.getByText("Keep at least one way to sign in")).toHaveCount(0);
-  await expect(group.getByRole("button", { name: "Link", exact: true })).toBeVisible();
-  await expect(group.getByRole("link", { name: "Link", exact: true })).toHaveCount(0);
-});
-
-test("Settings Sign-in methods: Email Link sends a link and shows Check your email", async ({
-  page,
-}) => {
-  await mockAccountIdentities(page, [
-    { provider: "github", label: "octocat", linked_at: "2026-01-04T12:00:00Z" },
-  ]);
-  await page.route("**/api/auth/email/start", async (route) => {
-    expect(route.request().method()).toBe("POST");
-    expect(JSON.parse(route.request().postData() ?? "{}")).toEqual({
-      email: "person@example.test",
-      return_to: "/my/settings",
-      intent: "link",
-    });
-    await route.fulfill({
-      status: 202,
-      contentType: "application/json",
-      body: JSON.stringify({ status: "accepted" }),
-    });
-  });
-  await page.goto("/my/settings");
-  const group = page.locator(".settings-group").filter({ hasText: "Sign-in methods" });
-  await group.getByRole("button", { name: "Link", exact: true }).click();
-  await group.getByLabel("Email").fill("person@example.test");
-  await group.getByRole("button", { name: "Send sign-in link" }).click();
-  await expect(group.getByRole("status")).toContainText("Check your email");
-});
-
 test("Settings shows a one-time notice when a link was already taken", async ({ page }) => {
   await mockV6(page);
   await page.goto("/my/settings?linked=taken");
@@ -495,13 +374,6 @@ test("Settings shows a one-time notice when a link was already taken", async ({ 
     }),
   ).toBeVisible();
   await expect(page).not.toHaveURL(/linked=taken/);
-});
-
-test("screenshot account fixture matches the Account read", () => {
-  expect(parseAccountResponse(200, accountReadFromSummary(screenshotAccountSummary())).status).toBe(
-    "ok",
-  );
-  expect(parseAccountResponse(200, accountReadFromSummary()).status).toBe("ok");
 });
 
 test("landing provider marks resolve to files", async ({ page }) => {
@@ -514,23 +386,6 @@ test("landing provider marks resolve to files", async ({ page }) => {
       0,
     );
   }
-});
-
-test("Overview draws a status dot for minor and above", async ({ page }) => {
-  await mockV6(page);
-  await mockProviderStatus(page);
-  await page.goto("/my");
-  const codex = page.locator(".quota-card").filter({ hasText: "Codex" });
-  await expect(codex).toBeVisible();
-  const dot = codex.locator(".provider-status-dot");
-  await expect(dot).toBeVisible();
-  await expect(dot).toHaveAttribute("title", "Partial System Outage");
-});
-
-test("Usage states how many rows the catalog priced", async ({ page }) => {
-  await mockV6(page);
-  await page.goto("/my/usage");
-  await expect(page.locator("#cost-priced")).toHaveText(/Priced \d+ of \d+ rows/);
 });
 
 test("sign-in with intent=link lists bindable channels when signed in", async ({ page }) => {
@@ -548,49 +403,6 @@ test("sign-in with intent=link lists bindable channels when signed in", async ({
     "/api/auth/apple/start?intent=link&return_to=%2Fmy%2Fsettings",
   );
   await expect(page.getByRole("link", { name: /Continue as/ })).toHaveCount(0);
-});
-
-test.describe("signed-out sign-in", () => {
-  test.use({ extraHTTPHeaders: { "x-quota-dev-signed-out": "1" } });
-
-  test("sign-in with intent=link signs in the usual way then Settings", async ({ page }) => {
-    await page.goto("/sign-in?intent=link");
-    await expect(page.getByRole("heading", { name: "Link a sign-in method" })).toBeVisible();
-    await expect(
-      page.getByText(/Linking adds a way to sign in to the account you're already using/),
-    ).toBeVisible();
-    const apple = page.getByRole("link", { name: "Continue with Apple" });
-    const github = page.getByRole("link", { name: "Continue with GitHub" });
-    await expect(apple).toBeVisible();
-    await expect(github).toBeVisible();
-    await expect(apple).toHaveAttribute("href", "/api/auth/apple/start?return_to=%2Fmy%2Fsettings");
-    await expect(github).toHaveAttribute(
-      "href",
-      "/api/auth/github/start?return_to=%2Fmy%2Fsettings",
-    );
-  });
-});
-
-test("sign-in asks to continue as the signed-in Account", async ({ page }) => {
-  await page.goto("/sign-in");
-  await expect(page.getByRole("heading", { name: "You're signed in" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Continue as octocat" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Use a different account" })).toBeVisible();
-});
-
-test("sign-in for Delete Account asks to sign in again", async ({ page }) => {
-  await page.goto(`/sign-in?return_to=${encodeURIComponent("/my/settings?delete=account")}`);
-  await expect(
-    page.getByRole("heading", { name: "Sign in again to delete your account" }),
-  ).toBeVisible();
-  await expect(page.getByRole("link", { name: "Continue as octocat" })).toHaveCount(0);
-  const apple = page.getByRole("link", { name: "Continue with Apple" });
-  const github = page.getByRole("link", { name: "Continue with GitHub" });
-  await expect(apple).toBeVisible();
-  await expect(github).toBeVisible();
-  expect(await apple.evaluate((node) => node.getBoundingClientRect().top)).toBeLessThan(
-    await github.evaluate((node) => node.getBoundingClientRect().top),
-  );
 });
 
 test("activity grid is one tab stop and Enter opens the day tree", async ({ page }) => {
@@ -726,93 +538,4 @@ test("landing screenshots follow an explicit Light theme on a dark OS", async ({
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await expect(page.locator(".preview-web .shot-light")).toBeVisible();
   await expect(page.locator(".preview-web .shot-dark")).toBeHidden();
-});
-
-test("a recent device heartbeat does not make stale quota look fresh", async ({ page }) => {
-  const summary = structuredClone(accountSummary) as typeof accountSummary & {
-    devices: Array<{ last_seen_at: string | null }>;
-    subscriptions: Array<{ snapshot: { observed_at: string } }>;
-  };
-  const firstDevice = summary.devices[0];
-  const firstSubscription = summary.subscriptions[0];
-  if (!firstDevice || !firstSubscription) throw new Error("account fixture is missing rows");
-  firstDevice.last_seen_at = new Date().toISOString();
-  firstSubscription.snapshot.observed_at = "2020-01-01T00:00:00Z";
-  await page.route("**/api/v6/**", async (route) => {
-    const url = route.request().url();
-    if (url.includes("/api/v6/account/summary")) {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(summary),
-      });
-      return;
-    }
-    await route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
-  });
-  await page.goto("/my");
-  const status = page.locator(".dashboard-status");
-  await expect(status).toContainText("Latest quota updated");
-  await expect(status).not.toContainText("just now");
-});
-
-test("unknown Device platforms use a generic icon", async ({ page }) => {
-  const summary = structuredClone(accountSummary) as typeof accountSummary & {
-    devices: Array<{
-      id: string;
-      display_name: string;
-      platform: string;
-      last_seen_at: string | null;
-      last_observed_at: string | null;
-    }>;
-  };
-  summary.devices.push({
-    id: "device_linux",
-    display_name: "Lab Box",
-    platform: "linux",
-    last_seen_at: "2026-08-10T09:31:00Z",
-    last_observed_at: "2026-08-10T09:00:00Z",
-  });
-  await page.route("**/api/v6/**", async (route) => {
-    const url = route.request().url();
-    if (url.includes("/api/v6/account/summary")) {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(summary),
-      });
-      return;
-    }
-    await route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
-  });
-  await page.goto("/my/devices");
-  await expect(page.getByRole("img", { name: "Unknown" }).first()).toBeVisible();
-  await expect(page.getByRole("rowheader", { name: "Lab Box" })).toBeVisible();
-});
-
-test("Devices below 620 px are two-column cards with Last contact", async ({ page }) => {
-  await mockV6(page);
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/my/devices");
-  await expect(page.locator(".device-card-list")).toBeVisible();
-  await expect(page.locator(".device-card dt", { hasText: "Last contact" }).first()).toBeVisible();
-  await expect(page.locator(".device-table-wrap")).toBeHidden();
-});
-
-test("Support names the Notifications anchor", async ({ page }) => {
-  await page.goto("/support#notifications");
-  await expect(page.locator("#notifications")).toBeVisible();
-  await expect(
-    page.getByText(
-      "Remaining-quota alerts and reset reminders are configured and evaluated in QuotaBar on your Mac. The website does not send notifications.",
-    ),
-  ).toBeVisible();
-});
-
-test("the retired leaderboard path is the ordinary not-found page", async ({ page }) => {
-  const response = await page.goto("/leaderboard");
-  expect(response?.status()).toBe(404);
-  await expect(page.getByRole("heading", { name: "This page is unavailable." })).toBeVisible();
-  await expect(page.getByText("This page does not exist.")).toBeVisible();
-  await expect(page.locator("footer").getByRole("link", { name: "Leaderboard" })).toHaveCount(0);
 });

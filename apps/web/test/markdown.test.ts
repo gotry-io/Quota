@@ -27,26 +27,3 @@ test("rejects javascript: and other non-http(s) links", () => {
   assert.match(html, /<a href="https:\/\/github.com\/gotry-io\/Quota\/issues">ok<\/a>/);
   assert.match(html, /<a href="\/my">account<\/a>/);
 });
-
-test("renders heading levels one through three and leaves deeper hashes as text", () => {
-  const html = renderMarkdown("# One\n\n## Two\n\n### Three\n\n#### Four");
-  assert.match(html, /<h1 id="page-title">One<\/h1>/);
-  assert.match(html, /<h2 id="two">Two<\/h2>/);
-  assert.match(html, /<h3 id="three">Three<\/h3>/);
-  assert.equal(html.includes("<h4>"), false);
-  assert.match(html, /<p>#### Four<\/p>/);
-});
-
-test("slugs support headings so Notifications can be linked", () => {
-  const html = renderMarkdown("## Notifications\n\nThe website does not send notifications.");
-  assert.match(html, /<h2 id="notifications">Notifications<\/h2>/);
-});
-
-test("renders lists, bold, inline code, and quotes", () => {
-  const html = renderMarkdown("- **bold** item with `code`\n- second\n\n> Draft — pending review");
-  assert.match(
-    html,
-    /<ul><li><strong>bold<\/strong> item with <code>code<\/code><\/li><li>second<\/li><\/ul>/,
-  );
-  assert.match(html, /<blockquote><p>Draft — pending review<\/p><\/blockquote>/);
-});

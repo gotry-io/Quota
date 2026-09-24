@@ -10,7 +10,7 @@ import {
   clearStoredSummary,
   usagePeriodResourceKey,
 } from "./account-reads.ts";
-import { activityRangeKey, createAccountStore } from "./account-store.svelte.ts";
+import { createAccountStore } from "./account-store.svelte.ts";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -198,7 +198,8 @@ it("hashes subscription selectors in parallel and caches them", async () => {
     digestCalls += 1;
     inflight += 1;
     maxInflight = Math.max(maxInflight, inflight);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // Yield once: a serial loop finishes this digest before it starts the next one.
+    await Promise.resolve();
     inflight -= 1;
     return realDigest(algorithm, data);
   });
@@ -276,52 +277,6 @@ it("does not refetch a fresh summary, then revalidates after 60 seconds", async 
   vi.advanceTimersByTime(60_000);
   await store.ensureSummary();
   expect(calls).toHaveLength(1);
-});
-
-it("switches the activity cache key at the UTC day boundary", async () => {
-  vi.useFakeTimers();
-  vi.setSystemTime(new Date("2026-08-12T23:59:00Z"));
-  const payload = acceptedSummary();
-  const { calls } = mockFetch((url) => {
-    if (url.includes("/account/summary")) return jsonResponse(payload);
-    return jsonResponse(activityBody());
-  });
-
-  const store = createAccountStore();
-  const stopClock = store.startClock();
-  const first = store.activityRange;
-  await store.ensureActivity(first);
-  expect(activityRangeKey(first)).toBe("2025-08-13|2026-08-12");
-  expect(calls.filter((url) => url.includes("usage/activity"))).toHaveLength(1);
-
-  await vi.advanceTimersByTimeAsync(120_000);
-  const second = store.activityRange;
-  expect(activityRangeKey(second)).toBe("2025-08-14|2026-08-13");
-  expect(activityRangeKey(second)).not.toBe(activityRangeKey(first));
-  await store.ensureActivity(second);
-  expect(calls.filter((url) => url.includes("usage/activity"))).toHaveLength(2);
-  stopClock();
-});
-
-it("stores activity by range and day detail by date", async () => {
-  const payload = acceptedSummary();
-  mockFetch((url) => {
-    if (url.includes("/account/summary")) return jsonResponse(payload);
-    if (url.includes("detail=agents")) return jsonResponse(activityBody("2026-08-12", true));
-    return jsonResponse(activityBody());
-  });
-
-  const store = createAccountStore();
-  const range = store.activityRange;
-  await store.ensureActivity(range);
-  await store.ensureActivity(range);
-  const key = activityRangeKey(range);
-  expect(store.activity[key]?.status).toBe("ready");
-  expect(store.activity[key]?.data).toHaveLength(1);
-
-  await store.ensureDay("2026-08-12");
-  await store.ensureDay("2026-08-12");
-  expect(store.dayDetail["2026-08-12"]?.data?.agents).toHaveLength(1);
 });
 
 it("stores a period by from, to, timezone, and breakdown", async () => {

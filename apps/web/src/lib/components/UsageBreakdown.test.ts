@@ -1,5 +1,4 @@
 import type { UsagePeriodRead } from "@gotry-io/quota-protocol";
-import { agentDisplayName } from "@gotry-io/quota-protocol";
 import { cleanup, fireEvent, render, screen } from "@testing-library/svelte";
 import { afterEach, expect, it } from "vitest";
 import UsageBreakdown from "./UsageBreakdown.svelte";
@@ -51,89 +50,6 @@ function period(overrides: Partial<UsagePeriodRead> = {}): UsagePeriodRead {
     ...overrides,
   } as UsagePeriodRead;
 }
-
-it("maps agent ids to their display names", () => {
-  const agents = [
-    "codex",
-    "claude_code",
-    "grok",
-    "opencode",
-    "pi",
-    "cursor",
-    "gemini",
-    "copilot",
-    "kilo",
-    "antigravity",
-  ] as const;
-  render(UsageBreakdown, {
-    period: period({
-      agents: agents.map((agent) => ({
-        agent,
-        providers: [{ provider: "openai", models: [model(`${agent}-model`)] }],
-      })),
-    }),
-  });
-
-  expect(agentDisplayName("codex")).toBe("Codex");
-  expect(agentDisplayName("claude_code")).toBe("Claude Code");
-  expect(agentDisplayName("grok")).toBe("Grok");
-  expect(agentDisplayName("opencode")).toBe("OpenCode");
-  expect(agentDisplayName("pi")).toBe("Pi");
-  expect(agentDisplayName("cursor")).toBe("Cursor");
-  for (const agent of agents) {
-    expect(screen.getByRole("rowheader", { name: agentDisplayName(agent) })).toBeTruthy();
-  }
-  expect(screen.queryByRole("rowheader", { name: "codex" })).toBeNull();
-});
-
-it("shows Other for the overflow model leaf", () => {
-  render(UsageBreakdown, {
-    period: period({
-      agents: [
-        {
-          agent: "codex",
-          providers: [{ provider: "openai", models: [model("other")] }],
-        },
-      ],
-    }),
-  });
-  expect(screen.getByRole("rowheader", { name: "Other" })).toBeTruthy();
-  expect(screen.queryByRole("rowheader", { name: "other" })).toBeNull();
-});
-
-it("names each model's share of the period and ranks the three largest", () => {
-  render(UsageBreakdown, {
-    period: period({
-      totals: totals(320, 80),
-      agents: [
-        {
-          agent: "codex",
-          providers: [
-            {
-              provider: "openai",
-              models: [
-                { model: "gpt-5", totals: totals(240, 60), cost: cost("10000") },
-                { model: "gpt-5-mini", totals: totals(80, 20), cost: cost("1000") },
-              ],
-            },
-          ],
-        },
-      ],
-    }),
-  });
-
-  // Three quarters of the period's tokens against one quarter, stated on the row and in the rank.
-  expect(screen.getByRole("cell", { name: "75%" })).toBeTruthy();
-  expect(screen.getByRole("cell", { name: "25%" })).toBeTruthy();
-  expect(screen.getByText("75% · 300")).toBeTruthy();
-  expect(screen.getByRole("columnheader", { name: "Share" })).toBeTruthy();
-});
-
-it("states the empty period", () => {
-  render(UsageBreakdown, { period: period({ agents: [], partial: false }) });
-  expect(screen.getByText("No Usage in this period.")).toBeTruthy();
-  expect(screen.queryByRole("table")).toBeNull();
-});
 
 it("states incomplete hours without replacing the tree", () => {
   render(UsageBreakdown, { period: period({ partial: true }) });

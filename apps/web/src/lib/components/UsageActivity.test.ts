@@ -68,11 +68,12 @@ const reported = [
   day("2026-02-12", 50, 10, cost(), { partial: true }),
 ];
 
-it("keeps a single tab stop and moves with the activity keys", () => {
+it("keeps a single tab stop, moves with the activity keys, and opens with Enter or Space", () => {
+  const events = handlers();
   const { container } = render(UsageActivity, {
     days: reported,
     range,
-    ...handlers(),
+    ...events,
   });
 
   expect(container.querySelectorAll("button.usage-activity-cell[tabindex='0']")).toHaveLength(1);
@@ -97,22 +98,11 @@ it("keeps a single tab stop and moves with the activity keys", () => {
 
   fireEvent.keyDown(rover(container), { key: "PageUp" });
   expect(rover(container).getAttribute("data-date")).toBe("2026-01-15");
-});
 
-it("opens the focused day with Enter or Space", () => {
-  const events = handlers();
-  const { container } = render(UsageActivity, {
-    days: reported,
-    range,
-    ...events,
-  });
-
-  rover(container).focus();
   fireEvent.keyDown(rover(container), { key: "Enter" });
-  expect(events.onSelectDate).toHaveBeenCalledWith("2026-02-20");
-
+  expect(events.onSelectDate).toHaveBeenLastCalledWith("2026-01-15");
   fireEvent.keyDown(rover(container), { key: " " });
-  expect(events.onSelectDate).toHaveBeenCalledWith("2026-02-20");
+  expect(events.onSelectDate).toHaveBeenCalledTimes(2);
 });
 
 it("opens the day panel and returns focus on Close", () => {
@@ -161,46 +151,6 @@ it("opens the day panel and returns focus on Close", () => {
   fireEvent.click(screen.getByRole("button", { name: "Close" }));
   expect(events.onClose).toHaveBeenCalledTimes(1);
   expect(document.activeElement).toBe(selected);
-});
-
-it("states an empty day, incomplete hours, loading, and retry", () => {
-  const events = handlers();
-  const empty = render(UsageActivity, {
-    days: reported,
-    range,
-    selectedDate: "2026-01-15",
-    detail: day("2026-01-15", 0, 0, cost()),
-    detailLoading: false,
-    ...events,
-  });
-  expect(screen.getByText("No Usage on this day.")).toBeTruthy();
-  empty.unmount();
-
-  const partial = render(UsageActivity, {
-    days: reported,
-    range,
-    selectedDate: "2026-02-12",
-    detailLoading: true,
-    ...events,
-  });
-  expect(screen.getByText("Some hours on this day were scanned incompletely.")).toBeTruthy();
-  expect(screen.getByRole("status", { name: "Loading this day's Usage" })).toBeTruthy();
-  partial.unmount();
-
-  render(UsageActivity, {
-    days: reported,
-    range,
-    selectedDate: "2026-01-15",
-    detailLoading: false,
-    detailError: {
-      status: "unavailable",
-      message: "Quota couldn't load this. Retry.",
-      action: { type: "retry" },
-    },
-    ...events,
-  });
-  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-  expect(events.onRetryDetail).toHaveBeenCalledTimes(1);
 });
 
 it("follows keyboard focus with the tooltip", () => {

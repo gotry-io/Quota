@@ -89,7 +89,7 @@ export async function runDocumentSsr(
   }
 }
 
-export function documentSsrFailureResponse(): Response {
+function documentSsrFailureResponse(): Response {
   return new Response(
     `<!doctype html>
 <html lang="en">

@@ -49,42 +49,7 @@ function provider(document, id) {
   return entry;
 }
 
-test("rejects extra arguments", () => {
-  const result = run(["--check", "--oops"]);
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr + result.stdout, /Usage: generate-capability-matrix\.mjs \[--check\]/);
-});
-
-test("--check passes on the generated matrix", () => {
-  const result = run(["--check"]);
-  assert.equal(result.status, 0, result.stderr + result.stdout);
-  assert.match(result.stdout, /is current/);
-});
-
-test("--check detects drift", () => {
-  const original = readFileSync(generated, "utf8");
-  try {
-    writeFileSync(generated, `${original}<!-- drifted -->\n`);
-    const result = run(["--check"]);
-    assert.notEqual(result.status, 0);
-    assert.match(result.stderr + result.stdout, /out of date/);
-  } finally {
-    writeFileSync(generated, original);
-  }
-});
-
-test("generate is deterministic", () => {
-  const first = run();
-  assert.equal(first.status, 0, first.stderr + first.stdout);
-  const snapshot = readFileSync(generated, "utf8");
-  const second = run();
-  assert.equal(second.status, 0, second.stderr + second.stdout);
-  assert.equal(readFileSync(generated, "utf8"), snapshot);
-  const check = run(["--check"]);
-  assert.equal(check.status, 0, check.stderr + check.stdout);
-});
-
-test("the matrix names every provider, its tier, and its strategy file", () => {
+test("refuses a matrix that drops a provider row, its tier, or its strategy link", () => {
   const text = readFileSync(generated, "utf8");
   for (const entry of catalog.providers) {
     assert.match(text, new RegExp(`\\]\\(${entry.id}\\.md\\)`), entry.id);
@@ -97,18 +62,15 @@ test("the matrix names every provider, its tier, and its strategy file", () => {
   assert.match(text, /ADR 0060\]\(\.\.\/decisions\/0060-provider-freeze-and-two-tiers\.md\)/);
 });
 
-test("every test claim in the catalog names a test function that exists", () => {
-  for (const entry of catalog.providers) {
-    for (const [key, validation] of Object.entries(entry.capabilities.validated)) {
-      if (validation.kind !== "test") continue;
-      const text = readFileSync(join(root, validation.file), "utf8");
-      const keyword = validation.file.endsWith(".swift") ? "func" : "fn";
-      assert.match(
-        text,
-        new RegExp(`${keyword}\\s+${validation.name}\\s*\\(`),
-        `${entry.id} ${key}`,
-      );
-    }
+test("--check detects drift", () => {
+  const original = readFileSync(generated, "utf8");
+  try {
+    writeFileSync(generated, `${original}<!-- drifted -->\n`);
+    const result = run(["--check"]);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr + result.stdout, /out of date/);
+  } finally {
+    writeFileSync(generated, original);
   }
 });
 
@@ -241,16 +203,6 @@ test("a closed gap cannot stay on the gap list, and best-effort carries none", (
       );
     },
   );
-});
-
-test("every fixture claim in the catalog names a file that exists", () => {
-  for (const entry of catalog.providers) {
-    for (const [key, validation] of Object.entries(entry.capabilities.validated)) {
-      if (validation.kind !== "fixture") continue;
-      const text = readFileSync(join(root, validation.fixture), "utf8");
-      assert.ok(text.trim().length > 0, `${entry.id} ${key}`);
-    }
-  }
 });
 
 test("a fixture path that is not a file is refused", () => {

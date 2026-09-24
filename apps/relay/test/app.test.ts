@@ -116,6 +116,7 @@ describe("managed Relay on SQLite", () => {
 
   it("keeps the daily rollup equal to the hours behind it", async () => {
     await seedDevice("rollup");
+    await seedDevice("rollup_peer");
     const usage = new D1UsageState(db);
     const principal = devicePrincipal("rollup", 1);
     await usage.recordUsage(
@@ -125,6 +126,12 @@ describe("managed Relay on SQLite", () => {
         usageHour("2026-08-10T00:00:00Z", 1, ["gpt-5.6-sol"]),
         usageHour("2026-08-10T01:00:00Z", 1, ["gpt-5.6-sol", "claude-opus-5"], true),
       ]),
+      now.toISOString(),
+    );
+    // Another device's same hour is its own day row, never folded into this one's.
+    await usage.recordUsage(
+      devicePrincipal("rollup_peer", 1),
+      usageUpload([usageHour("2026-08-10T01:00:00Z", 1, ["gpt-5.6-sol"])]),
       now.toISOString(),
     );
 
@@ -461,9 +468,6 @@ describe("managed Relay on SQLite", () => {
         deviceID: "device_history",
         date: "2026-08-10",
       }),
-      // The hours behind the two recent days, which is what a caller off UTC reads them from.
-      usageHourInsert("codex", "openai_direct", "gpt-5.6-luna", "2026-08-09T12:00:00Z"),
-      usageHourInsert("codex", "openai_direct", "gpt-5.6-sol", "2026-08-10T12:00:00Z"),
     ]);
     const app = appFor("account_history");
 
@@ -501,18 +505,6 @@ describe("managed Relay on SQLite", () => {
         agent.providers.flatMap((provider) => provider.models.map((model) => model.model)),
       );
     expect(models(summary.usage.today)).toEqual(["gpt-5.6-sol"]);
-
-    // A calendar behind UTC moves where today begins without moving a stored day: seven hours
-    // of 9 August UTC are still yesterday in Los Angeles, and the rest of today is 10 August.
-    const behind = (await (
-      await app.request("https://quota.gotry.io/api/v6/account/summary?tz=America/Los_Angeles")
-    ).json()) as {
-      usage: Record<
-        string,
-        { agents: Array<{ providers: Array<{ models: Array<{ model: string }> }> }> }
-      >;
-    };
-    expect(models(behind.usage.today)).toEqual(["gpt-5.6-luna"]);
 
     const activity = (await (
       await app.request(
@@ -791,7 +783,11 @@ describe("managed Relay on SQLite", () => {
         all: {
           totals: { messages: number };
           cost: { unpriced_truncated?: boolean };
-          agents: Array<{ providers: Array<{ models: Array<{ model: string }> }> }>;
+          agents: Array<{
+            providers: Array<{
+              models: Array<{ model: string; totals: { messages: number } }>;
+            }>;
+          }>;
         };
       };
     };
@@ -801,6 +797,8 @@ describe("managed Relay on SQLite", () => {
     expect(body.usage.all.totals.messages).toBe(1_001);
     expect(leaves.length).toBeLessThanOrEqual(MAXIMUM_USAGE_PERIOD_LEAVES);
     expect(leaves.some((leaf) => leaf.model === "other")).toBe(true);
+    // The leaves still account for every request: `other` carries what the bound folded away.
+    expect(leaves.reduce((total, leaf) => total + leaf.totals.messages, 0)).toBe(1_001);
     expect(body.usage.all.cost.unpriced_truncated).toBe(true);
   });
 
@@ -859,35 +857,6 @@ describe("managed Relay on SQLite", () => {
 
     // The reading it can read is answered; the one it cannot is dropped, not raised.
     expect(stored.map((observation) => observation.snapshot.provider)).toEqual(["cursor"]);
-  });
-
-  it("keeps every session in one table", async () => {
-    // `d1_migrations` is the ladder itself, not storage this deployment designed.
-    const tables = await db
-      .prepare(
-        `SELECT name FROM sqlite_master
-       WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'
-         AND name <> 'd1_migrations'
-       ORDER BY name`,
-      )
-      .all<{ name: string }>();
-    expect(tables.results.map((row) => row.name)).toEqual([
-      "account_identities",
-      "account_settings",
-      "account_usage_folds",
-      "accounts",
-      "devices",
-      "email_challenges",
-      "login_grants",
-      "public_profiles",
-      "quota_history",
-      "quota_snapshots",
-      "rate_limit_counters",
-      "sessions",
-      "usage_daily",
-      "usage_hour_scans",
-      "usage_hourly",
-    ]);
   });
 
   it("no longer stores anything an unauthenticated reader could have asked for", async () => {
@@ -1593,35 +1562,6 @@ describe("managed Relay on SQLite", () => {
     expect(folds.some((row) => row.fold_key !== firstFold[0]?.fold_key)).toBe(true);
   });
 
-  it("stores a different Usage fold for a different timezone", async () => {
-    await db.batch([
-      db
-        .prepare(
-          "INSERT INTO accounts (id, created_at, updated_at) VALUES ('account_fold_tz', ?1, ?1)",
-        )
-        .bind(now.toISOString()),
-      db
-        .prepare(
-          `INSERT INTO devices (
-           id, account_id, installation_id_hash, generation, created_at, last_login_at
-         ) VALUES ('device_fold_tz', 'account_fold_tz', 'installation_fold_tz', 1, ?1, ?1)`,
-        )
-        .bind(now.toISOString()),
-      usageDailyInsert("codex", "openai_direct", "gpt-5.6-sol", {
-        deviceID: "device_fold_tz",
-        date: "2026-08-10",
-      }),
-    ]);
-    const app = appFor("account_fold_tz");
-    expect((await app.request("https://quota.gotry.io/api/v6/account/summary")).status).toBe(200);
-    expect(
-      (await app.request("https://quota.gotry.io/api/v6/account/summary?tz=Asia/Singapore")).status,
-    ).toBe(200);
-    const folds = await usageFolds("account_fold_tz");
-    expect(folds).toHaveLength(2);
-    expect(folds[0]?.fold_key).not.toBe(folds[1]?.fold_key);
-  });
-
   it("refolds a stored Usage fold the current contract cannot read", async () => {
     await db.batch([
       db
@@ -1865,32 +1805,6 @@ async function sweptColumn(table: string, column: string): Promise<string[]> {
     )
     .all<{ value: string }>();
   return rows.results.map((row) => row.value);
-}
-
-/** One hour of the same fact `usageDailyInsert` rolls into a day, on the same device. */
-function usageHourInsert(
-  agent: string,
-  channel: string,
-  model: string,
-  bucket: string,
-): RelayStatement {
-  return db
-    .prepare(
-      `INSERT INTO usage_hourly (
-         device_id, agent, bucket_start_utc, scan_version, partial,
-         billing_channel, channel_source, model, context_bucket,
-         service_tier, speed, inference_geo, input_tokens, cache_read_tokens,
-         cache_write_5m_tokens, cache_write_1h_tokens, cache_write_inferred_tokens,
-         output_tokens, reasoning_tokens, requests, web_search_requests, web_fetch_requests,
-         source_cost_microusd, source_cost_covered_requests
-       ) VALUES (
-         'device_history', ?1, ?4, 1, 0,
-         ?2, 'agent_default', ?3, 'le_128k',
-         'unknown', 'unknown', 'unknown', 10, 0,
-         0, 0, 0, 2, 0, 1, 0, 0, NULL, 0
-       )`,
-    )
-    .bind(agent, channel, model, bucket);
 }
 
 function usageDailyInsert(

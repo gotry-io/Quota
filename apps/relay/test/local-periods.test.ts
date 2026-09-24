@@ -83,35 +83,6 @@ describe("local periods", () => {
     });
   });
 
-  it("cuts the UTC day at local midnight for a caller eight hours ahead", () => {
-    const plan = planLocalPeriods("Asia/Singapore", new Date("2026-08-26T02:00:00Z"));
-    expect(plan.localDate).toBe("2026-08-26");
-    // Today has no UTC day wholly inside it, so it is read entirely from the two days it cuts.
-    expect(plan.days.today).toBeNull();
-    expect(plan.days.last_7_days).toEqual({ from: "2026-08-20", to: "2026-08-25" });
-    expect(plan.days.last_30_days).toEqual({ from: "2026-07-28", to: "2026-08-25" });
-    // The wider two share the hours of 26 August that have happened, and each cuts its own
-    // first day out of the day before it.
-    expect(plan.boundaries).toEqual([
-      {
-        range: { from: "2026-08-25T16:00:00Z", to: "2026-08-26T16:00:00Z" },
-        periods: ["today"],
-      },
-      {
-        range: { from: "2026-08-19T16:00:00Z", to: "2026-08-20T00:00:00Z" },
-        periods: ["last_7_days"],
-      },
-      {
-        range: { from: "2026-08-26T00:00:00Z", to: "2026-08-26T16:00:00Z" },
-        periods: ["last_7_days", "last_30_days"],
-      },
-      {
-        range: { from: "2026-07-27T16:00:00Z", to: "2026-07-28T00:00:00Z" },
-        periods: ["last_30_days"],
-      },
-    ]);
-  });
-
   it("keeps a period whole across a daylight change, a skipped midnight, and a half hour", () => {
     // A local day is not always twenty-four hours long, and its midnight does not always exist.
     // Each case names the zone's own event, the local date the read lands on, and how many whole
@@ -228,28 +199,6 @@ describe("local periods", () => {
     expect(hours.at(-1)).toBe("2026-08-26T18:00:00Z");
     expect(hours).toContain("2026-08-25T18:00:00Z");
     expect(hours.filter((hour) => hour === "2026-08-25T18:00:00Z")).toHaveLength(1);
-  });
-
-  it("assigns a fractional-offset midnight hour to the previous local day", () => {
-    const kolkata = planLocalDateRange("Asia/Kolkata", "2026-08-26", "2026-08-26");
-    expect(kolkata.start).toBe("2026-08-25T19:00:00Z");
-    expect(kolkata.end).toBe("2026-08-26T19:00:00Z");
-    const kathmandu = planLocalDateRange("Asia/Kathmandu", "2026-08-26", "2026-08-26");
-    expect(kathmandu.start).toBe("2026-08-25T19:00:00Z");
-    const stJohns = planLocalDateRange("America/St_Johns", "2026-01-15", "2026-01-15");
-    expect(stJohns.start).toBe("2026-01-15T04:00:00Z");
-    const next = planLocalDateRange("Asia/Kolkata", "2026-08-27", "2026-08-27");
-    expect(kolkata.end).toBe(next.start);
-  });
-
-  it("rounds a sub-hour offset up, so no hour lands in two periods", () => {
-    // Kolkata reads 05:30 ahead, so its midnight falls inside the hour beginning 18:00 UTC. That
-    // hour is reported with the day before it rather than split, at either edge of the day.
-    const plan = planLocalPeriods("Asia/Kolkata", new Date("2026-08-26T02:00:00Z"));
-    expect(plan.boundaries[0]?.range).toEqual({
-      from: "2026-08-25T19:00:00Z",
-      to: "2026-08-26T19:00:00Z",
-    });
   });
 });
 

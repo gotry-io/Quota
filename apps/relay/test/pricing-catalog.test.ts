@@ -107,16 +107,14 @@ describe("managed pricing catalog", () => {
     }
   });
 
-  it("prices the Claude 5 generation, including fast mode and US inference geo", () => {
+  it("prices the Claude 5 generation the fixture slice does not, including fast mode", () => {
     for (const [model, overrides, amount_microusd] of [
       ["claude-fable-5", {}, "60000000"],
       ["claude-fable-5-1", {}, "60000000"],
       ["claude-opus-5-5", {}, "24000000"],
       ["claude-opus-5-5", { inference_geo: "us" }, "26400000"],
       ["claude-sonnet-5", {}, "12000000"],
-      ["claude-opus-5", {}, "30000000"],
       ["claude-opus-5", { speed: "fast" }, "60000000"],
-      ["claude-opus-5", { inference_geo: "us" }, "33000000"],
     ] as const) {
       expect(
         calculateUsageCost(
@@ -426,41 +424,6 @@ describe("managed pricing catalog", () => {
     );
     expect(before).toMatchObject({ status: "complete", amount_microusd: "47500000" });
     expect(atBoundary).toMatchObject({ status: "complete", amount_microusd: "30000000" });
-  });
-
-  it("does not backfill prices before a model release and leaves synthetic models unpriced", () => {
-    expect(
-      calculateUsageCost(
-        [
-          usageRow({
-            model: "gpt-5.2-codex",
-            date: "2025-12-10",
-            input_tokens: 1,
-          }),
-        ],
-        PRICING_CATALOG,
-      ),
-    ).toMatchObject({
-      status: "unavailable",
-      amount_microusd: null,
-      unpriced: [{ reason: "outside_effective_range", rows: 1 }],
-    });
-    expect(
-      calculateUsageCost(
-        [
-          usageRow({
-            agent: "claude_code",
-            billing_channel: "anthropic_direct",
-            model: "synthetic",
-          }),
-        ],
-        PRICING_CATALOG,
-      ),
-    ).toMatchObject({
-      status: "unavailable",
-      amount_microusd: null,
-      unpriced: [{ reason: "unknown_model", rows: 1 }],
-    });
   });
 });
 

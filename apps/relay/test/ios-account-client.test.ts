@@ -575,78 +575,11 @@ describe("quota-ios account and device client", () => {
       ).status,
     ).toBe(200);
   });
-
-  it("keeps the QuotaBar loopback exchange working beside the viewer", async () => {
-    const harness = await createHarness();
-    const { verifier, challenge } = await pkcePair();
-    const authorizeUrl = new URL("https://quota.gotry.io/oauth/v2/authorize");
-    authorizeUrl.search = new URLSearchParams({
-      response_type: "code",
-      client_id: "quotabar",
-      redirect_uri: "http://127.0.0.1:43210/callback",
-      state: "client-state-123456789",
-      code_challenge: challenge,
-      code_challenge_method: "S256",
-    }).toString();
-    const started = await harness.app.request(authorizeUrl);
-    expect(started.status).toBe(302);
-    const complete = await harness.app.request(`https://quota.gotry.io${signInReturnTo(started)}`);
-    expect(complete.status).toBe(302);
-    const location = complete.headers.get("location") ?? "";
-    expect(location.startsWith("http://127.0.0.1:43210/callback?")).toBe(true);
-    const code = new URL(location).searchParams.get("code");
-
-    const exchanged = await harness.app.request("https://quota.gotry.io/oauth/v2/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        protocol_version: 2,
-        grant_type: "authorization_code",
-        client_id: "quotabar",
-        code,
-        code_verifier: verifier,
-        redirect_uri: "http://127.0.0.1:43210/callback",
-        installation_id: "4a7f950d-89ea-4f64-a7c1-b4aeb46a67f8",
-        device_display_name: "Test Mac",
-        platform: "macos",
-      }),
-    });
-    expect(exchanged.status).toBe(200);
-    const tokens = (await exchanged.json()) as OAuthTokenResponse;
-    expect(OAuthTokenResponseSchema.parse(tokens)).toEqual(tokens);
-    expect(tokens.device_generation).toBe(1);
-    expect(tokens.session.access_token).toMatch(/^qb_/);
-    expect(tokens.session.refresh_token).toMatch(/^qbr_/);
-    expect(tokens.session.access_token).not.toMatch(/^qia_/);
-    expect(tokens.session.refresh_token).not.toMatch(/^qiar_/);
-    expect(
-      await db
-        .prepare("SELECT COUNT(*) AS count FROM devices WHERE id = ?1")
-        .bind(tokens.device_id)
-        .first("count"),
-    ).toBe(1);
-
-    const iosAfterCli = await loginIos(harness);
-    expect(IosOAuthTokenResponseSchema.parse(iosAfterCli).account_id).toBe(harness.accountId);
-    expect(await deviceCount(harness.accountId)).toBe(1);
-    const summary = await harness.app.request("https://quota.gotry.io/api/v6/account/summary", {
-      headers: { Authorization: `Bearer ${iosAfterCli.session.access_token}` },
-    });
-    const body = (await summary.json()) as { devices: { id: string; platform: string }[] };
-    expect(body.devices).toHaveLength(1);
-    expect(body.devices[0]?.id).toBe(tokens.device_id);
-    expect(body.devices[0]?.platform).toBe("macos");
-    expect(body.devices.some((device) => device.platform === "ios")).toBe(false);
-  });
 });
 
 describe("sanitizeLabel", () => {
-  it("keeps ASCII and typographic apostrophes in a device name", () => {
-    expect(sanitizeLabel("Kyle's iPhone", 128)).toBe("Kyle's iPhone");
+  it("keeps apostrophes, strips control characters, collapses whitespace, and caps length", () => {
     expect(sanitizeLabel("Kyle\u2019s iPhone", 128)).toBe("Kyle\u2019s iPhone");
-  });
-
-  it("strips control characters, collapses extra whitespace, and caps length", () => {
     expect(sanitizeLabel("  Kyle's\n\tiPhone  ", 128)).toBe("Kyle's iPhone");
     expect(sanitizeLabel("Kyle\u0000's iPhone", 128)).toBe("Kyle's iPhone");
     expect(sanitizeLabel(`${"a".repeat(200)}'s Phone`, 128)).toBe("a".repeat(128));

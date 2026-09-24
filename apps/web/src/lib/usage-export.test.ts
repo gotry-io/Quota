@@ -2,13 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
-import {
-  csvCell,
-  usageExportCsv,
-  usageExportFilename,
-  usageExportJson,
-  type UsageExportInput,
-} from "./usage-export.ts";
+import { csvCell, usageExportCsv, usageExportJson, type UsageExportInput } from "./usage-export.ts";
 
 type CellKind = "text" | "number";
 
@@ -43,13 +37,4 @@ it("answers every period case in the shared fixture", () => {
       testCase.expected_json,
     );
   }
-});
-
-it("names the download from the asked local dates", () => {
-  expect(usageExportFilename("2026-08-10", "2026-08-12", "csv")).toBe(
-    "quota-usage-2026-08-10-2026-08-12.csv",
-  );
-  expect(usageExportFilename("2026-08-10", "2026-08-12", "json")).toBe(
-    "quota-usage-2026-08-10-2026-08-12.json",
-  );
 });

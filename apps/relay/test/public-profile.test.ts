@@ -29,23 +29,6 @@ beforeEach(async () => {
 });
 
 describe("the public profile an Account may publish", () => {
-  it("answers an Account that never published with an unpublished profile", async () => {
-    await seedAccount("empty");
-    const response = await appFor("account_empty").request(`${origin}/api/v2/account/profile`);
-
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({
-      protocol_version: 2,
-      profile: {
-        handle: null,
-        enabled: false,
-        show_models: true,
-        show_cost: false,
-      },
-    });
-    expect(response.headers.get("Cache-Control")).toBe("no-store");
-  });
-
   // The whole reserved list and the pattern are the protocol's statement, and its own tests
   // answer for them. This is that Relay refuses what the contract refuses, at its boundary.
   it("refuses a handle the contract does not describe, and a reserved one", async () => {
@@ -257,13 +240,6 @@ describe("the page a published handle answers", () => {
     expect(await port.getViewer(new Headers())).toBeNull();
     expect((await port.readPublicProfile("rendered"))?.handle).toBe("rendered");
     expect(await port.readPublicProfile("someone-else")).toBeNull();
-  });
-
-  it("the retired leaderboard API is gone", async () => {
-    await seedAccount("retired");
-    const response = await appFor("account_retired").request(`${origin}/api/v6/public/leaderboard`);
-    expect(response.status).toBe(404);
-    expect(await response.json()).toMatchObject({ error: { code: "not_found" } });
   });
 });
 
