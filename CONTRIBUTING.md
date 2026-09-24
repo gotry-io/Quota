@@ -93,6 +93,46 @@ Linux jobs still run in full. `update-bump-prs` re-syncs an open bump pull reque
 Relay/website production is the owner action in `docs/relay-self-host.md`. Local builds are
 verification; do not deploy without explicit authorization.
 
+## Tests
+
+Few and exact. A test exists to refuse a specific wrong change; if nobody can say which change it
+would refuse, it is not a test, it is weight.
+
+**What earns a test**
+
+- A contract every runtime answers: the fixture under `packages/protocol/fixtures` is the test, and
+  each runtime walks it once. Do not restate a fixture case as a hand-written unit test.
+- A boundary or failure mode: the refusal at the edge (one over the cap, one second past the span,
+  the 412, the 409, the unreadable Keychain), never only the happy path.
+- A defect that shipped, or nearly did: pin the scenario that would have caught it, in the words
+  of the scenario.
+- A trust, retention, or money invariant: a session's scopes, what a delete removes, what a price
+  comes to.
+- A concurrency or lifecycle rule that reads correct and is not: the two uploads, the cancelled
+  refresh, the pending edit that would be lost.
+
+**What does not**
+
+- A getter, a mapping, a wrapper, a `Codable` round trip of a struct with no custom coding, or
+  generated code. The compiler and the fixture already hold these.
+- Copy equality for a sentence that is not a shared fixture case; the UI is not the source of
+  its own words.
+- The same rule proven twice at two layers (the model and the view that shows it; the client and
+  the route that calls it). Prove it where it lives.
+- A test that cannot fail: `!= nil` on a value that is always set, a mock that returns what the
+  assertion checks, an `XCTAssert(true)` after a tap.
+- A screenshot or census case whose only reader is a person who will not look.
+
+**How**
+
+- One rule, one test, named as the sentence it refuses: `refusesAPointOlderThanTheSpanPlusOneBucket`.
+- No wall clock, no sleep, no fixed delay: inject the clock, order by events, wait for a state.
+- A test that writes a real repository file is that file's only reader.
+- When the code a test guards is deleted or moved, the test goes with it in the same change.
+- Count floors in CI are a sanity bound, not coverage. Coverage is not a target.
+- Before adding a test, look for the one that already refuses the change; extend it if it reads
+  better, otherwise replace it. Adding is not free: the suite is run on every merge.
+
 ## Review
 
 PRs state what behavior changed, why, how it was validated, and the limits of that validation.
