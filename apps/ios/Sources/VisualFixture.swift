@@ -10,6 +10,8 @@ enum VisualFixture: String, CaseIterable, Sendable {
   case confirmAccount = "confirm-account"
   case connectRefreshFailed = "connect-refresh-failed"
   case loading
+  case launch
+  case updating
   case content
   case cachedError = "cached-error"
   case empty
@@ -30,6 +32,17 @@ enum VisualFixture: String, CaseIterable, Sendable {
     let valueIndex = arguments.index(after: index)
     guard valueIndex < arguments.endIndex else { return nil }
     return VisualFixture(rawValue: arguments[valueIndex])
+  }
+
+  /// `--launch-progress <0…1>`: how far the `launch` fixture holds the mark's fill. Defaults to
+  /// halfway, so the track and the filled ring both show.
+  static func launchProgress(arguments: [String]) -> Double {
+    guard let index = arguments.firstIndex(of: "--launch-progress") else { return 0.5 }
+    let valueIndex = arguments.index(after: index)
+    guard valueIndex < arguments.endIndex, let value = Double(arguments[valueIndex]) else {
+      return 0.5
+    }
+    return min(max(value, 0), 1)
   }
 }
 

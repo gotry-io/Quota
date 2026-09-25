@@ -1,5 +1,5 @@
 {
-  "$comment": "One statement of what a stored browser session answers, for the three providers whose web session both Quota clients read. Each case replays `exchanges` as the queue of responses a provider gives, once for `validate` and once for `collect`: a request answers the exchange at its own position, and an operation that stops early leaves the rest of the queue unused. `expect.validated` is the proven session or the error category the validation fails with; `expect.snapshot` is the reading or `null`, and a `null` reading names its category in `snapshot_error`. Every failure names the provider's own `sources` entry, which is the rung both runtimes report.",
+  "$comment": "One statement of what a stored browser session answers, for the three providers whose web session both Quota clients read. Each case replays `exchanges` as the queue of responses a provider gives, once for `validate` and once for `collect`: a request answers the exchange at its own position, and an operation that stops early leaves the rest of the queue unused. A runtime may ask for requests that do not depend on each other at the same time (Claude's `/api/organizations` and `/api/account`); each of those answers the first unused exchange with its own method and path, so such a case declares every one of them. `expect.validated` is the proven session or the error category the validation fails with; `expect.snapshot` is the reading or `null`, and a `null` reading names its category in `snapshot_error`. Every failure names the provider's own `sources` entry, which is the rung both runtimes report.",
   "sources": {
     "codex": "chatgpt_web_usage_api",
     "claude": "claude_web_usage_api",
@@ -343,6 +343,12 @@
         {
           "method": "GET",
           "path": "/api/organizations",
+          "status": 401,
+          "body": {}
+        },
+        {
+          "method": "GET",
+          "path": "/api/account",
           "status": 401,
           "body": {}
         }

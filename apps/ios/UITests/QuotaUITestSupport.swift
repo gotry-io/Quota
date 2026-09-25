@@ -48,11 +48,11 @@ class QuotaUITestCase: XCTestCase {
   /// simulator or an earlier run left behind: the profile's size (`QUOTA_IOS_TEXT_SIZE`), else the
   /// standard `large`; and the in-app Appearance preference as System, so the device appearance
   /// `setUpWithError` set is the one drawn rather than a saved Light or Dark.
-  func launch(fixture: String, route: String? = nil, textSize: String? = nil)
-    -> XCUIApplication
-  {
+  func launch(
+    fixture: String, route: String? = nil, textSize: String? = nil, extra: [String] = []
+  ) -> XCUIApplication {
     let app = XCUIApplication()
-    var arguments = ["--visual-fixture", fixture]
+    var arguments = ["--visual-fixture", fixture] + extra
     if let route {
       arguments += ["--route", route]
     }
@@ -804,7 +804,6 @@ class QuotaUITestCase: XCTestCase {
       "overview.root",
       "connect.root",
       "confirm.root",
-      "root.loading",
     ]
     for id in ids {
       if app.descendants(matching: .any)[id].exists { return id }
@@ -951,9 +950,6 @@ struct KeptAuditorExemption {
 /// unless a comment says otherwise.
 private let keptAuditorExemptions: [KeptAuditorExemption] = [
   // System list section chrome: Dynamic Type "partially unsupported" on iOS 26.3.
-  .init(
-    type: "dynamic-type", screen: "overview.root", identifier: "section.footer.updated",
-    label: "", rule: "dynamic-type-section.footer.updated"),
   .init(
     type: "dynamic-type", screen: "overview.root", identifier: "section.header.mac-setup",
     label: "", rule: "dynamic-type-section.header.mac-setup"),

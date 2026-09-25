@@ -17,6 +17,9 @@ struct QuotaApp: App {
         if let route = FixtureRoute.parse(arguments: arguments) {
           model.applyFixtureRoute(route)
         }
+        if fixture == .launch {
+          model.posedLaunchProgress = VisualFixture.launchProgress(arguments: arguments)
+        }
         _model = State(initialValue: model)
         return
       }
@@ -38,9 +41,7 @@ struct QuotaApp: App {
           #if DEBUG
             if model.skipsRestore { return }
           #endif
-          await model.restore()
-          await model.setForeground(true)
-          model.observeApplicationLifecycle()
+          await model.launch()
         }
         .onOpenURL { url in
           model.openDeepLink(url)

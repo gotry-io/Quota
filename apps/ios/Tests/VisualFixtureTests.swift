@@ -27,6 +27,8 @@ struct VisualFixtureParserTests {
       ("confirm-account", VisualFixture.confirmAccount),
       ("connect-refresh-failed", VisualFixture.connectRefreshFailed),
       ("loading", VisualFixture.loading),
+      ("launch", VisualFixture.launch),
+      ("updating", VisualFixture.updating),
       ("content", VisualFixture.content),
       ("cached-error", VisualFixture.cachedError),
       ("empty", VisualFixture.empty),

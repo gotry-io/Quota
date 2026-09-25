@@ -96,106 +96,23 @@ offered, presents the sign-in page as a sheet over what is already on screen; no
 way in is chosen there. Connect is presented directly, without an empty NavigationStack. Tabs use the iOS 26 `Tab` initializer and
 `tabBarMinimizeBehavior(.onScrollDown)`. There is no root backdrop.
 
-### Connect Account
+Launching, signed out and signed in are one surface: the tabs are built once, while the session is
+still being restored, and restoring it does not rebuild them. There is no loading screen in front
+of them.
 
-The sign-in page, presented as a sheet from every **Sign in to Quota** invitation, and the whole
-screen while a sign-in is in flight or a `pending` session's first read has failed.
+### Launch
 
-The Keychain record is one session with `activation: pending | active`. `completeLogin` writes
-`pending`. A pending session may fetch the identifying Account summary. `restore()` of a pending
-session returns to this confirmation flow (or its first-refresh failure state) and never to the
-signed-in tabs. **Continue** is the only promotion of that same session to `active`. **Use a
-different account** and Log Out revoke and clear either state.
-
-A welcome screen in a vertically centered, scroll-safe column with a maximum content width of 320
-points and system safe-area padding. Connecting and a pending session's first-refresh failure keep
-their copy inside this same layout.
-
-- Top: the Quota catalog mark (`quota.svg` via `QuotaMark`, 72 points, `QuotaTheme.emerald`) with
-  accessibility name **Quota**, the word **Quota** in `largeTitle.bold`, and **Your AI quota, on
-  every device.** in `title3` secondary.
-- Middle: three feature lines in `support`, each with a leading emerald SF Symbol —
-  `gauge.with.dots.needle.33percent` **Remaining quota for every provider**, `macbook.and.iphone`
-  **What your Macs report, on this iPhone**, `bell.badge` **Alerts before a window runs out**.
-- Bottom: three ways in, 12pt apart, in the order every Quota surface lists them — Apple, GitHub,
-  Email. Each is 50pt tall.
-
-**Continue with Apple**: `SignInWithAppleButton(.continue)`, Apple's own control drawn by Apple,
-capsule-clipped to match, black in light appearance and white in dark as Apple's guidelines pair
-them. Its label, mark, and sheet are Apple's; the app draws no substitute glyph and adds no tint.
-
-**Continue with GitHub** (`buttonStyle(.glassProminent)`, emerald tint) and **Continue with
-Email** (`.bordered`). Both open the same Relay authorize URL, because that is one round trip:
-Relay's `/sign-in` page is what asks which Account this is and offers every channel that reaches
-one ([ADR 0032](../../docs/decisions/0032-an-account-owns-its-identities.md)). Their accessibility
-hint is **Opens Quota sign-in in your browser.**
-
-While a sign-in is in flight the three are replaced by one disabled control, `connect.connecting`:
-**Connecting…** with an inline ProgressView on neutral `.glass`. Its accessibility label is
-**Connecting** and it is not actionable. Which channel opened the browser is not something the
-app knows once the sheet is up — the page asks — so the busy label names none of them, and
-Apple's control, which has no busy presentation of its own, is not drawn then rather than shown
-disabled.
-
-Footnote: **Signing in shows what QuotaBar reports from your Macs, alongside what this iPhone
-reads.** The longer product and privacy explanation lives on Settings › About, not on Connect.
-
-Only exceptional state copy appears under the footnote as a plain Label with an SF Symbol:
-
-- expired: **Session expired. Connect again.**
-- connect failure default: **Couldn't connect. Try again.**
-
-Continue with Apple asks on the device instead: `ASAuthorizationAppleIDProvider` requests the full
-name and email scopes and a nonce, and the identity token it returns is posted straight to Relay,
-which answers with the same `pending` session a browser sign-in opens. There is no browser sheet and
-no `return_to`. Cancelling at Apple returns to the normal signed-out state without an error; any
-other failure shows the connect-failure copy. Confirmation, Retry, and Use a different account are
-the same screens either way.
-
-The browser channels start `ASWebAuthenticationSession` for the Relay authorize URL with
-`prefersEphemeralWebBrowserSession = false`, so the sheet shares Safari cookies. GitHub can reuse
-an account already signed in in Safari; the session lives in the system browser, not in the app.
-The system sheet owns cancel and is the connecting progress presentation. Cancellation returns to
-the normal signed-out state without an error. The app never embeds a web view.
-
-Email finishes somewhere else. The link Relay mails is opened by the mail app, so the navigation
-that proves the address runs in the system browser rather than inside the authentication session,
-and Relay's redirect to `io.gotry.quota:/oauth/callback` arrives as a URL open. The app exchanges
-that code against the attempt it is still holding, then ends the sheet that is waiting for a
-callback it will never see — so cancel there is not a sign-out. The attempt is held in memory
-alone: a relaunch while the person is in their mail app leaves no verifier to spend, and the app
-says **Couldn't connect. Try again.** rather than pretending it can finish.
-
-After Relay issues a session the first Account refresh must succeed and name a non-blank
-`summary.account.displayLabel` before confirmation is constructed. The app does not open the
-signed-in tabs. It replaces Connect content on the same signed-out screen:
-
-- A `QuotaCard` with the Settings identity circle (44-point, first letter of the account label on
-  brand emerald) and the account label (`headline`), plus **Connected as `<label>`.**
-- Question **Use this GitHub account?** (`title3`).
-- Primary **Continue** (`glassProminent`, system accent, no extra `.tint`) — promotes the pending
-  session to `active` and enters the signed-in tabs.
-- Secondary **Use a different account** (`.bordered`) — revokes the session just opened and starts
-  Connect with GitHub again with `prefersEphemeralWebBrowserSession = true` so GitHub presents a
-  login page. That second success confirms the same way.
-
-If that first refresh fails, the session stays `pending`. Connect is replaced by **Retry** (repeats
-the identifying read) and **Use a different account**, still under the welcome header and feature
-lines. Continue is not shown, and the app does not invent a generic **Account** identity. A 401 or
-expired result revokes the pending session and shows the expired connect copy.
-
-There is no sheet, `presentationDetents`, or `glassEffect` on the title or body. Hit targets stay
-at least 44pt (Connect, Retry, and Continue 50pt).
-
-Connect failures use a specific sentence when one is known, otherwise the default retry:
-
-| Cause | Copy |
-| --- | --- |
-| Unexpected callback (`state` mismatch, missing code, token in the callback) | **The browser returned an unexpected response. Try again.** |
-| Network (`unavailable` / timeout) | **Couldn't reach quota.gotry.io.** |
-| Relay 4xx (`invalid_grant`, unauthorized, expired grant) | **The sign-in expired before it finished. Try again.** |
-| Malformed summary or blank `displayLabel` | **Couldn't connect. Try again.** |
-| Anything else | **Couldn't connect. Try again.** |
+The system launch screen (`UILaunchScreen`) is the `LaunchBackground` colour — the canvas surface,
+`#FFFFFF` light and `#111111` dark — with the 108-point Quota mark as a faint track (`LaunchMark`:
+the brand colour at 18% already blended onto that background, `#D3E6E1` light and `#25362F` dark)
+centred on the whole screen. The app's first frame is the same picture at the same size and
+position (`QuotaDesign.Layout.quotaMarkLaunch`, centred ignoring safe areas), so the handover
+neither moves nor changes colour. The launch overlay then fills the ring and then the tail along it (0.45 s, ease-out), and leaves
+with a slight scale-up to 1.06 while it fades into the Overview (0.22 s). It waits only for the
+local cache restore (the first content), never for the network, and never waits longer than
+0.8 s. With Reduce Motion the mark is whole from the start, does not scale, and only fades. The
+overlay is decoration: VoiceOver never lands on it, it takes no touches, and it is gone once
+dismissed. Visual fixtures start without it, except `launch`, which holds it still.
 
 ### Overview
 
@@ -208,13 +125,24 @@ Always shown behind the tab bar. Its content is one merged list, whichever sides
 | Both | Title **Quota**. One row per subscription, merged by [ADR 0003](../../docs/decisions/0003-observation-preserving-subscription-merge.md) — an account both a Mac and this phone read is one row, and a tie goes to this phone because it is the authority for the device in front of you. Today is still the Account's. |
 
 Content comes from the last complete Account summary and the last local collection, then from a
-refresh of both. An inset-grouped `List`. Pull to refresh runs the local pass and, with an account,
-one Today fetch. A refresh in flight ignores additional refresh requests.
+refresh of both. An inset-grouped `List`. Pull to refresh and the refresh button run the local
+pass and, with an account, one Today fetch, at the same time. Each side reaches the screen the
+moment it answers: the summary as soon as Relay does, and each provider's reading as it comes
+back, so one slow provider holds up only its own row. A pass that runs out of time keeps the
+readings that arrived and the last reading of the providers that did not. A refresh in flight
+ignores additional refresh requests.
 
 Header:
 
 - Title is **Quota** in every phase. Account identity lives in Settings; the body does not
-  repeat it. The navigation title stays large; `.navigationSubtitle` is not used.
+  repeat it. The navigation title stays large.
+- `.navigationSubtitle` under it is the canonical freshness line: **Updating…** while a refresh
+  runs — **Updating… 2 of 3** once one of several reads has answered — and otherwise the shared
+  **Updated** age of the readings on screen (`QuotaFormat.updated`). Nothing is said before
+  anything has been read.
+- A trailing toolbar button, `arrow.clockwise` (**Refresh**, `overview.refresh`), runs the same
+  refresh as pull to refresh. While a refresh runs it shows a small `ProgressView` in its place
+  and is disabled.
 
 Body, in order:
 
@@ -244,9 +172,16 @@ Body, in order:
    apply the same rule at the instant they draw. Remaining has no "left" or "remaining" suffix.
    Budget windows with an amount use `71% · $3.75`, percent-only windows use `71%`, and
    balance-only windows use **Balance** plus the unit amount. Empty windows: **No quota windows
-   yet.** The canonical **Updated** age is the quota Section footer in `meta` under the last
-   card; it wraps and is spoken in full.
-3. If there are no subscriptions: two outcomes as a wrapping `VStack` (not a
+   yet.** While a refresh runs, a card whose reading has not come back yet keeps its last
+   reading and shows a mini `ProgressView` in the chevron's 16-point frame, so nothing moves;
+   its header is spoken with **Updating…**. A refresh never animates the layout
+   ([Spacing, radius, motion](../../docs/design.md#spacing-radius-motion)).
+3. With nothing ever read on this phone — no cached summary, no local collection — and the first
+   refresh on its way: placeholder cards in place of the empty state, one per provider session,
+   or two when the Account is the only source. Each is a `QuotaCard` with the quota card's
+   shape drawn in `tertiarySystemFill` bars (no text to read or clip), and one VoiceOver element **Loading quota**
+   (`overview.placeholder`). The empty state appears only once a refresh answered empty.
+4. If there are no subscriptions: two outcomes as a wrapping `VStack` (not a
    `ContentUnavailableView` title), so each path stays a clear choice at accessibility sizes.
    **See quota on this iPhone**, then a full-width `.borderedProminent` **Connect a provider**
    (`overview.connect-provider`; switches to Settings, where the Providers group is), then
@@ -255,7 +190,7 @@ Body, in order:
    your other devices.** With an account, only Connect, and **Set up QuotaBar on a Mac to start
    reporting, or connect a provider to read it on this iPhone.** The container keeps
    `overview.empty`.
-4. Today, only when an account answered, before setup or device support: one compact List row —
+5. Today, only when an account answered, before setup or device support: one compact List row —
    **Today** leading (`section.header.today`), tokens and API-equivalent cost trailing in
    `support` (not hero type). The row carries `overview.today` and opens the Usage tab with
    `UsagePeriodSelection.today` selected (`.day(offset: 0)`). Identifiers `overview.today.tokens`
@@ -264,7 +199,7 @@ Body, in order:
    with **No usage today.** (`overview.today.empty`). One VoiceOver label names Today, the
    accessible token count, and the API-equivalent cost together. At accessibility sizes the
    values wrap under the label rather than truncating. Input and Output tiles are gone.
-5. When `summary.devices` is empty, the compact Mac setup Section after Today. When devices exist,
+6. When `summary.devices` is empty, the compact Mac setup Section after Today. When devices exist,
    Overview does not repeat the Devices list; the Devices tab is the one full device list.
 
 Glance hierarchy follows the same information order as the Nowdex-inspired widgets (remaining first,
@@ -409,7 +344,9 @@ read stays in **Activity patterns** and does not block the period totals or the 
 
 Header:
 
-- Title is **Usage**. Identifiers: `usage.root` on the tab, `usage.breakdown` / `usage.patterns`
+- Title is **Usage**, with Overview's subtitle treatment: **Updating…** while the selected
+  period is being read, otherwise the **Updated** age of the period on screen. There is no age
+  row in the body. Identifiers: `usage.root` on the tab, `usage.breakdown` / `usage.patterns`
   on those destinations, `usage.budget` on the budget row when one is set, `usage.day` on the day
   sheet.
 
@@ -788,7 +725,9 @@ Rules:
 
 | State | Presentation |
 | --- | --- |
-| Loading, no cache | Centered progress and **Loading account…**. No surface. |
+| Launch | The 108-point Quota mark on `LaunchBackground`: faint track, ring fills, slight scale-up and fade into the tabs; at most 0.8 s, never waiting on the network |
+| First refresh, no cache | Overview placeholder cards (one per provider session, or two for the Account alone), subtitle **Updating…**, refresh button busy |
+| Refresh running, content on screen | Last-good content; subtitle **Updating…** (**Updating… 2 of 3**); refresh button busy; a card still waiting shows a mini spinner in its chevron's place |
 | Empty quota, with an account | **See quota on this iPhone** with **Set up QuotaBar on a Mac to start reporting, or connect a provider to read it on this iPhone.** and a full-width `.borderedProminent` **Connect a provider** |
 | Empty Today | The compact Today row with **No usage today.** |
 | Empty Usage period | `ContentUnavailableView` **No usage** / **No usage was reported for this period.** |
@@ -857,7 +796,8 @@ provider and support, and no custom card chrome beyond the system widget contain
 - Remaining meters are hidden from VoiceOver; the window block speaks remaining percent and window
   title.
 - Cost states include the words **complete**, **partial**, or **unpriced**.
-- The Overview quota Section footer is the shared freshness phrase, read in full.
+- The Overview subtitle is the shared freshness phrase, read in full. The refresh button is
+  **Refresh**, and **Updating…** while a refresh runs.
 - Each Devices row is one VoiceOver element that speaks name, verdict, platform, and age.
 - Overview subscription rows keep the hint **Opens subscription details**.
 - The Usage heatmap is one adjustable element, not a button. It speaks the selected UTC date,
@@ -868,7 +808,8 @@ provider and support, and no custom card chrome beyond the system widget contain
   age into one label, in the order the entry shows them.
 - Do not announce raw account, device, or token identifiers.
 - Reduce Motion uses opacity-only transitions for Connect ↔ Overview phase changes. The root
-  phase replacement is an explicit `.opacity` transition; Reduce Motion only shortens it.
+  phase replacement is an explicit `.opacity` transition; Reduce Motion only shortens it. The
+  launch mark does not fill or scale under Reduce Motion; it only fades.
 - Reduce Transparency is system-owned. Confirm is inline on the signed-out screen and runs the
   full accessibility audit with no skip.
 - Settings account actions sit on the hub, not below per-subscription alert groups. Settings
@@ -929,7 +870,8 @@ provider and support, and no custom card chrome beyond the system widget contain
 
 Inspect Connect with GitHub and Continue with Apple (72-point mark, **Quota** title, tagline,
 three feature lines, three buttons, and footnote in the normal state), connecting,
-connect error, expired session, the inline GitHub account confirmation, loading, signed-in
+connect error, expired session, the inline GitHub account confirmation, the launch mark, the
+first-refresh placeholder cards, a refresh in flight (subtitle, busy button, pending card), signed-in
 Overview (quota cards first, Today card second, trailing chevron on each card, no device-summary
 duplication, no content glass), empty quota/Today, no-devices Mac setup without a QR code or raw
 URL, cached content with a plain status Label, subscription detail (header card, Quota window
@@ -970,6 +912,8 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 --visual-fixture confirm-account
 --visual-fixture connect-refresh-failed
 --visual-fixture loading
+--visual-fixture launch
+--visual-fixture updating
 --visual-fixture content
 --visual-fixture cached-error
 --visual-fixture empty
@@ -994,7 +938,9 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 | `expired` | Empty Overview plus the **Session expired. Connect again.** status |
 | `connect-refresh-failed` | Pending session after a failed first refresh: **Retry**, **Use a different account**, **Couldn't reach quota.gotry.io.** No Continue |
 | `confirm-account` | Inline signed-out confirmation for **octocat**: identity `QuotaCard`, **Use this GitHub account?**, **Continue**, **Use a different account** |
-| `loading` | Centered **Loading account…** |
+| `loading` | No account, two provider sessions, nothing read yet, first refresh running: two placeholder cards, **Updating…**, refresh button busy |
+| `launch` | The `content` Overview under the launch overlay, its mark held still; `--launch-progress <0…1>` picks how far the fill has come (default 0.5; 0 is the faint track alone, 1 is filled) |
+| `updating` | The `content` account with a refresh running: **Updating… 2 of 3**, refresh button busy, Claude's card waiting with a mini spinner |
 | `content` | Signed-in Overview with synthetic Codex / Claude / Grok windows and Today values. Claude has a last-good `minor` status-page reading (**Partial System Outage**), so the row shows the 8pt incident dot. Codex reports from two devices so subscription detail can show per-device readings; Usage has four periods with increasing totals, one provider group of more than five models, and an in-memory Activity heatmap of the last 365 UTC days |
 | `cached-error` | Same content plus **Showing saved data. Couldn't refresh.** |
 | `empty` | Signed-in Overview with empty quota and **No usage today.** Devices remain so Mac setup does not occupy this screen. Usage of every period is **No usage** / **No usage was reported for this period.** Activity is **No activity in the last year.** |

@@ -9,6 +9,9 @@ struct ProviderQuotaRow: View {
   let snapshot: QuotaSnapshot
   var accountIndex: Int = 0
   var serviceStatus: ProviderStatusReading? = nil
+  /// The refresh that is running has not brought this row's reading back yet. The last reading
+  /// stays; a small spinner takes the chevron's place, in the chevron's frame, so nothing moves.
+  var isAwaitingReading = false
 
   var body: some View {
     let label = PlanDisplay.accountLabel(snapshot.account.label) ?? "Account \(accountIndex + 1)"
@@ -29,10 +32,18 @@ struct ProviderQuotaRow: View {
             .accessibilityHidden(true)
         }
         Spacer(minLength: 8)
-        Image(systemName: "chevron.right")
-          .font(.footnote.weight(.semibold))
-          .foregroundStyle(.tertiary)
-          .accessibilityHidden(true)
+        ZStack {
+          if isAwaitingReading {
+            ProgressView()
+              .controlSize(.mini)
+          } else {
+            Image(systemName: "chevron.right")
+              .font(.footnote.weight(.semibold))
+              .foregroundStyle(.tertiary)
+          }
+        }
+        .frame(width: Self.trailingSize, height: Self.trailingSize)
+        .accessibilityHidden(true)
       }
       .accessibilityElement(children: .combine)
       .accessibilityAddTraits(.isHeader)
@@ -78,12 +89,16 @@ struct ProviderQuotaRow: View {
     }
   }
 
+  private static let trailingSize: CGFloat = 16
+
   private var headerAccessibilityLabel: String {
-    if let serviceStatus, ProviderServiceStatusCopy.showsDot(serviceStatus.indicator) {
-      "\(provider.displayName). \(serviceStatus.description)"
-    } else {
-      provider.displayName
-    }
+    let name =
+      if let serviceStatus, ProviderServiceStatusCopy.showsDot(serviceStatus.indicator) {
+        "\(provider.displayName). \(serviceStatus.description)"
+      } else {
+        provider.displayName
+      }
+    return isAwaitingReading ? "\(name). \(OverviewCopy.updating)" : name
   }
 
   private func statusDotColor(_ indicator: ProviderServiceStatusIndicator) -> Color {

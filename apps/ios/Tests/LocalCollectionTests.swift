@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import QuotaPresentation
 import QuotaProviderSessions
 import QuotaProviderWeb
@@ -78,7 +79,7 @@ struct LocalCollectorTests {
       now: { now }
     )
 
-    let collection = await collector.collect()
+    let collection = await collector.collect(within: LocalCollector.foregroundBudget).collection
 
     #expect(collection.collectedAt == now)
     #expect(collection.snapshots.map(\.account.fingerprint) == ["one", "two"])
@@ -105,7 +106,7 @@ struct LocalCollectorTests {
       now: { now }
     )
 
-    let collection = await collector.collect()
+    let collection = await collector.collect(within: LocalCollector.foregroundBudget).collection
 
     #expect(collection.snapshots.isEmpty)
     #expect(collection.needsSignIn == ["codex:refused"])
@@ -113,23 +114,27 @@ struct LocalCollectorTests {
     #expect(try store.list().allSatisfy { $0.lastValidatedAt == now.addingTimeInterval(-86_400) })
   }
 
-  /// A background window is seconds long. A pass that outlives its budget answers nothing, and
-  /// the caller keeps the readings it already had rather than showing none.
+  /// A background window is seconds long. A pass cut at its budget keeps what did answer in time
+  /// rather than dropping it with the provider that did not.
   @Test
-  func aPassPastItsBudgetAnswersNothing() async throws {
+  func aPassCutAtItsBudgetKeepsTheReadingsThatArrived() async throws {
     let collector = LocalCollector(
-      sessions: MemoryProviderSessionStore(sessions: [session(.codex, "slow")]),
+      sessions: MemoryProviderSessionStore(
+        sessions: [session(.codex, "fast"), session(.claude, "slow")]),
       collectors: { provider, _ in
-        StubCollector { _ in
-          try? await Task.sleep(for: .seconds(30))
-          return snapshot(provider: provider, fingerprint: "slow")
+        StubCollector { header in
+          if header.contains("slow") { try await Task.sleep(for: .seconds(30)) }
+          return snapshot(provider: provider, fingerprint: header.contains("fast") ? "fast" : "slow")
         }
       },
       now: { now }
     )
 
-    let collection = await collector.collect(within: Duration.milliseconds(50))
-    #expect(collection == nil)
+    let pass = await collector.collect(within: .milliseconds(300))
+
+    #expect(!pass.isComplete)
+    #expect(pass.collection.snapshots.map(\.account.fingerprint) == ["fast"])
+    #expect(pass.sessionKeys.sorted() == ["claude:slow", "codex:fast"])
   }
 }
 
@@ -300,6 +305,77 @@ struct LocalModeAppModelTests {
     #expect(model.providers.needsSignIn(session(.codex, "fp")))
   }
 
+  /// One slow provider holds up its own row and nothing else: the summary is applied the moment
+  /// it answers, while that provider is still being read.
+  @Test(.timeLimit(.minutes(1)))
+  func theSummaryIsOnScreenBeforeASlowProviderAnswers() async throws {
+    let gate = Gate()
+    let sessions = MemoryProviderSessionStore(sessions: [session(.codex, "slow")])
+    let model = makeModel(
+      session: Fixtures.session(),
+      cache: nil,
+      exchanges: [.init(status: 200, body: try Fixtures.accountSummaryJSON())],
+      providerSessions: sessions,
+      localCollector: LocalCollector(
+        sessions: sessions,
+        collectors: { provider, _ in
+          StubCollector { _ in
+            await gate.wait()
+            return snapshot(provider: provider, fingerprint: "slow")
+          }
+        },
+        now: { now }
+      ),
+      now: { now }
+    )
+
+    async let refreshed = model.refresh(awaitUpload: false)
+    await waitUntil { model.summary != nil }
+
+    #expect(model.phase == .signedIn)
+    #expect(model.isRefreshing)
+    #expect(model.pendingReadings == ["codex:slow"])
+    #expect(model.localCollection == nil)
+    await gate.release()
+    #expect(await refreshed)
+    #expect(model.localCollection?.snapshots.map(\.account.fingerprint) == ["slow"])
+  }
+
+  /// A refresh asked for while one is running — a pull during the launch refresh, a tap on the
+  /// refresh button — is refused rather than reading every provider a second time beside it.
+  @Test(.timeLimit(.minutes(1)))
+  func aSecondRefreshWhileOneIsRunningIsRefused() async throws {
+    let gate = Gate()
+    let reads = Counter()
+    let sessions = MemoryProviderSessionStore(sessions: [session(.codex, "fp")])
+    let model = makeModel(
+      session: nil,
+      cache: nil,
+      exchanges: [],
+      providerSessions: sessions,
+      localCollector: LocalCollector(
+        sessions: sessions,
+        collectors: { provider, _ in
+          StubCollector { _ in
+            await reads.increment()
+            await gate.wait()
+            return snapshot(provider: provider, fingerprint: "fp")
+          }
+        },
+        now: { now }
+      ),
+      now: { now }
+    )
+
+    async let first = model.refresh()
+    await waitUntil { model.isRefreshing }
+
+    #expect(await model.refresh() == false)
+    await gate.release()
+    #expect(await first)
+    #expect(await reads.value == 1)
+  }
+
   /// The system grants a background task seconds. Anything longer is a pass that gets killed
   /// mid-flight rather than one that leaves the last reading in place.
   @Test
@@ -422,5 +498,42 @@ struct LocalQuotaSamplesTests {
       status: .available,
       observedAt: observedAt
     )
+  }
+}
+
+/// Holds a provider's answer until the test lets it go.
+private actor Gate {
+  private var isOpen = false
+  private var waiters: [CheckedContinuation<Void, Never>] = []
+
+  func wait() async {
+    if isOpen { return }
+    await withCheckedContinuation { waiters.append($0) }
+  }
+
+  func release() {
+    isOpen = true
+    for waiter in waiters { waiter.resume() }
+    waiters = []
+  }
+}
+
+private actor Counter {
+  private(set) var value = 0
+
+  func increment() { value += 1 }
+}
+
+/// Suspends until `condition` holds, woken by the observable state it reads rather than a clock.
+@MainActor
+private func waitUntil(_ condition: @escaping @MainActor () -> Bool) async {
+  while !condition() {
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+      withObservationTracking {
+        _ = condition()
+      } onChange: {
+        continuation.resume()
+      }
+    }
   }
 }

@@ -67,8 +67,9 @@ Catalog id `claude`. Common collection ladder, bounds, and identity rules live i
 7. Usage accepts `utilization` / `resets_at` and the aliases `utilization_pct` / `reset_at`.
 8. If no credential exists or the OAuth rung answers `auth_required`, and a stored Claude
    [browser session](../provider-collection.md#browser-session) exists, send the stored allowlisted Cookie header
-   (`sessionKey` plus optional `lastActiveOrg`) to `https://claude.ai/api/organizations`, then
-   `/api/account` best-effort for the masked label and plan, then
+   (`sessionKey` plus optional `lastActiveOrg`) to `https://claude.ai/api/organizations` and
+   `/api/account` best-effort for the masked label and plan (QuotaBar asks in turn; the iPhone
+   asks for both at once, since neither depends on the other), then
    `/organizations/{id}/usage`. Prefer the listed org matching `lastActiveOrg`, then the org on
    `/api/account`, unless that org is `api_disabled`; otherwise the first chat-capable org. The
    org list alone is not proof: the same usage document has to map before the session is stored.
