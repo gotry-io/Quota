@@ -30,8 +30,8 @@ carry its human page.
 
 | Provider | Tier | Quota windows | Usage | Collection | Account sync | Status page | Cost |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| [Codex](codex.md) | First-class | 5-hour F · weekly F · monthly T · balance T | local logs F | CLI credentials T · browser session (macOS) F · web session (iOS) F | uploads to the Account F | Statuspage v2 L | API-equivalent F |
-| [Claude Code](claude.md) | First-class | 5-hour F · weekly F · balance T | local logs F | CLI credentials T · browser session (macOS) F · web session (iOS) F | uploads to the Account F | Statuspage v2 L | API-equivalent F · source-reported T |
+| [Codex](codex.md) | First-class | 5-hour F · weekly F · monthly T · balance T · reset credits F | local logs F | CLI credentials T · browser session (macOS) F · web session (iOS) F | uploads to the Account F | Statuspage v2 L | API-equivalent F |
+| [Claude Code](claude.md) | First-class | 5-hour F · weekly F · balance T · reset credits F | local logs F | CLI credentials T · browser session (macOS) F · web session (iOS) F | uploads to the Account F | Statuspage v2 L | API-equivalent F · source-reported T |
 | [Grok](grok.md) | Best-effort | weekly F · monthly F · plan cycle F · balance T | local logs F | CLI credentials T · browser session (macOS) F · web session (iOS) F | uploads to the Account F | — | API-equivalent F · source-reported T |
 | [OpenRouter](openrouter.md) | Best-effort | daily F · weekly U · monthly U · balance F | — | API key T | uploads to the Account F | — | — |
 | [DeepSeek](deepseek.md) | Best-effort | balance F | — | API key T | uploads to the Account F | — | — |
@@ -47,8 +47,8 @@ Validated cells per provider:
 
 | Provider | Tier | F | T | L | U |
 | --- | --- | --- | --- | --- | --- |
-| `codex` | First-class | 7 | 3 | 1 | 0 |
-| `claude` | First-class | 7 | 3 | 1 | 0 |
+| `codex` | First-class | 8 | 3 | 1 | 0 |
+| `claude` | First-class | 8 | 3 | 1 | 0 |
 | `grok` | Best-effort | 8 | 3 | 0 | 0 |
 | `openrouter` | Best-effort | 3 | 1 | 0 | 2 |
 | `deepseek` | Best-effort | 2 | 1 | 0 | 0 |
@@ -72,6 +72,7 @@ a test, so evidence that is moved or rewritten cannot leave a stale claim behind
 | `codex` | `quota.weekly` | F | [`packages/protocol/fixtures/provider-web-conformance.json`](../../packages/protocol/fixtures/provider-web-conformance.json) `/cases/0/expect/snapshot/windows/1` |
 | `codex` | `quota.monthly` | T | [`packages/service/src/providers/codex/mod.rs`](../../packages/service/src/providers/codex/mod.rs) `maps_free_monthly_and_weekly_windows_by_duration` |
 | `codex` | `quota.balance` | T | [`packages/service/src/providers/codex/mod.rs`](../../packages/service/src/providers/codex/mod.rs) `maps_credits_balance_and_reset_credits` |
+| `codex` | `quota.reset_credits` | F | [`packages/protocol/fixtures/provider-web-conformance.json`](../../packages/protocol/fixtures/provider-web-conformance.json) `/cases/13/expect/snapshot/windows/2` |
 | `codex` | `usage.local_logs` | F | [`packages/service/fixtures/usage/codex.jsonl`](../../packages/service/fixtures/usage/codex.jsonl) |
 | `codex` | `channel.cli_credentials` | T | [`packages/service/src/providers/codex/mod.rs`](../../packages/service/src/providers/codex/mod.rs) `accepts_snake_and_camel_case_credentials_but_requires_access_token` — the auth.json grant; no test reads that file from disk |
 | `codex` | `channel.browser_session_macos` | F | [`packages/protocol/fixtures/provider-web-conformance.json`](../../packages/protocol/fixtures/provider-web-conformance.json) `/sources/codex` |
@@ -82,6 +83,7 @@ a test, so evidence that is moved or rewritten cannot leave a stale claim behind
 | `claude` | `quota.five_hour` | F | [`packages/protocol/fixtures/provider-web-conformance.json`](../../packages/protocol/fixtures/provider-web-conformance.json) `/cases/4/expect/snapshot/windows/0` |
 | `claude` | `quota.weekly` | F | [`packages/protocol/fixtures/provider-web-conformance.json`](../../packages/protocol/fixtures/provider-web-conformance.json) `/cases/4/expect/snapshot/windows/1` |
 | `claude` | `quota.balance` | T | [`packages/service/src/providers/claude/mod.rs`](../../packages/service/src/providers/claude/mod.rs) `maps_optional_usage_windows_and_extra_usage` |
+| `claude` | `quota.reset_credits` | F | [`packages/protocol/fixtures/provider-web-conformance.json`](../../packages/protocol/fixtures/provider-web-conformance.json) `/cases/15/expect/snapshot/windows/1` |
 | `claude` | `usage.local_logs` | F | [`packages/service/fixtures/usage/claude.jsonl`](../../packages/service/fixtures/usage/claude.jsonl) |
 | `claude` | `channel.cli_credentials` | T | [`packages/service/src/providers/claude/mod.rs`](../../packages/service/src/providers/claude/mod.rs) `parses_oauth_credentials_and_rejects_mcp_only_payloads` — the credential document; no test reads the live macOS Keychain item |
 | `claude` | `channel.browser_session_macos` | F | [`packages/protocol/fixtures/provider-web-conformance.json`](../../packages/protocol/fixtures/provider-web-conformance.json) `/sources/claude` |
@@ -191,7 +193,7 @@ what the collector and `docs/providers/<id>.md` say.
 
 ## Window kinds
 
-The seven `quota.*` keys name the window kinds a collector emits, as
+The eight `quota.*` keys name the window kinds a collector emits, as
 `docs/providers/<id>.md` titles them. `five_hour`, `weekly`, and `monthly` are the protocol's
 `primary_cadence` members — the meter a reader means when they ask how much is left.
 
@@ -204,3 +206,4 @@ The seven `quota.*` keys name the window kinds a collector emits, as
 | `quota.monthly` | A monthly or 30-day window. |
 | `quota.plan_cycle` | A meter over the plan's billing cycle with no duration of its own. |
 | `quota.balance` | A window reporting absolute remaining value (`remaining_value` with a `value_unit`) rather than only a percentage. |
+| `quota.reset_credits` | **Reset Credits**: a `count` of earned rate-limit resets, with `expiries` when the provider says when they lapse. |

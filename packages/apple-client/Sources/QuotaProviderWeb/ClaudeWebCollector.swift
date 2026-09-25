@@ -12,6 +12,8 @@ public struct ClaudeWebCollector: ProviderWebCollector {
   public static let source = "claude_web_usage_api"
 
   public static let defaultOrigin = "https://claude.ai"
+  /// Asks for the limit-reset grants block, which answers `null` without it.
+  static let usageQuery = "cedar_ember=1"
 
   private let http: ProviderWebHTTP
   private let origin: String
@@ -54,7 +56,7 @@ public struct ClaudeWebCollector: ProviderWebCollector {
     let usage = try await fetchUsage(
       cookieHeader: cookieHeader, organizationID: account.organizationID,
       timeout: ProviderWebLimits.requestTimeout)
-    let windows = ClaudeUsage.map(usage)
+    let windows = ClaudeUsage.mapReading(usage, now: now)
     if windows.isEmpty && !ClaudeUsage.answersForAKnownWindow(usage) {
       throw ProviderWebError(.unavailable, Self.source)
     }
@@ -83,15 +85,22 @@ public struct ClaudeWebCollector: ProviderWebCollector {
 
   /// The one lookup both the validation and the reading make. `/api/account` is best-effort — it
   /// enriches the label and the plan, and a session that cannot reach it can still be read.
+  ///
+  /// The two documents do not depend on each other, so they are asked for at the same time: a
+  /// reading waits for the slower of them rather than for both in turn.
   private func webAccount(cookieHeader: String, timeout: TimeInterval) async throws -> WebAccount {
     guard Self.sessionKey(cookieHeader) != nil else {
       throw ProviderWebError(.error, Self.source)
     }
     let headers = Self.headers(cookieHeader)
-    let organizations = try await http.getJSONSession(
-      try url("/api/organizations"), headers: headers, timeout: timeout, source: Self.source)
-    let account = try? await http.getJSONSession(
-      try url("/api/account"), headers: headers, timeout: timeout, source: Self.source)
+    let organizationsURL = try url("/api/organizations")
+    let accountURL = try url("/api/account")
+    async let organizationsRead = http.getJSONSession(
+      organizationsURL, headers: headers, timeout: timeout, source: Self.source)
+    async let accountRead = http.getJSONSession(
+      accountURL, headers: headers, timeout: timeout, source: Self.source)
+    let organizations = try await organizationsRead
+    let account = try? await accountRead
     let preferred =
       Self.lastActiveOrganization(cookieHeader)
       ?? account.flatMap(Self.accountOrganization)
@@ -114,7 +123,7 @@ public struct ClaudeWebCollector: ProviderWebCollector {
       throw ProviderWebError(.error, Self.source)
     }
     return try await http.getJSONSession(
-      try url("/api/organizations/\(organizationID)/usage"),
+      try url("/api/organizations/\(organizationID)/usage?\(Self.usageQuery)"),
       headers: Self.headers(cookieHeader), timeout: timeout, source: Self.source)
   }
 

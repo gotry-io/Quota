@@ -421,6 +421,7 @@ fn map_named_bucket(value: &Value, group_name: &str, now: i64) -> Option<QuotaWi
         remaining_value: Some(remaining_value.max(0.0)),
         limit_value: (limit_value > 0.0).then_some(limit_value),
         value_unit: Some("count"),
+        expiries: Vec::new(),
     })
 }
 
@@ -538,6 +539,7 @@ fn map_request_buckets(value: &Value, now: i64) -> Vec<QuotaWindow> {
                 remaining_value: Some(remaining.max(0.0)),
                 limit_value: (limit > 0.0).then_some(limit),
                 value_unit: Some("count"),
+                expiries: Vec::new(),
             }
         })
         .collect()

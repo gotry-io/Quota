@@ -274,6 +274,7 @@ fn map_windows(personal: Option<&Budget>, team: Option<&Budget>) -> Vec<QuotaWin
             remaining_value: Some(remaining),
             limit_value: Some(limit),
             value_unit: Some("usd"),
+            expiries: Vec::new(),
         })
     })
     .collect()

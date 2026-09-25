@@ -56,7 +56,21 @@ struct UsageView: View {
     }
     .accessibilityIdentifier("usage.root")
     .navigationTitle("Usage")
+    .navigationSubtitle(subtitle)
     .navigationBarTitleDisplayMode(.large)
+  }
+
+  /// Under the title, the way Overview says it: **Updating…** while the period is being read,
+  /// then how old the period on screen is.
+  private var subtitle: String {
+    guard model.hasAccountSession else { return "" }
+    switch model.usage.periodRead {
+    case .loading, .refreshing:
+      return OverviewCopy.updating
+    case .idle, .loaded, .failed:
+      guard let fetchedAt = model.usage.displayedFetchedAt else { return "" }
+      return QuotaFormat.updated(fetchedAt, now: model.displayNow)
+    }
   }
 
   /// The days the Daily chart draws: the period's local `days[]` on every asked date.
@@ -111,13 +125,6 @@ struct UsageView: View {
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityIdentifier("usage.period.title")
 
-      if let fetchedAt = model.usage.displayedFetchedAt {
-        Text(QuotaFormat.updated(fetchedAt, now: model.displayNow))
-          .font(QuotaDesign.Typography.support)
-          .foregroundStyle(QuotaTheme.secondary)
-          .fixedSize(horizontal: false, vertical: true)
-          .accessibilityIdentifier("usage.period.age")
-      }
     }
   }
 

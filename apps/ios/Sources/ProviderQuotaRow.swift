@@ -9,6 +9,9 @@ struct ProviderQuotaRow: View {
   let snapshot: QuotaSnapshot
   var accountIndex: Int = 0
   var serviceStatus: ProviderStatusReading? = nil
+  /// The refresh that is running has not brought this row's reading back yet. The last reading
+  /// stays; a small spinner takes the chevron's place, in the chevron's frame, so nothing moves.
+  var isAwaitingReading = false
 
   var body: some View {
     let label = PlanDisplay.accountLabel(snapshot.account.label) ?? "Account \(accountIndex + 1)"
@@ -29,10 +32,18 @@ struct ProviderQuotaRow: View {
             .accessibilityHidden(true)
         }
         Spacer(minLength: 8)
-        Image(systemName: "chevron.right")
-          .font(.footnote.weight(.semibold))
-          .foregroundStyle(.tertiary)
-          .accessibilityHidden(true)
+        ZStack {
+          if isAwaitingReading {
+            ProgressView()
+              .controlSize(.mini)
+          } else {
+            Image(systemName: "chevron.right")
+              .font(.footnote.weight(.semibold))
+              .foregroundStyle(.tertiary)
+          }
+        }
+        .frame(width: Self.trailingSize, height: Self.trailingSize)
+        .accessibilityHidden(true)
       }
       .accessibilityElement(children: .combine)
       .accessibilityAddTraits(.isHeader)
@@ -78,12 +89,16 @@ struct ProviderQuotaRow: View {
     }
   }
 
+  private static let trailingSize: CGFloat = 16
+
   private var headerAccessibilityLabel: String {
-    if let serviceStatus, ProviderServiceStatusCopy.showsDot(serviceStatus.indicator) {
-      "\(provider.displayName). \(serviceStatus.description)"
-    } else {
-      provider.displayName
-    }
+    let name =
+      if let serviceStatus, ProviderServiceStatusCopy.showsDot(serviceStatus.indicator) {
+        "\(provider.displayName). \(serviceStatus.description)"
+      } else {
+        provider.displayName
+      }
+    return isAwaitingReading ? "\(name). \(OverviewCopy.updating)" : name
   }
 
   private func statusDotColor(_ indicator: ProviderServiceStatusIndicator) -> Color {
@@ -190,6 +205,13 @@ struct QuotaWindowBlock: View {
       meter(height: QuotaDesign.Layout.meterHeight)
       TimelineView(.periodic(from: .now, by: 60)) { context in
         countdownRow(now: now ?? (displayClock.isFixed ? displayClock.now() : context.date))
+      }
+      ForEach(Array(expiryLines.enumerated()), id: \.offset) { _, line in
+        Text(line)
+          .font(QuotaDesign.Typography.meta)
+          .foregroundStyle(.primary)
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityIdentifier("subscription.expiry")
       }
       if let paceHeadline {
         Text(paceHeadline)
@@ -304,10 +326,18 @@ struct QuotaWindowBlock: View {
     }
   }
 
+  /// When this window's units lapse, one line per instant: subscription detail only.
+  private var expiryLines: [String] {
+    ExpiryCopy.lines(window.expiries, total: window.remainingValue, now: currentNow)
+  }
+
   /// A reading that is not current says so even when it still carries a reset time,
-  /// because the reset it names may already have passed.
+  /// because the reset it names may already have passed. A window that never resets and lists
+  /// when its units lapse names the nearest of those instead.
   private var supportLine: String? {
-    let reset = window.resetsAt.flatMap { QuotaFormat.resetTime($0, now: currentNow) }
+    let reset =
+      window.resetsAt.flatMap { QuotaFormat.resetTime($0, now: currentNow) }
+      ?? ExpiryCopy.next(window.expiries, now: currentNow)
     guard let stateLabel else { return reset }
     return reset.map { "\(stateLabel) · \($0)" } ?? stateLabel
   }
@@ -334,6 +364,11 @@ struct QuotaWindowBlock: View {
     var parts = [QuotaFormat.remainingAccessibility(window)]
     if let reset = window.resetsAt.flatMap({ QuotaFormat.resetTime($0) }) {
       parts.append(reset)
+    }
+    if presentation == .detail {
+      parts.append(contentsOf: expiryLines)
+    } else if window.resetsAt == nil, let next = ExpiryCopy.next(window.expiries, now: currentNow) {
+      parts.append(next)
     }
     if let paceHeadline {
       parts.append(paceHeadline)

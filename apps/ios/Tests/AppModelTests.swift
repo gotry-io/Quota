@@ -261,6 +261,8 @@ struct AppModelTests {
       fetchedAt: Fixtures.date("2026-08-14T15:00:00Z"),
       fromCache: true,
       isRefreshing: false,
+      pendingReadings: [],
+      refreshReads: 0,
       banner: nil,
       expiredMessage: nil,
       localCollection: nil,
@@ -324,6 +326,8 @@ struct AppModelTests {
       fetchedAt: nil,
       fromCache: false,
       isRefreshing: false,
+      pendingReadings: [],
+      refreshReads: 0,
       banner: nil,
       expiredMessage: nil,
       localCollection: nil,
@@ -343,7 +347,7 @@ struct AppModelTests {
   }
 
   @Test
-  func signedInWithNoCacheShowsLoadingUntilTheFirstSummaryAnswers() async throws {
+  func signedInWithNoCacheShowsPlaceholdersUntilTheFirstSummaryAnswers() async throws {
     let inner = ScriptedHTTPTransport([
       .init(status: 200, body: try Fixtures.accountSummaryJSON())
     ])
@@ -367,10 +371,12 @@ struct AppModelTests {
     await transport.waitUntilGated()
     #expect(model.phase == .signedIn)
     #expect(model.isRefreshing)
-    #expect(model.showsRootLoading)
+    // Nothing read on this phone yet and the Account is the only source: two placeholder cards,
+    // not the empty state.
+    #expect(model.overviewPlaceholders == 2)
     await transport.release()
     await done
-    #expect(!model.showsRootLoading)
+    #expect(model.overviewPlaceholders == 0)
     #expect(model.phase == .signedIn)
     #expect(model.summary != nil)
   }

@@ -8717,6 +8717,7 @@ mod tests {
                 remaining_value: Some(58.0),
                 limit_value: Some(100.0),
                 value_unit: Some("usd"),
+                expiries: Vec::new(),
             }],
             status: "available",
             observed_at: "2026-08-12T09:30:00Z".into(),

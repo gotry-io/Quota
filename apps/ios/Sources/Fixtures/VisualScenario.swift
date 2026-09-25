@@ -19,6 +19,9 @@ import QuotaWire
     var fetchedAt: Date?
     var fromCache: Bool
     var isRefreshing: Bool
+    /// Provider sessions whose reading has not come back in the posed refresh.
+    var pendingReadings: Set<String>
+    var refreshReads: Int
     var banner: AppModel.Banner?
     var expiredMessage: String?
     var selectedTab: AppTab
@@ -44,8 +47,8 @@ import QuotaWire
           nil
         case .confirmAccount, .connectRefreshFailed:
           .pending
-        case .content, .cachedError, .empty, .noDevices, .merged, .providers, .activityLoading,
-          .activityFailed, .activityDayEmpty, .activityDayFailed, .signInMethods:
+        case .content, .launch, .updating, .cachedError, .empty, .noDevices, .merged, .providers,
+          .activityLoading, .activityFailed, .activityDayEmpty, .activityDayFailed, .signInMethods:
           .active
         }
       let phoneID = activation == nil ? nil : VisualFixtureContent.phoneDeviceID
@@ -65,6 +68,8 @@ import QuotaWire
         fetchedAt: nil,
         fromCache: false,
         isRefreshing: false,
+        pendingReadings: [],
+        refreshReads: 0,
         banner: nil,
         expiredMessage: nil,
         selectedTab: .quota,
@@ -156,7 +161,23 @@ import QuotaWire
         scenario.phase = .signedOut
         scenario.expiredMessage = "Session expired. Connect again."
       case .loading:
-        scenario.phase = .launching
+        // Nothing read yet, and the first refresh is asking both providers.
+        scenario.phase = .signedOut
+        scenario.providerSessions = VisualFixtureContent.providerSessions(for: .loading, at: now)
+        scenario.isRefreshing = true
+        scenario.pendingReadings = Set(scenario.providerSessions.map(\.key))
+        scenario.refreshReads = scenario.providerSessions.count
+      case .launch:
+        signedInContent(fromCache: true, fetchedOffset: -180, banner: nil)
+      case .updating:
+        // The summary and Codex have answered; Claude's reading is still on its way.
+        signedInContent(fromCache: false, fetchedOffset: -90, banner: nil)
+        scenario.isRefreshing = true
+        scenario.pendingReadings = Set(
+          populated.subscriptions.filter { $0.provider == .claude }.map {
+            LocalCollector.sessionKey(for: $0.snapshot)
+          })
+        scenario.refreshReads = 3
       case .confirmAccount:
         scenario.phase = .confirmingAccount(label: populated.account.displayLabel ?? "octocat")
         scenario.summary = populated
@@ -268,6 +289,8 @@ import QuotaWire
         fetchedAt: fetchedAt,
         fromCache: fromCache,
         isRefreshing: isRefreshing,
+        pendingReadings: pendingReadings,
+        refreshReads: refreshReads,
         banner: banner,
         expiredMessage: expiredMessage,
         localCollection: localCollection,
@@ -324,6 +347,12 @@ import QuotaWire
       }
       if fixture == .providers, providerSessions.isEmpty {
         issues.append("providers needs stored sessions")
+      }
+      if fixture == .loading, providerSessions.isEmpty || !isRefreshing {
+        issues.append("loading is a first refresh of stored sessions")
+      }
+      if fixture == .updating, pendingReadings.isEmpty || !isRefreshing {
+        issues.append("updating is a refresh with a reading still pending")
       }
       if fixture == .signIn, presentsSignIn != true {
         issues.append("signIn presents the sheet")

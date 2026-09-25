@@ -14,6 +14,7 @@ public struct CodexWebCollector: ProviderWebCollector {
   static let sessionPath = "/api/auth/session"
   static let mePath = "/backend-api/me"
   static let usagePath = "/backend-api/wham/usage"
+  static let resetCreditsPath = "/backend-api/wham/rate-limit-reset-credits"
 
   private let http: ProviderWebHTTP
   private let origin: String
@@ -74,9 +75,14 @@ public struct CodexWebCollector: ProviderWebCollector {
     let value = try await http.getJSON(
       try url(Self.usagePath), headers: headers,
       timeout: ProviderWebLimits.requestTimeout, source: Self.source)
-    let mapped = CodexUsage.map(value)
+    var mapped = CodexUsage.map(value)
     if mapped.malformedSuccess { throw ProviderWebError(.error, Self.source) }
     guard !mapped.windows.isEmpty else { throw ProviderWebError(.unavailable, Self.source) }
+    mapped.windows = await CodexUsage.attachingExpiries(to: mapped.windows, now: now) {
+      try await http.getJSON(
+        try url(Self.resetCreditsPath), headers: headers,
+        timeout: ProviderWebLimits.requestTimeout, source: Self.source)
+    }
     return snapshot(mapped: mapped, session: session)
   }
 
@@ -94,9 +100,14 @@ public struct CodexWebCollector: ProviderWebCollector {
     let value = try await http.getJSONSession(
       try url(Self.usagePath), headers: headers,
       timeout: ProviderWebLimits.requestTimeout, source: Self.source)
-    let mapped = CodexUsage.map(value)
+    var mapped = CodexUsage.map(value)
     if mapped.malformedSuccess { throw ProviderWebError(.error, Self.source) }
     guard !mapped.windows.isEmpty else { throw ProviderWebError(.unavailable, Self.source) }
+    mapped.windows = await CodexUsage.attachingExpiries(to: mapped.windows, now: now) {
+      try await http.getJSONSession(
+        try url(Self.resetCreditsPath), headers: headers,
+        timeout: ProviderWebLimits.requestTimeout, source: Self.source)
+    }
     return snapshot(mapped: mapped, session: session)
   }
 

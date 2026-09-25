@@ -1310,6 +1310,48 @@ describe("managed Relay on SQLite", () => {
     ).toBe(0);
   });
 
+  it("answers a window's expiries in the summary exactly as the device uploaded them", async () => {
+    const { app } = await quotabarHarness("account_expiries", { now });
+    const tokens = await loginQuotabar(app);
+    const resetCredits = {
+      id: "reset_credits",
+      title: "Reset Credits",
+      used_percent: 0,
+      remaining_value: 3,
+      value_unit: "count",
+      expiries: [{ expires_at: "2026-10-22T16:00:00Z", count: 2 }],
+    };
+    const uploaded = await app.request("https://quota.gotry.io/api/v6/device/snapshots", {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${tokens.session.access_token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        protocol_version: 6,
+        generation: tokens.device_generation,
+        snapshots: [
+          {
+            provider: "codex",
+            account: { fingerprint: "fingerprint_expiries", fingerprint_scope: "global" },
+            windows: [resetCredits],
+            status: "available",
+            observed_at: now.toISOString(),
+          },
+        ],
+      }),
+    });
+    expect(uploaded.status).toBe(200);
+    const summary = await app.request("https://quota.gotry.io/api/v6/account/summary", {
+      headers: { Authorization: `Bearer ${tokens.session.access_token}` },
+    });
+    expect(summary.status).toBe(200);
+    const body = (await summary.json()) as {
+      subscriptions: Array<{ snapshot: { windows: unknown[] } }>;
+    };
+    expect(body.subscriptions[0]?.snapshot.windows).toEqual([resetCredits]);
+  });
+
   it("accepts a same-instant restatement that only changes available to a failure", async () => {
     const { app } = await quotabarHarness("account_same_instant", { now });
     const tokens = await loginQuotabar(app);

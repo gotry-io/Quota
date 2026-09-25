@@ -121,6 +121,49 @@ pub struct QuotaWindow {
     pub limit_value: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value_unit: Option<&'static str>,
+    /// Units of a `count` window that lapse at one instant, ascending. Units that never lapse are
+    /// not listed, so `remaining_value` stays the total. Built only by [`QuotaExpiry::group`].
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub expiries: Vec<QuotaExpiry>,
+}
+
+/// How many distinct instants one window lists, the protocol's `MAXIMUM_QUOTA_EXPIRIES`.
+pub const MAXIMUM_QUOTA_EXPIRIES: usize = 16;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct QuotaExpiry {
+    pub expires_at: String,
+    pub count: u64,
+}
+
+impl QuotaExpiry {
+    /// Units that lapse after `now`, grouped by the second they lapse at, nearest first.
+    ///
+    /// Only the nearest [`MAXIMUM_QUOTA_EXPIRIES`] instants are listed; units past them read as
+    /// not expiring, which is what a reader is told about any unit the list leaves out. A list
+    /// naming more units than `total` contradicts the count beside it and is dropped whole,
+    /// leaving the count on its own.
+    pub fn group(units: impl IntoIterator<Item = (i64, u64)>, now: i64, total: f64) -> Vec<Self> {
+        let mut grouped = std::collections::BTreeMap::<i64, u64>::new();
+        for (instant, count) in units {
+            if instant > now && count > 0 {
+                *grouped.entry(instant).or_default() += count;
+            }
+        }
+        let listed: u64 = grouped.values().sum();
+        if listed as f64 > total {
+            return Vec::new();
+        }
+        grouped
+            .into_iter()
+            .take(MAXIMUM_QUOTA_EXPIRIES)
+            .map(|(instant, count)| Self {
+                expires_at: super::unix_seconds_to_iso(instant),
+                count,
+            })
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]

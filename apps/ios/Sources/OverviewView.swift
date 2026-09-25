@@ -37,7 +37,23 @@ struct OverviewView: View {
       await model.refresh()
     }
     .navigationTitle(AppTab.quota.title)
+    .navigationSubtitle(subtitle)
     .navigationBarTitleDisplayMode(.large)
+    .toolbar {
+      ToolbarItem(placement: .topBarTrailing) {
+        OverviewRefreshButton(model: model)
+      }
+    }
+  }
+
+  /// Under the title: **Updating…** while a refresh runs, then when the readings on screen were
+  /// last refreshed.
+  private var subtitle: String {
+    if model.isRefreshing {
+      return OverviewCopy.updatingLine(progress: model.refreshProgress)
+    }
+    guard let updatedAt = model.updatedAt else { return "" }
+    return QuotaFormat.updated(updatedAt, now: displayClock.now())
   }
 
   /// An expired session is the reason to sign in again, so it outranks a refresh failure.
@@ -54,8 +70,16 @@ struct OverviewView: View {
   @ViewBuilder
   private var quotaSection: some View {
     let providerCards = model.providerCards
+    let placeholders = model.overviewPlaceholders
     Section {
-      if providerCards.isEmpty {
+      if placeholders > 0 {
+        ForEach(0..<placeholders, id: \.self) { _ in
+          QuotaCard {
+            OverviewPlaceholderRow()
+          }
+          .quotaCardRow()
+        }
+      } else if providerCards.isEmpty {
         OverviewEmptyState(model: model)
       } else {
         ForEach(providerCards) { card in
@@ -68,7 +92,8 @@ struct OverviewView: View {
                   provider: card.provider,
                   snapshot: subscription.snapshot,
                   accountIndex: index,
-                  serviceStatus: model.providerStatus[card.provider]
+                  serviceStatus: model.providerStatus[card.provider],
+                  isAwaitingReading: model.isAwaitingReading(subscription)
                 )
                 .foregroundStyle(.primary)
               }
@@ -82,15 +107,85 @@ struct OverviewView: View {
           }
         }
       }
-    } footer: {
-      if let updatedAt = model.updatedAt {
-        Text(QuotaFormat.updated(updatedAt, now: displayClock.now()))
-          .font(QuotaDesign.Typography.meta.monospacedDigit())
-          .foregroundStyle(.primary)
-          .fixedSize(horizontal: false, vertical: true)
-          .accessibilityIdentifier("section.footer.updated")
+    }
+  }
+}
+
+enum OverviewCopy {
+  static let updating = "Updating…"
+  static let refresh = "Refresh"
+  static let loadingQuota = "Loading quota"
+
+  /// **Updating…**, and how many of this refresh's reads have answered once one has.
+  static func updatingLine(progress: (answered: Int, total: Int)?) -> String {
+    guard let progress else { return updating }
+    return "\(updating) \(progress.answered) of \(progress.total)"
+  }
+}
+
+/// The trailing Overview control: a refresh, or the one already running. Pull to refresh does the
+/// same thing; this is the way to ask without scrolling.
+struct OverviewRefreshButton: View {
+  @Bindable var model: AppModel
+
+  var body: some View {
+    Button {
+      Task { await model.refresh() }
+    } label: {
+      if model.isRefreshing {
+        ProgressView()
+          .controlSize(.small)
+      } else {
+        Image(systemName: "arrow.clockwise")
       }
     }
+    .disabled(model.isRefreshing)
+    .accessibilityLabel(model.isRefreshing ? OverviewCopy.updating : OverviewCopy.refresh)
+    .accessibilityIdentifier("overview.refresh")
+  }
+}
+
+/// A card-shaped stand-in while the first refresh is on its way and nothing has been read yet.
+/// It has the shape of a quota card — mark and name, account, window title, remaining, meter,
+/// reset line — so the real one replaces it without the list moving. It is drawn from shapes
+/// rather than redacted text, so there is no text in it to read or to clip.
+struct OverviewPlaceholderRow: View {
+  @ScaledMetric(relativeTo: .headline) private var titleHeight: CGFloat = 16
+  @ScaledMetric(relativeTo: .subheadline) private var supportHeight: CGFloat = 13
+  @ScaledMetric(relativeTo: .title) private var valueHeight: CGFloat = 26
+  @ScaledMetric(relativeTo: .footnote) private var metaHeight: CGFloat = 11
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: QuotaDesign.Layout.rowSpacing) {
+      HStack(alignment: .center, spacing: 8) {
+        Circle()
+          .fill(Self.fill)
+          .frame(width: QuotaDesign.Layout.markSize, height: QuotaDesign.Layout.markSize)
+        bar(width: 96, height: titleHeight)
+        Spacer(minLength: 8)
+      }
+      bar(width: 150, height: supportHeight)
+      VStack(alignment: .leading, spacing: 10) {
+        bar(width: 56, height: supportHeight)
+        bar(width: 72, height: valueHeight)
+        Capsule()
+          .fill(Self.fill)
+          .frame(height: QuotaDesign.Layout.meterHeight)
+        bar(width: 136, height: metaHeight)
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel(OverviewCopy.loadingQuota)
+    .accessibilityIdentifier("overview.placeholder")
+  }
+
+  private static let fill = Color(uiColor: .tertiarySystemFill)
+
+  private func bar(width: CGFloat, height: CGFloat) -> some View {
+    RoundedRectangle(cornerRadius: 4, style: .continuous)
+      .fill(Self.fill)
+      .frame(width: width, height: height)
   }
 }
 

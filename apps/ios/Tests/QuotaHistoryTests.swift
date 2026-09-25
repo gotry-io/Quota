@@ -806,6 +806,8 @@ private func poseHistory(_ model: AppModel) {
     fetchedAt: nil,
     fromCache: false,
     isRefreshing: false,
+    pendingReadings: [],
+    refreshReads: 0,
     banner: nil,
     expiredMessage: nil,
     localCollection: LocalCollection(collectedAt: historyNow, snapshots: [historySnapshot()]),

@@ -17,6 +17,9 @@ enum QuotaDesign {
     static let deviceSymbolSize: CGFloat = 28
     static let quotaMarkAbout: CGFloat = 64
     static let quotaMarkWelcome: CGFloat = 72
+    /// The launch mark: the `LaunchMark` asset's point size, so the system launch screen and the
+    /// app's first frame draw it at the same size in the same place.
+    static let quotaMarkLaunch: CGFloat = 108
   }
 
   enum Typography {

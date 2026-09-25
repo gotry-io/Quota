@@ -92,6 +92,17 @@ final class AppModel {
   var fetchedAt: Date?
   var fromCache = false
   var isRefreshing = false
+  /// While a refresh runs: the provider sessions whose reading has not come back in this pass.
+  /// Their rows say so in place, and their last reading stays on screen until it does.
+  private(set) var pendingReadings: Set<String> = []
+  /// While a refresh runs: the Account summary has been asked for and has not answered yet.
+  private(set) var awaitsSummary = false
+  /// How many reads this refresh started: one per provider session, and the summary.
+  private(set) var refreshReads = 0
+  /// The local cache has been read. The launch mark waits for this and for nothing on the network.
+  private(set) var hasRestoredLocalState = false
+  /// Restore found something to read and the refresh that reads it has not finished yet.
+  private(set) var awaitsFirstRefresh = false
   var banner: Banner?
   var expiredMessage: String?
   var selectedTab: AppTab = .quota
@@ -141,6 +152,7 @@ final class AppModel {
   private var providerStatusTask: Task<Void, Never>?
   @ObservationIgnored
   private var uploadTask: Task<Void, Never>?
+  @ObservationIgnored private var firstReadingSignaled = false
   #if DEBUG
     @ObservationIgnored private var firstContentSignaled = false
     @ObservationIgnored private var firstContentWaiter: CheckedContinuation<Void, Never>?
@@ -149,6 +161,8 @@ final class AppModel {
   #if DEBUG
     /// When true, `QuotaApp` skips `restore()` so visual fixtures stay offline and deterministic.
     var skipsRestore = false
+    /// A visual fixture that holds the launch mark still at this much of its draw-in.
+    var posedLaunchProgress: Double?
     /// True when this model was built with blocked network and memory stores (a visual scenario).
     private(set) var isOfflineFixture = false
     /// True when `now` is a frozen instant (visual fixtures), not the wall clock.
@@ -319,14 +333,32 @@ final class AppModel {
     summary != nil || !subscriptions.isEmpty
   }
 
-  /// Spinner until there is something to show, or until the first signed-in summary answers.
-  var showsRootLoading: Bool {
-    if hasContent { return false }
-    switch phase {
-    case .launching: return true
-    case .signedIn: return isRefreshing
-    default: return false
+  /// How many placeholder cards Overview draws instead of the empty state: nothing has ever been
+  /// read on this phone, and the first answer is on its way. One per provider session, or two
+  /// when the Account is the only source. The empty state waits for a refresh that answered empty.
+  var overviewPlaceholders: Int {
+    guard summary == nil, localCollection == nil else { return 0 }
+    guard phase == .launching || isRefreshing || awaitsFirstRefresh else { return 0 }
+    if !providers.sessions.isEmpty { return providers.sessions.count }
+    return hasAccountSession ? 2 : 0
+  }
+
+  /// How far this refresh has come, once more than one read is in flight and one has answered.
+  var refreshProgress: (answered: Int, total: Int)? {
+    guard isRefreshing, refreshReads > 1 else { return nil }
+    let answered = refreshReads - pendingReadings.count - (awaitsSummary ? 1 : 0)
+    guard answered > 0 else { return nil }
+    return (answered, refreshReads)
+  }
+
+  /// Whether a row's reading has yet to arrive in the refresh that is running: its provider
+  /// session has not answered, or it is the Account's alone and the summary has not.
+  func isAwaitingReading(_ subscription: QuotaSubscription) -> Bool {
+    guard isRefreshing else { return false }
+    if pendingReadings.contains(LocalCollector.sessionKey(for: subscription.snapshot)) {
+      return true
     }
+    return awaitsSummary && !subscription.sources.contains { $0.deviceID == ThisDevice.sourceID }
   }
 
   /// What this phone presents when it signs in, so its session names a Device and what it reads
@@ -394,7 +426,26 @@ final class AppModel {
     }
   }
 
+  /// The app's launch: what is on disk first, then the first refresh beside the foreground work.
+  /// Neither waits for the other — Usage and the status pages do not need this phone's providers
+  /// to have answered, and the Overview is already showing the cache.
+  func launch() async {
+    await restoreLocalState()
+    async let first: Void = refreshAfterRestore()
+    async let foreground: Void = setForeground(true)
+    observeApplicationLifecycle()
+    _ = await (first, foreground)
+  }
+
+  /// Restore the local state, then run the first refresh it calls for.
   func restore() async {
+    await restoreLocalState()
+    await refreshAfterRestore()
+  }
+
+  /// Everything this phone already knows, read from disk and Keychain: the first content. It asks
+  /// nothing of the network.
+  private func restoreLocalState() async {
     let restoreInterval = LaunchSignposts.begin("restore")
     defer { LaunchSignposts.end("restore", restoreInterval) }
     let localStore = self.localStore
@@ -432,34 +483,47 @@ final class AppModel {
       self.usage.applyDiskCache(usage)
     }
     fromCache = restored.summary != nil
-    LaunchSignposts.event("first-content")
-    #if DEBUG
-      signalFirstContent()
-    #endif
     switch restored.session?.activation {
     case .active:
       phase = .signedIn
+      awaitsFirstRefresh = true
       // Publish what was already on disk so the widget is current before the network is.
       if restored.summary != nil { publishWidget() }
       resolvePendingSubscriptionSelection()
-      await refresh(awaitUpload: false)
     case .pending:
       if let label = PlanDisplay.accountLabel(restored.summary?.summary.account.displayLabel) {
         phase = .confirmingAccount(label: label)
       } else {
-        await refresh()
-        if phase == .launching {
-          presentPendingRefreshFailure(
-            message: AuthorizationError.genericConnectFailureMessage
-          )
-        }
+        awaitsFirstRefresh = true
       }
     case nil:
       // Signed out is not empty any more: the providers this phone signed in to are still
-      // readable, and the last reading of them is already loaded. The refresh below publishes
+      // readable, and the last reading of them is already loaded. The first refresh publishes
       // what that comes to; the widget keeps the previous snapshot until it does.
       phase = .signedOut
+      awaitsFirstRefresh = !providers.sessions.isEmpty
       resolvePendingSubscriptionSelection()
+    }
+    hasRestoredLocalState = true
+    LaunchSignposts.event("first-content")
+    #if DEBUG
+      signalFirstContent()
+    #endif
+  }
+
+  /// The refresh restore calls for. A pending session with no label is still waiting to be told
+  /// which Account it reached, so its refresh is the identifying read.
+  private func refreshAfterRestore() async {
+    switch sessionActivation {
+    case .active:
+      await refresh(awaitUpload: false)
+    case .pending:
+      guard phase == .launching else { return }
+      await refresh()
+      if phase == .launching {
+        presentPendingRefreshFailure(message: AuthorizationError.genericConnectFailureMessage)
+      }
+    case nil:
       await refresh(awaitUpload: false)
     }
     LaunchSignposts.event("fresh-content")
@@ -707,15 +771,21 @@ final class AppModel {
     await connectAccount(switchingAccount: true)
   }
 
-  /// The one refresh the pull-to-refresh gesture and a background app refresh both run: read the
-  /// providers this phone signed in to and, when there is an account, the account summary — at
-  /// the same time, because neither waits on the other — then merge them, republish the widget
-  /// snapshot, evaluate local remaining-quota alerts, rebuild reset reminders, and ask for the
-  /// next background window. Reports whether either side answered, which is the success a
-  /// `BGAppRefreshTask` completes with.
+  /// The one refresh the pull-to-refresh gesture, the refresh button and a background app refresh
+  /// all run: read the providers this phone signed in to and, when there is an account, the
+  /// account summary — at the same time, because neither waits on the other.
   ///
-  /// The next window is only worth asking for while something is left to read. A phone with
-  /// neither an account nor a provider session withdraws the standing ask on its way out.
+  /// Each side reaches the screen the moment it answers: the summary is applied when it arrives,
+  /// and every provider reading is merged into the local collection as it comes back, so one slow
+  /// provider holds up nothing but its own row. What the whole pass came to is then handled once:
+  /// the local readings are kept on disk and sampled, the widget snapshot is republished, local
+  /// remaining-quota alerts and reset reminders are evaluated, what this phone read is uploaded,
+  /// and the next background window is asked for. Reports whether either side answered, which is
+  /// the success a `BGAppRefreshTask` completes with.
+  ///
+  /// One refresh runs at a time; a second request while one is running is refused. The next
+  /// window is only worth asking for while something is left to read. A phone with neither an
+  /// account nor a provider session withdraws the standing ask on its way out.
   @discardableResult
   func refresh(
     budget: Duration = LocalCollector.foregroundBudget,
@@ -723,40 +793,66 @@ final class AppModel {
   ) async -> Bool {
     guard !isRefreshing else { return false }
     isRefreshing = true
-    defer { isRefreshing = false }
+    let asked = providers.sessions.map(\.key)
+    pendingReadings = Set(asked)
+    refreshReads = pendingReadings.count
+    defer {
+      isRefreshing = false
+      awaitsFirstRefresh = false
+      pendingReadings = []
+      awaitsSummary = false
+      refreshReads = 0
+    }
     kickProviderStatus()
     let collector = localCollector
-    let collects = !providers.sessions.isEmpty
+    let previous = localCollection
     let localInterval = LaunchSignposts.begin("local-collection")
-    async let collected: LocalCollection? =
-      collects ? await collector.collect(within: budget) : nil
+    async let collected: LocalCollector.Pass? =
+      asked.isEmpty
+      ? nil
+      : collector.collect(within: budget) { [weak self] answer in
+        await self?.accept(answer)
+      }
     // The session is read from its store rather than from what a previous read left in memory: a
     // background refresh can run before anything has restored. An unreadable Keychain is not a
     // sign-out: the phone may be locked.
     let presence = await account.sessionPresence()
-    let result: AccountRefreshResult?
-    switch presence {
-    case .signedIn:
+    var result: AccountRefreshResult?
+    var summaryFollowUp = SummaryFollowUp.none
+    if case .signedIn = presence {
+      awaitsSummary = true
+      refreshReads += 1
       let summaryInterval = LaunchSignposts.begin("summary")
-      result = await account.fetchTodaySummary()
+      let answered = await account.fetchTodaySummary()
       LaunchSignposts.end("summary", summaryInterval)
-    case .signedOut, .unknown:
-      result = nil
+      awaitsSummary = false
+      result = answered
+      summaryFollowUp = await apply(answered)
     }
-    let collection = await collected
+    let pass = await collected
     LaunchSignposts.end("local-collection", localInterval)
-    if let collection { applyLocalCollection(collection) }
+    if let pass { finishLocalPass(pass, previous: previous) }
+    // A pass cut at its budget still read something if any provider answered in time.
+    let readLocally = pass.map { $0.isComplete || !$0.collection.snapshots.isEmpty } ?? false
     switch presence {
     case .signedIn:
-      if let result {
-        await apply(result, collected: collection != nil)
-        await finishUpload(collection, wait: awaitUpload)
+      if result != nil {
+        switch summaryFollowUp {
+        case .publish:
+          publishWidget()
+          evaluateAlerts()
+        case .afterFailure(let hasTrustedSummary):
+          syncWidgetAfterFailure(hasTrustedSummary: hasTrustedSummary, collected: readLocally)
+        case .none:
+          break
+        }
+        await finishUpload(pass?.collection, wait: awaitUpload)
         scheduleBackgroundRefresh()
       }
     case .signedOut:
       applyWithoutAccount()
     case .unknown:
-      if collection != nil {
+      if readLocally {
         if summary != nil {
           publishWidget()
         }
@@ -765,7 +861,54 @@ final class AppModel {
     }
     // `result?.error == nil` would answer true for a refresh that never read at all, so what
     // each side actually answered is asked separately.
-    return (result.map { $0.error == nil } ?? false) || collection != nil
+    return (result.map { $0.error == nil } ?? false) || readLocally
+  }
+
+  /// What is left to do with a summary once the local pass beside it has finished.
+  private enum SummaryFollowUp {
+    case none
+    case publish
+    case afterFailure(hasTrustedSummary: Bool)
+  }
+
+  /// One provider answered: its reading replaces the one on screen for the same account, now.
+  /// Keeping it, sampling it and marking refused sessions wait for the end of the pass.
+  private func accept(_ answer: LocalCollector.Answer) {
+    guard isRefreshing else { return }
+    pendingReadings.remove(answer.sessionKey)
+    guard case .reading(let snapshot) = answer.kind else { return }
+    var collection = localCollection ?? LocalCollection(collectedAt: now())
+    collection.snapshots.removeAll {
+      LocalCollector.sessionKey(for: $0) == LocalCollector.sessionKey(for: snapshot)
+    }
+    collection.snapshots.append(snapshot)
+    collection.snapshots.sort { $0.account.fingerprint < $1.account.fingerprint }
+    localCollection = collection
+    if !firstReadingSignaled {
+      firstReadingSignaled = true
+      LaunchSignposts.event("first-reading")
+    }
+  }
+
+  /// What the pass came to. A complete pass is the whole answer. A pass cut at its budget keeps
+  /// every reading that arrived, and for a session that did not answer in time, the reading it
+  /// had before — a phone woken briefly shows the last quota it knows, not none.
+  private func finishLocalPass(_ pass: LocalCollector.Pass, previous: LocalCollection?) {
+    guard !pass.isComplete else {
+      applyLocalCollection(pass.collection)
+      return
+    }
+    var collection = pass.collection
+    let answered = Set(
+      collection.snapshots.map(LocalCollector.sessionKey(for:)) + collection.needsSignIn)
+    let unanswered = Set(pass.sessionKeys).subtracting(answered)
+    collection.snapshots += (previous?.snapshots ?? []).filter {
+      unanswered.contains(LocalCollector.sessionKey(for: $0))
+    }
+    collection.snapshots.sort { $0.account.fingerprint < $1.account.fingerprint }
+    collection.needsSignIn += (previous?.needsSignIn ?? []).filter(unanswered.contains)
+    collection.needsSignIn.sort()
+    applyLocalCollection(collection)
   }
 
   func waitForDetachedLaunchWork() async {
@@ -1096,7 +1239,9 @@ final class AppModel {
     sessionActivation == .pending
   }
 
-  private func apply(_ result: AccountRefreshResult, collected: Bool) async {
+  /// Put what the summary read answered on screen. The widget and the alerts follow the whole
+  /// pass, so what is left for them is handed back rather than done here.
+  private func apply(_ result: AccountRefreshResult) async -> SummaryFollowUp {
     let previousETag = summaryETag
     let previousSummary = summary
     summary = result.summary
@@ -1106,29 +1251,31 @@ final class AppModel {
     usage.accountSummaryAccepted(result.summary, etag: result.etag)
     if isPendingSession {
       await applyPending(result)
-      return
+      return .none
     }
+    let followUp: SummaryFollowUp
     switch result.error {
     case .none:
       banner = nil
       expiredMessage = nil
       phase = .signedIn
-      publishWidget()
-      evaluateAlerts()
+      followUp = .publish
     case .sessionExpired:
       applyExpired()
+      followUp = .none
     case .notSignedIn:
       // Signing out, or never having signed in, is not an expiry. Saying a session expired to
       // someone who deliberately logged out invents a failure that did not happen.
       applySignedOut()
+      followUp = .none
     case .relay(.unavailable), .relay(.timeout):
       phase = .signedIn
       banner = failureBanner(hasCachedSummary: result.summary != nil, offline: true)
-      syncWidgetAfterFailure(hasTrustedSummary: result.summary != nil, collected: collected)
+      followUp = .afterFailure(hasTrustedSummary: result.summary != nil)
     case .some:
       phase = .signedIn
       banner = failureBanner(hasCachedSummary: result.summary != nil, offline: false)
-      syncWidgetAfterFailure(hasTrustedSummary: result.summary != nil, collected: collected)
+      followUp = .afterFailure(hasTrustedSummary: result.summary != nil)
     }
     if phase == .signedIn {
       resolvePendingSubscriptionSelection()
@@ -1140,6 +1287,7 @@ final class AppModel {
       )
       await accountSettings.refresh()
     }
+    return followUp
   }
 
   private func applyPending(_ result: AccountRefreshResult) async {
@@ -1359,6 +1507,8 @@ final class AppModel {
       fetchedAt: Date?,
       fromCache: Bool,
       isRefreshing: Bool,
+      pendingReadings: Set<String>,
+      refreshReads: Int,
       banner: Banner?,
       expiredMessage: String?,
       localCollection: LocalCollection?,
@@ -1381,6 +1531,8 @@ final class AppModel {
       self.fetchedAt = fetchedAt
       self.fromCache = fromCache
       self.isRefreshing = isRefreshing
+      self.pendingReadings = pendingReadings
+      self.refreshReads = refreshReads
       self.banner = banner
       self.expiredMessage = expiredMessage
       self.localCollection = localCollection

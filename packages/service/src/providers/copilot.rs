@@ -284,6 +284,7 @@ fn snapshot_window(
             remaining_value: remaining.filter(|value| *value >= 0.0),
             limit_value: None,
             value_unit: Some("count"),
+            expiries: Vec::new(),
         });
     }
     let remaining = remaining?;
@@ -316,6 +317,7 @@ fn snapshot_window(
         remaining_value: Some(remaining.max(0.0)),
         limit_value: (limit > 0.0).then_some(limit),
         value_unit: Some("count"),
+        expiries: Vec::new(),
     })
 }
 
@@ -346,6 +348,7 @@ fn limited_user_windows(value: &Value, reset: Option<&str>) -> Vec<QuotaWindow> 
             remaining_value: Some(remaining.max(0.0)),
             limit_value: None,
             value_unit: Some("count"),
+            expiries: Vec::new(),
         })
     })
     .collect()

@@ -71,9 +71,14 @@ struct ProviderWebConformanceTests {
 }
 
 /// The provider, answering the fixture's queue and remembering what it was asked.
+///
+/// A request answers the first unused exchange with its own method and path. Requests a collector
+/// makes one after another therefore meet the queue in order, and requests it makes at the same
+/// time — Claude's organization list and account document — each meet their own exchange,
+/// whichever arrives first.
 actor StubTransport: ProviderWebTransport {
   private let exchanges: [ProviderWebFixture.Exchange]
-  private var served = 0
+  private var used: Set<Int> = []
   private var mismatch: String?
 
   init(exchanges: [ProviderWebFixture.Exchange]) {
@@ -81,17 +86,22 @@ actor StubTransport: ProviderWebTransport {
   }
 
   func send(_ request: URLRequest) async throws -> ProviderWebResponse {
-    guard served < exchanges.count else {
+    let path = [request.url?.path, request.url?.query].compactMap { $0 }.joined(separator: "?")
+    let method = request.httpMethod ?? ""
+    guard used.count < exchanges.count else {
       mismatch = mismatch ?? "asked for more exchanges than the case declares"
       throw URLError(.badServerResponse)
     }
-    let exchange = exchanges[served]
-    served += 1
-    let path = request.url?.path ?? ""
-    let method = request.httpMethod ?? ""
-    if path != exchange.path || method != exchange.method {
-      mismatch = mismatch ?? "expected \(exchange.method) \(exchange.path), sent \(method) \(path)"
+    guard
+      let index = exchanges.indices.first(where: {
+        !used.contains($0) && exchanges[$0].path == path && exchanges[$0].method == method
+      })
+    else {
+      mismatch = mismatch ?? "sent \(method) \(path), which the case does not declare"
+      throw URLError(.badServerResponse)
     }
+    used.insert(index)
+    let exchange = exchanges[index]
     // A cookie is sent in the one header it belongs in, and nowhere else.
     if request.value(forHTTPHeaderField: "Authorization") != nil {
       mismatch = mismatch ?? "a stored session was spent as a bearer token"

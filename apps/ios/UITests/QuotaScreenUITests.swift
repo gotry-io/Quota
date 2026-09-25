@@ -260,15 +260,60 @@ final class QuotaScreenUITests: QuotaUITestCase {
     try audit(app)
   }
 
-  func testLoadingFixtureShowsCenteredProgress() throws {
+  /// Nothing read yet and the first refresh on its way: the tabs, with one placeholder card per
+  /// provider session rather than the empty state.
+  func testLoadingFixtureShowsPlaceholderCards() throws {
     let app = launch(fixture: "loading")
     XCTAssertTrue(
-      app.descendants(matching: .any)["root.loading"].waitForExistence(timeout: 10),
-      "root.loading"
+      app.descendants(matching: .any)["overview.root"].waitForExistence(timeout: 10),
+      "overview.root"
     )
-    XCTAssertTrue(app.staticTexts["Loading account…"].exists, "Loading account…")
-    attachScreenshot(app, name: "root-loading")
+    XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "overview.placeholder").count, 2)
+    XCTAssertFalse(app.descendants(matching: .any)["overview.empty"].exists, "no empty state")
+    XCTAssertFalse(app.buttons["overview.refresh"].isEnabled, "refresh button waits")
+    attachScreenshot(app, name: "overview-loading")
     try audit(app)
+  }
+
+  /// A refresh in flight over what is already on screen: **Updating…** under the title, the
+  /// refresh button busy, and the one row still waiting for its reading marked in place.
+  func testUpdatingFixtureShowsProgressInTheTitleAndThePendingRow() throws {
+    let app = launch(fixture: "updating")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["overview.root"].waitForExistence(timeout: 10),
+      "overview.root"
+    )
+    XCTAssertTrue(app.staticTexts["Updating… 2 of 3"].waitForExistence(timeout: 5), "subtitle")
+    XCTAssertFalse(app.buttons["overview.refresh"].isEnabled, "refresh button waits")
+    attachScreenshot(app, name: "overview-updating")
+    try audit(app)
+  }
+
+  /// Idle: the age under the title and a refresh button that can be pressed.
+  func testContentFixtureShowsTheAgeUnderTheTitle() throws {
+    let app = launch(fixture: "content")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["overview.root"].waitForExistence(timeout: 10),
+      "overview.root"
+    )
+    let age = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Updated '"))
+    XCTAssertTrue(age.firstMatch.waitForExistence(timeout: 5), "subtitle")
+    XCTAssertTrue(app.buttons["Refresh"].isEnabled, "Refresh")
+    attachScreenshot(app, name: "overview-idle")
+  }
+
+  /// The launch mark held still at the start of its fill (the faint track alone), halfway, and
+  /// filled, over the Overview it fades into.
+  func testLaunchFixtureShowsTheMark() throws {
+    for (progress, name) in [("0", "launch-mark-start"), ("0.5", "launch-mark-mid"), ("1", "launch-mark-end")] {
+      let app = launch(fixture: "launch", extra: ["--launch-progress", progress])
+      XCTAssertTrue(
+        app.descendants(matching: .any)["overview.root"].waitForExistence(timeout: 10),
+        "overview.root"
+      )
+      attachScreenshot(app, name: name)
+      app.terminate()
+    }
   }
 
   func testUsageEmptyScreen() throws {

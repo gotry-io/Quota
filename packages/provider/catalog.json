@@ -66,6 +66,11 @@
             "file": "packages/service/src/providers/codex/mod.rs",
             "name": "maps_credits_balance_and_reset_credits"
           },
+          "quota.reset_credits": {
+            "kind": "fixture",
+            "fixture": "packages/protocol/fixtures/provider-web-conformance.json",
+            "pointer": "/cases/13/expect/snapshot/windows/2"
+          },
           "usage.local_logs": {
             "kind": "fixture",
             "fixture": "packages/service/fixtures/usage/codex.jsonl"
@@ -155,6 +160,11 @@
             "kind": "test",
             "file": "packages/service/src/providers/claude/mod.rs",
             "name": "maps_optional_usage_windows_and_extra_usage"
+          },
+          "quota.reset_credits": {
+            "kind": "fixture",
+            "fixture": "packages/protocol/fixtures/provider-web-conformance.json",
+            "pointer": "/cases/15/expect/snapshot/windows/1"
           },
           "usage.local_logs": {
             "kind": "fixture",
