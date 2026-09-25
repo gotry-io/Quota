@@ -8,7 +8,7 @@
   "cases": [
     {
       "provider": "codex",
-      "name": "a signed-in ChatGPT session names the account and reports both windows",
+      "name": "a signed-in ChatGPT session names the account and reports both windows, and asks for no list of zero reset credits",
       "now": "2026-08-10T00:00:00Z",
       "cookie_header": "__Secure-next-auth.session-token=abc; _account=acct_1",
       "exchanges": [
@@ -45,6 +45,9 @@
                 "limit_window_seconds": 604800,
                 "reset_at": "2026-08-15T00:00:00Z"
               }
+            },
+            "rate_limit_reset_credits": {
+              "available_count": 0
             }
           }
         }
@@ -78,6 +81,13 @@
               "resets_at": "2026-08-15T00:00:00Z",
               "duration_seconds": 604800,
               "primary_cadence": "weekly"
+            },
+            {
+              "id": "reset_credits",
+              "title": "Reset Credits",
+              "used_percent": 0.0,
+              "remaining_value": 0.0,
+              "value_unit": "count"
             }
           ],
           "status": "available",
@@ -169,7 +179,7 @@
         },
         {
           "method": "GET",
-          "path": "/api/organizations/org-1/usage",
+          "path": "/api/organizations/org-1/usage?cedar_ember=1",
           "status": 200,
           "body": {
             "five_hour": {
@@ -231,7 +241,7 @@
     },
     {
       "provider": "claude",
-      "name": "an account that answers for a known window, even to say it has none, has been read",
+      "name": "an account that answers for a known window, even to say it has none, has been read, and a limit-reset block it cannot use is left out",
       "now": "2026-08-10T00:00:00Z",
       "cookie_header": "sessionKey=sk-ant-ok",
       "exchanges": [
@@ -257,10 +267,28 @@
         },
         {
           "method": "GET",
-          "path": "/api/organizations/org-1/usage",
+          "path": "/api/organizations/org-1/usage?cedar_ember=1",
           "status": 200,
           "body": {
-            "five_hour": null
+            "five_hour": null,
+            "cedar_ember": {
+              "eligible": false,
+              "ineligible_reason": "surface",
+              "at_limit": false,
+              "grants": [
+                {
+                  "id": "grant_1",
+                  "label": "Weekly reset",
+                  "resets_total": 1,
+                  "resets_left": 1,
+                  "starts_at": "2026-08-01T00:00:00Z",
+                  "ends_at": "2026-10-22T16:00:00Z",
+                  "clears": ["weekly"],
+                  "paused": false,
+                  "usable_now": false
+                }
+              ]
+            }
           }
         }
       ],
@@ -311,7 +339,7 @@
         },
         {
           "method": "GET",
-          "path": "/api/organizations/org-1/usage",
+          "path": "/api/organizations/org-1/usage?cedar_ember=1",
           "status": 200,
           "body": {}
         }
@@ -464,6 +492,524 @@
         "validated": "auth_required",
         "snapshot": null,
         "snapshot_error": "auth_required"
+      }
+    },
+    {
+      "provider": "codex",
+      "name": "reset credits name when the ones that expire lapse, and the count stays the usage document's",
+      "now": "2026-08-10T00:00:00Z",
+      "cookie_header": "__Secure-next-auth.session-token=abc; _account=acct_1",
+      "exchanges": [
+        {
+          "method": "GET",
+          "path": "/api/auth/session",
+          "status": 200,
+          "body": {
+            "user": {
+              "email": "ada@example.com"
+            },
+            "account": {
+              "id": "acct_1",
+              "planType": "plus"
+            }
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/backend-api/wham/usage",
+          "status": 200,
+          "body": {
+            "plan_type": "plus",
+            "email": "ada@example.com",
+            "account_id": "acct_1",
+            "rate_limit": {
+              "primary_window": {
+                "used_percent": 12,
+                "limit_window_seconds": 18000,
+                "reset_at": "2026-08-10T05:00:00Z"
+              },
+              "secondary_window": {
+                "used_percent": 40,
+                "limit_window_seconds": 604800,
+                "reset_at": "2026-08-15T00:00:00Z"
+              }
+            },
+            "rate_limit_reset_credits": {
+              "available_count": 4
+            }
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/backend-api/wham/rate-limit-reset-credits",
+          "status": 200,
+          "body": {
+            "credits": [
+              {
+                "id": "rc_1",
+                "reset_type": "rate_limit",
+                "status": "available",
+                "granted_at": "2026-07-22T16:00:00Z",
+                "expires_at": "2026-10-22T16:00:00Z",
+                "title": "Reset"
+              },
+              {
+                "id": "rc_2",
+                "reset_type": "rate_limit",
+                "status": "available",
+                "granted_at": "2026-07-22T16:05:00Z",
+                "expires_at": "2026-10-22T16:00:00+00:00"
+              },
+              {
+                "id": "rc_3",
+                "reset_type": "rate_limit",
+                "status": "available",
+                "granted_at": "2026-07-01T00:00:00Z",
+                "expires_at": null
+              },
+              {
+                "id": "rc_4",
+                "reset_type": "rate_limit",
+                "status": "redeemed",
+                "granted_at": "2026-07-01T00:00:00Z",
+                "expires_at": "2026-09-01T00:00:00Z"
+              },
+              {
+                "id": "rc_5",
+                "reset_type": "rate_limit",
+                "status": "available",
+                "granted_at": "2026-06-01T00:00:00Z",
+                "expires_at": "2026-08-01T00:00:00Z"
+              },
+              {
+                "id": "rc_6",
+                "reset_type": "rate_limit",
+                "status": "available",
+                "granted_at": "2026-08-01T00:00:00Z",
+                "expires_at": "2026-11-05T09:30:00+01:00"
+              }
+            ],
+            "available_count": 4,
+            "total_earned_count": 7
+          }
+        }
+      ],
+      "expect": {
+        "validated": {
+          "account_fingerprint": "ad243fcad92aaeeda410ce6f2d8adbd5f7e9c4fc102af358675d4f595f0d01fb",
+          "account_label": "ad***@example.com"
+        },
+        "snapshot": {
+          "provider": "codex",
+          "account": {
+            "fingerprint": "ad243fcad92aaeeda410ce6f2d8adbd5f7e9c4fc102af358675d4f595f0d01fb",
+            "fingerprint_scope": "global",
+            "label": "ad***@example.com",
+            "plan": "plus"
+          },
+          "windows": [
+            {
+              "id": "five_hour",
+              "title": "5 Hours",
+              "used_percent": 12.0,
+              "resets_at": "2026-08-10T05:00:00Z",
+              "duration_seconds": 18000,
+              "primary_cadence": "five_hour"
+            },
+            {
+              "id": "weekly",
+              "title": "Weekly",
+              "used_percent": 40.0,
+              "resets_at": "2026-08-15T00:00:00Z",
+              "duration_seconds": 604800,
+              "primary_cadence": "weekly"
+            },
+            {
+              "id": "reset_credits",
+              "title": "Reset Credits",
+              "used_percent": 0.0,
+              "remaining_value": 4.0,
+              "value_unit": "count",
+              "expiries": [
+                {
+                  "expires_at": "2026-10-22T16:00:00Z",
+                  "count": 2
+                },
+                {
+                  "expires_at": "2026-11-05T08:30:00Z",
+                  "count": 1
+                }
+              ]
+            }
+          ],
+          "status": "available",
+          "observed_at": "2026-08-10T00:00:00Z"
+        }
+      }
+    },
+    {
+      "provider": "codex",
+      "name": "a reset-credit list that fails keeps the count on its own",
+      "now": "2026-08-10T00:00:00Z",
+      "cookie_header": "__Secure-next-auth.session-token=abc; _account=acct_1",
+      "exchanges": [
+        {
+          "method": "GET",
+          "path": "/api/auth/session",
+          "status": 200,
+          "body": {
+            "user": {
+              "email": "ada@example.com"
+            },
+            "account": {
+              "id": "acct_1",
+              "planType": "plus"
+            }
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/backend-api/wham/usage",
+          "status": 200,
+          "body": {
+            "plan_type": "plus",
+            "email": "ada@example.com",
+            "account_id": "acct_1",
+            "rate_limit": {
+              "primary_window": {
+                "used_percent": 12,
+                "limit_window_seconds": 18000,
+                "reset_at": "2026-08-10T05:00:00Z"
+              },
+              "secondary_window": {
+                "used_percent": 40,
+                "limit_window_seconds": 604800,
+                "reset_at": "2026-08-15T00:00:00Z"
+              }
+            },
+            "rate_limit_reset_credits": {
+              "available_count": 2
+            }
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/backend-api/wham/rate-limit-reset-credits",
+          "status": 500,
+          "body": {
+            "error": "internal"
+          }
+        }
+      ],
+      "expect": {
+        "validated": {
+          "account_fingerprint": "ad243fcad92aaeeda410ce6f2d8adbd5f7e9c4fc102af358675d4f595f0d01fb",
+          "account_label": "ad***@example.com"
+        },
+        "snapshot": {
+          "provider": "codex",
+          "account": {
+            "fingerprint": "ad243fcad92aaeeda410ce6f2d8adbd5f7e9c4fc102af358675d4f595f0d01fb",
+            "fingerprint_scope": "global",
+            "label": "ad***@example.com",
+            "plan": "plus"
+          },
+          "windows": [
+            {
+              "id": "five_hour",
+              "title": "5 Hours",
+              "used_percent": 12.0,
+              "resets_at": "2026-08-10T05:00:00Z",
+              "duration_seconds": 18000,
+              "primary_cadence": "five_hour"
+            },
+            {
+              "id": "weekly",
+              "title": "Weekly",
+              "used_percent": 40.0,
+              "resets_at": "2026-08-15T00:00:00Z",
+              "duration_seconds": 604800,
+              "primary_cadence": "weekly"
+            },
+            {
+              "id": "reset_credits",
+              "title": "Reset Credits",
+              "used_percent": 0.0,
+              "remaining_value": 2.0,
+              "value_unit": "count"
+            }
+          ],
+          "status": "available",
+          "observed_at": "2026-08-10T00:00:00Z"
+        }
+      }
+    },
+    {
+      "provider": "claude",
+      "name": "limit resets count every usable grant and group the ones that end by when they end",
+      "now": "2026-08-10T00:00:00Z",
+      "cookie_header": "sessionKey=sk-ant-ok",
+      "exchanges": [
+        {
+          "method": "GET",
+          "path": "/api/organizations",
+          "status": 200,
+          "body": [
+            {
+              "uuid": "org-1",
+              "capabilities": ["chat"]
+            }
+          ]
+        },
+        {
+          "method": "GET",
+          "path": "/api/account",
+          "status": 200,
+          "body": {
+            "email_address": "ada@example.com",
+            "subscription_type": "max"
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/organizations/org-1/usage?cedar_ember=1",
+          "status": 200,
+          "body": {
+            "five_hour": {
+              "utilization": 12,
+              "resets_at": "2026-08-10T03:00:00Z"
+            },
+            "cedar_ember": {
+              "eligible": true,
+              "ineligible_reason": null,
+              "at_limit": false,
+              "weekly_resets_at": "2026-08-14T00:00:00Z",
+              "cooldown_until": null,
+              "next_grant_id": "grant_7",
+              "grants": [
+                {
+                  "id": "grant_1",
+                  "label": "Limit reset",
+                  "resets_total": 2,
+                  "resets_left": 2,
+                  "starts_at": "2026-07-01T00:00:00Z",
+                  "ends_at": "2026-10-22T16:00:00Z",
+                  "clears": ["five_hour", "weekly"],
+                  "paused": false,
+                  "usable_now": true,
+                  "use_requires_limit": true,
+                  "percent_used": 0
+                },
+                {
+                  "id": "grant_2",
+                  "label": "Limit reset",
+                  "resets_total": 1,
+                  "resets_left": 1,
+                  "starts_at": "2026-07-01T00:00:00Z",
+                  "ends_at": "2026-10-22T16:00:00Z",
+                  "clears": ["five_hour", "weekly"],
+                  "paused": false,
+                  "usable_now": true,
+                  "use_requires_limit": true,
+                  "percent_used": 0
+                },
+                {
+                  "id": "grant_3",
+                  "label": "Limit reset",
+                  "resets_total": 1,
+                  "resets_left": 1,
+                  "starts_at": "2026-07-01T00:00:00Z",
+                  "ends_at": null,
+                  "clears": ["five_hour", "weekly"],
+                  "paused": false,
+                  "usable_now": true,
+                  "use_requires_limit": true,
+                  "percent_used": 0
+                },
+                {
+                  "id": "grant_4",
+                  "label": "Limit reset",
+                  "resets_total": 5,
+                  "resets_left": 5,
+                  "starts_at": "2026-07-01T00:00:00Z",
+                  "ends_at": "2026-10-01T00:00:00Z",
+                  "clears": ["five_hour", "weekly"],
+                  "paused": true,
+                  "usable_now": true,
+                  "use_requires_limit": true,
+                  "percent_used": 0
+                },
+                {
+                  "id": "grant_5",
+                  "label": "Limit reset",
+                  "resets_total": 2,
+                  "resets_left": 2,
+                  "starts_at": "2026-07-01T00:00:00Z",
+                  "ends_at": "2026-08-01T00:00:00Z",
+                  "clears": ["five_hour", "weekly"],
+                  "paused": false,
+                  "usable_now": true,
+                  "use_requires_limit": true,
+                  "percent_used": 0
+                },
+                {
+                  "id": "grant_6",
+                  "label": "Limit reset",
+                  "resets_total": 1,
+                  "resets_left": 1,
+                  "starts_at": "2026-07-01T00:00:00Z",
+                  "ends_at": "2026-11-05T09:30:00+01:00",
+                  "clears": ["five_hour", "weekly"],
+                  "paused": false,
+                  "usable_now": true,
+                  "use_requires_limit": true,
+                  "percent_used": 0
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "expect": {
+        "validated": {
+          "account_fingerprint": "dd2f02dedb791a7c3f3dba3fff87286ad6b9f887fba092f0271b526eb5cc3781",
+          "account_label": "ad***@example.com"
+        },
+        "snapshot": {
+          "provider": "claude",
+          "account": {
+            "fingerprint": "dd2f02dedb791a7c3f3dba3fff87286ad6b9f887fba092f0271b526eb5cc3781",
+            "fingerprint_scope": "global",
+            "label": "ad***@example.com",
+            "plan": "max"
+          },
+          "windows": [
+            {
+              "id": "five_hour",
+              "title": "5 Hours",
+              "used_percent": 12.0,
+              "resets_at": "2026-08-10T03:00:00Z",
+              "duration_seconds": 18000,
+              "primary_cadence": "five_hour"
+            },
+            {
+              "id": "reset_credits",
+              "title": "Reset Credits",
+              "used_percent": 0.0,
+              "remaining_value": 5.0,
+              "value_unit": "count",
+              "expiries": [
+                {
+                  "expires_at": "2026-10-22T16:00:00Z",
+                  "count": 3
+                },
+                {
+                  "expires_at": "2026-11-05T08:30:00Z",
+                  "count": 1
+                }
+              ]
+            }
+          ],
+          "status": "available",
+          "observed_at": "2026-08-10T00:00:00Z"
+        }
+      }
+    },
+    {
+      "provider": "claude",
+      "name": "a limit-reset block this build cannot read is left out, and the reading beside it stands",
+      "now": "2026-08-10T00:00:00Z",
+      "cookie_header": "sessionKey=sk-ant-ok",
+      "exchanges": [
+        {
+          "method": "GET",
+          "path": "/api/organizations",
+          "status": 200,
+          "body": [
+            {
+              "uuid": "org-1",
+              "capabilities": ["chat"]
+            }
+          ]
+        },
+        {
+          "method": "GET",
+          "path": "/api/account",
+          "status": 200,
+          "body": {
+            "email_address": "ada@example.com",
+            "subscription_type": "max"
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/api/organizations/org-1/usage?cedar_ember=1",
+          "status": 200,
+          "body": {
+            "five_hour": {
+              "utilization": 12,
+              "resets_at": "2026-08-10T03:00:00Z"
+            },
+            "cedar_ember": {
+              "eligible": true,
+              "grants": [
+                {
+                  "id": "grant_1",
+                  "label": "Limit reset",
+                  "resets_total": 2,
+                  "resets_left": 2,
+                  "starts_at": "2026-07-01T00:00:00Z",
+                  "ends_at": "2026-10-22T16:00:00Z",
+                  "clears": ["five_hour", "weekly"],
+                  "paused": false,
+                  "usable_now": true,
+                  "use_requires_limit": true,
+                  "percent_used": 0
+                },
+                {
+                  "id": "grant_2",
+                  "label": "Limit reset",
+                  "resets_total": 1,
+                  "resets_left": -1,
+                  "starts_at": "2026-07-01T00:00:00Z",
+                  "ends_at": "2026-10-22T16:00:00Z",
+                  "clears": ["five_hour", "weekly"],
+                  "paused": false,
+                  "usable_now": true,
+                  "use_requires_limit": true,
+                  "percent_used": 0
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "expect": {
+        "validated": {
+          "account_fingerprint": "dd2f02dedb791a7c3f3dba3fff87286ad6b9f887fba092f0271b526eb5cc3781",
+          "account_label": "ad***@example.com"
+        },
+        "snapshot": {
+          "provider": "claude",
+          "account": {
+            "fingerprint": "dd2f02dedb791a7c3f3dba3fff87286ad6b9f887fba092f0271b526eb5cc3781",
+            "fingerprint_scope": "global",
+            "label": "ad***@example.com",
+            "plan": "max"
+          },
+          "windows": [
+            {
+              "id": "five_hour",
+              "title": "5 Hours",
+              "used_percent": 12.0,
+              "resets_at": "2026-08-10T03:00:00Z",
+              "duration_seconds": 18000,
+              "primary_cadence": "five_hour"
+            }
+          ],
+          "status": "available",
+          "observed_at": "2026-08-10T00:00:00Z"
+        }
       }
     }
   ]

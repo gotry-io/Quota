@@ -12,6 +12,8 @@ public struct ClaudeWebCollector: ProviderWebCollector {
   public static let source = "claude_web_usage_api"
 
   public static let defaultOrigin = "https://claude.ai"
+  /// Asks for the limit-reset grants block, which answers `null` without it.
+  static let usageQuery = "cedar_ember=1"
 
   private let http: ProviderWebHTTP
   private let origin: String
@@ -54,7 +56,7 @@ public struct ClaudeWebCollector: ProviderWebCollector {
     let usage = try await fetchUsage(
       cookieHeader: cookieHeader, organizationID: account.organizationID,
       timeout: ProviderWebLimits.requestTimeout)
-    let windows = ClaudeUsage.map(usage)
+    let windows = ClaudeUsage.mapReading(usage, now: now)
     if windows.isEmpty && !ClaudeUsage.answersForAKnownWindow(usage) {
       throw ProviderWebError(.unavailable, Self.source)
     }
@@ -121,7 +123,7 @@ public struct ClaudeWebCollector: ProviderWebCollector {
       throw ProviderWebError(.error, Self.source)
     }
     return try await http.getJSONSession(
-      try url("/api/organizations/\(organizationID)/usage"),
+      try url("/api/organizations/\(organizationID)/usage?\(Self.usageQuery)"),
       headers: Self.headers(cookieHeader), timeout: timeout, source: Self.source)
   }
 

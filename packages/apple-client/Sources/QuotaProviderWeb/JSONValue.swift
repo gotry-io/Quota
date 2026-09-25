@@ -1,4 +1,5 @@
 import Foundation
+import QuotaPresentation
 
 /// A parsed provider document. The collectors read provider JSON exactly the way the Rust
 /// service reads it — a missing key, a key of the wrong type, and a key that is `null` are three
@@ -160,6 +161,21 @@ enum ProviderJSON {
     let dayOfYear = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1
     let dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear
     return era * 146_097 + dayOfEra - 719_468
+  }
+
+  /// Units that lapse after `now`, grouped by the second they lapse at, nearest first — the Rust
+  /// service's `QuotaExpiry::group`. Only the nearest sixteen instants are listed, and a list
+  /// naming more units than `total` contradicts the count beside it and is dropped whole.
+  static func expiries(_ units: [(Int, Int)], now: Date, total: Double) -> [QuotaExpiry] {
+    let nowSeconds = Int(now.timeIntervalSince1970.rounded(.down))
+    var grouped: [Int: Int] = [:]
+    for (instant, count) in units where instant > nowSeconds && count > 0 {
+      grouped[instant, default: 0] += count
+    }
+    guard Double(grouped.values.reduce(0, +)) <= total else { return [] }
+    return grouped.keys.sorted().prefix(16).map {
+      QuotaExpiry(expiresAt: Date(timeIntervalSince1970: Double($0)), count: grouped[$0]!)
+    }
   }
 
   static func durationSeconds(start: Int?, end: Int?) -> Int? {

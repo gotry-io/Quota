@@ -140,6 +140,7 @@ fn map_windows(balances: &[Balance]) -> Vec<QuotaWindow> {
                 remaining_value: Some(balance.total),
                 limit_value: None,
                 value_unit: usd.then_some("usd"),
+                expiries: Vec::new(),
             }
         })
         .collect()

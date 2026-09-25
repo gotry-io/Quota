@@ -13,7 +13,7 @@ use super::super::common::{
     QuotaSnapshot, VALIDATION_TIMEOUT, ValidatedBrowserSession, account_identity,
     cookie_named_value, mask_email, obj_get, obj_get_any, string,
 };
-use super::{answers_for_a_known_window, claude_plan, map_usage};
+use super::{USAGE_QUERY, answers_for_a_known_window, claude_plan, map_reading, map_usage};
 
 pub const SOURCE: &str = "claude_web_usage_api";
 const ORIGIN: &str = "https://claude.ai";
@@ -87,7 +87,7 @@ fn collect_at(
         &account.organization_id,
         HTTP_TIMEOUT,
     )?;
-    let windows = map_usage(&usage);
+    let windows = map_reading(&usage, context.observed_unix());
     if windows.is_empty() && !answers_for_a_known_window(&usage) {
         return Err(ProviderError::new(ErrorCategory::Unavailable, SOURCE));
     }
@@ -167,7 +167,7 @@ fn fetch_usage(
     let user_agent = context.user_agent();
     let headers = web_headers(cookie, &user_agent);
     let (_, usage) = client.get_json_session(
-        &format!("{origin}/api/organizations/{organization_id}/usage"),
+        &format!("{origin}/api/organizations/{organization_id}/usage?{USAGE_QUERY}"),
         &headers,
         SOURCE,
     )?;

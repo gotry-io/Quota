@@ -72,6 +72,27 @@ struct FreshnessCopyConformanceTests {
     }
   }
 
+  @Test func expiryCopyMatchesTheSharedFixture() throws {
+    let cases = try ResetCopyFixture.expiryCases()
+    #expect(cases.count > 1)
+    for testCase in cases {
+      #expect(
+        ExpiryCopy.next(testCase.expiries, now: testCase.now, timeZone: testCase.timeZone)
+          == testCase.next,
+        "\(testCase.name) next"
+      )
+      #expect(
+        ExpiryCopy.lines(
+          testCase.expiries,
+          total: testCase.remainingValue,
+          now: testCase.now,
+          timeZone: testCase.timeZone
+        ) == testCase.lines,
+        "\(testCase.name) lines"
+      )
+    }
+  }
+
   @Test func missingResetDisplayMatchesTheSharedFixture() throws {
     let cases = try FreshnessCopyFixture.missingResetCases()
     #expect(cases.count > 1)
@@ -211,6 +232,38 @@ enum ResetCopyFixture {
         timeZone: timeZoneFromRFC3339(nowText),
         relative: entry["relative"] as? String,
         absolute: entry["absolute"] as? String
+      )
+    }
+  }
+
+  struct ExpiryCase {
+    let name: String
+    let now: Date
+    let timeZone: TimeZone
+    let remainingValue: Double
+    let expiries: [QuotaExpiry]
+    let next: String?
+    let lines: [String]
+  }
+
+  static func expiryCases() throws -> [ExpiryCase] {
+    let root = try JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL)) as! [String: Any]
+    let entries = root["expiries"] as! [[String: Any]]
+    return entries.map { entry in
+      let nowText = entry["now"] as! String
+      return ExpiryCase(
+        name: entry["name"] as! String,
+        now: parseRFC3339(nowText),
+        timeZone: timeZoneFromRFC3339(nowText),
+        remainingValue: (entry["remaining_value"] as! NSNumber).doubleValue,
+        expiries: (entry["expiries"] as! [[String: Any]]).map {
+          QuotaExpiry(
+            expiresAt: parseRFC3339($0["expires_at"] as! String),
+            count: $0["count"] as! Int
+          )
+        },
+        next: entry["next"] as? String,
+        lines: entry["lines"] as! [String]
       )
     }
   }

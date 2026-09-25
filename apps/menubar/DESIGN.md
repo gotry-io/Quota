@@ -157,8 +157,11 @@ The selected detail uses the same vocabulary as Quota iOS subscription detail. H
 provider mark, name, plan capsule, then `account · Updated` as supporting text. Then one
 `quotaCardSurface()` card per window (opaque `surface.content`, 20pt continuous corners, 16pt
 inner padding): window title, remaining as a 28pt semibold rounded
-numeral, meter, reset copy under the Menu Bar **Reset time** preference, pace headline and
-even-pace detail. Remaining is the strongest text. Empty: **No quota windows yet.**
+numeral, meter, reset copy under the Menu Bar **Reset time** preference, one meta line per expiry
+instant still ahead and the unlisted remainder (**2 · Expire Oct 22, 16:00**, **1 · No expiry**;
+`ExpiryCopy.lines`, the same lines as Quota iOS), pace headline and even-pace detail. The Agents
+provider page's reading lists the same lines. Remaining is the strongest text. Empty: **No quota
+windows yet.**
 
 Then **Remaining history** labelled **This Mac**. With the history switch on and an Account series
 cached for the subscription, the label is **From your devices** and the chart draws that series.
@@ -589,7 +592,9 @@ Each quota observation shows:
 - other budget windows that also have an absolute remaining amount as `71% · $3.75`;
 - percent-only windows as `71%`;
 - balance-only windows as `$12.34` (or the unit amount) under a **Balance** title when the
-  collector titled them Balance; **Reset Credits** keeps its title;
+  collector titled them Balance; **Reset Credits** keeps its title, and when it lists when its
+  credits lapse its quiet metadata is the nearest instant, **Next expires Oct 22**
+  (`ExpiryCopy.next`), in place of reset copy;
 - one meter per quota window when a percent is meaningful;
 - reset time as quiet metadata, in the shared reset copy; it does not imply the window period.
 

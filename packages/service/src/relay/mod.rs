@@ -1168,10 +1168,50 @@ fn validate_quota_window(value: &Value) -> Result<(), RelayError> {
         || object
             .get("value_unit")
             .is_some_and(|value| !valid_read_enum(value.as_str()))
+        || object
+            .get("expiries")
+            .is_some_and(|value| readable_expiries(value).is_none())
     {
         return Err(RelayError::InvalidResponse);
     }
     Ok(())
+}
+
+/// Each expiry's instant and count, when every item names both. A read takes the list without
+/// judging it against the window beside it, as `QuotaWindowReadSchema` does.
+fn readable_expiries(value: &Value) -> Option<Vec<(chrono::DateTime<chrono::FixedOffset>, u64)>> {
+    let items = value
+        .as_array()
+        .filter(|items| items.len() <= crate::providers::common::MAXIMUM_QUOTA_EXPIRIES)?;
+    items
+        .iter()
+        .map(|item| {
+            let instant = item
+                .get("expires_at")
+                .and_then(Value::as_str)
+                .filter(|value| value.len() <= 64)
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())?;
+            Some((instant, item.get("count").and_then(safe_positive_u64)?))
+        })
+        .collect()
+}
+
+/// An expiry list as Relay takes one: on a `count` window, one to sixteen instants in
+/// ascending order, naming no more units than the window holds.
+fn expiries_are_admissible(window: &serde_json::Map<String, Value>) -> bool {
+    let Some(value) = window.get("expiries") else {
+        return true;
+    };
+    let Some(expiries) = readable_expiries(value).filter(|expiries| !expiries.is_empty()) else {
+        return false;
+    };
+    let listed: u64 = expiries.iter().map(|(_, count)| count).sum();
+    window.get("value_unit").and_then(Value::as_str) == Some("count")
+        && expiries.windows(2).all(|pair| pair[0].0 < pair[1].0)
+        && window
+            .get("remaining_value")
+            .and_then(Value::as_f64)
+            .is_some_and(|remaining| listed as f64 <= remaining)
 }
 
 /// The four periods an Account read answers.
@@ -2654,6 +2694,7 @@ fn quota_window_is_admissible(value: &Value) -> bool {
                 .as_f64()
                 .is_some_and(|number| number.is_finite() && number >= 0.0)
         })
+        && expiries_are_admissible(object)
 }
 
 /// This device's readings, in the shape Relay accepts.
@@ -3624,6 +3665,38 @@ mod tests {
         .expect("partial");
         assert_eq!(dropped, 1);
         assert_eq!(snapshots, [good]);
+    }
+
+    /// The expiry bounds the boundary refuses are bounds the stage drops a snapshot over, so a
+    /// list the producer got wrong costs that one reading rather than the whole upload.
+    #[test]
+    fn a_snapshot_whose_expiries_relay_refuses_is_dropped_alone() {
+        const FIXTURE: &str = include_str!("../../../protocol/fixtures/wire-conformance.json");
+        let fixture: Value = serde_json::from_str(FIXTURE).expect("fixture");
+        let cases = fixture["contracts"]["quota_snapshot_envelope"]
+            .as_array()
+            .expect("cases")
+            .iter()
+            .filter(|case| {
+                case["payload"]["snapshots"][0]["windows"]
+                    .as_array()
+                    .is_some_and(|windows| {
+                        windows
+                            .iter()
+                            .any(|window| window.get("expiries").is_some())
+                    })
+            })
+            .collect::<Vec<_>>();
+        assert!(cases.len() > 2);
+        for case in cases {
+            let report = serde_json::json!({
+                "captured_at": "2026-08-10T00:00:00Z",
+                "results": [{"snapshots": case["payload"]["snapshots"]}]
+            });
+            let (_, _, dropped) = snapshot_payload_from_quota_report(&report, &[]).expect("staged");
+            let accepted = case["accepted"].as_bool().expect("accepted");
+            assert_eq!(dropped, usize::from(!accepted), "{}", case["name"]);
+        }
     }
 
     #[test]

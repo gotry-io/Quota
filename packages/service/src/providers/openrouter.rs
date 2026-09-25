@@ -202,6 +202,7 @@ fn map_windows(credits: Option<&Credits>, key: Option<&Key>) -> Vec<QuotaWindow>
             remaining_value: Some(remaining),
             limit_value: Some(limit),
             value_unit: Some("usd"),
+            expiries: Vec::new(),
         });
     }
     if let Some(credits) = credits.filter(|value| value.total > 0.0) {
@@ -215,6 +216,7 @@ fn map_windows(credits: Option<&Credits>, key: Option<&Key>) -> Vec<QuotaWindow>
             remaining_value: Some((credits.total - credits.usage).max(0.0)),
             limit_value: None,
             value_unit: Some("usd"),
+            expiries: Vec::new(),
         });
     }
     windows

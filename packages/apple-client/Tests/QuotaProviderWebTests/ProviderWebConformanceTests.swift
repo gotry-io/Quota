@@ -86,7 +86,7 @@ actor StubTransport: ProviderWebTransport {
   }
 
   func send(_ request: URLRequest) async throws -> ProviderWebResponse {
-    let path = request.url?.path ?? ""
+    let path = [request.url?.path, request.url?.query].compactMap { $0 }.joined(separator: "?")
     let method = request.httpMethod ?? ""
     guard used.count < exchanges.count else {
       mismatch = mismatch ?? "asked for more exchanges than the case declares"

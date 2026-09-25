@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use super::common::{
     Cadence, CliTool, CollectionContext, ErrorCategory, HttpClient, LOCAL_FILE_LIMIT,
-    ProviderError, ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow,
+    ProviderError, ProviderSession, QuotaAccount, QuotaExpiry, QuotaSnapshot, QuotaWindow,
     ValidatedBrowserSession, account_identity, clamp_percent, collect_official_or_browser,
     decode_jwt_payload, discover_official_or_browser, display_window_title, mask_email, number,
     obj_get, obj_get_any, parse_date, read_bounded_file, sha256_hex, slug, string,
@@ -24,6 +24,9 @@ pub const WEB_SOURCE: &str = web::SOURCE;
 const AUTH_REFRESH_SKEW: i64 = 60;
 pub const PAT_SOURCE: &str = "codex_pat_usage_api";
 pub const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
+/// The earned rate-limit resets behind `rate_limit_reset_credits`, one entry per credit. Read,
+/// never redeemed: its `/consume` sibling is the redemption and is never called.
+pub const RESET_CREDITS_URL: &str = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 pub const WHOAMI_URL: &str = "https://auth.openai.com/api/accounts/v1/user-auth-credential/whoami";
 
 #[derive(Clone, Debug)]
@@ -293,7 +296,7 @@ fn credential_identity(context: &CollectionContext) -> Option<String> {
 }
 
 fn collect_pat(token: &str, context: &CollectionContext) -> Result<QuotaSnapshot, ProviderError> {
-    collect_pat_at(token, context, WHOAMI_URL, USAGE_URL)
+    collect_pat_at(token, context, WHOAMI_URL, USAGE_URL, RESET_CREDITS_URL)
 }
 
 fn collect_pat_at(
@@ -301,6 +304,7 @@ fn collect_pat_at(
     context: &CollectionContext,
     whoami_url: &str,
     usage_url: &str,
+    reset_credits_url: &str,
 ) -> Result<QuotaSnapshot, ProviderError> {
     let client = HttpClient::new()?;
     let bearer = format!("Bearer {token}");
@@ -327,13 +331,16 @@ fn collect_pat_at(
         usage_headers.push(("ChatGPT-Account-Id", account_id));
     }
     let (_, value) = client.get_json(usage_url, &usage_headers, PAT_SOURCE)?;
-    let mapped = map_usage(&value);
+    let mut mapped = map_usage(&value);
     if mapped.malformed_success {
         return Err(ProviderError::new(ErrorCategory::Error, PAT_SOURCE));
     }
     if mapped.windows.is_empty() {
         return Err(ProviderError::new(ErrorCategory::Unavailable, PAT_SOURCE));
     }
+    attach_reset_credit_expiries(&mut mapped.windows, context.observed_unix(), || {
+        client.get_json(reset_credits_url, &usage_headers, PAT_SOURCE)
+    });
     Ok(snapshot(
         &mapped.windows,
         mapped.plan.as_deref().or(plan.as_deref()),
@@ -471,11 +478,14 @@ pub(super) fn collect_api(
         headers.push(("ChatGPT-Account-Id", account_id));
     }
     let (_, value) = client.get_json(USAGE_URL, &headers, source)?;
-    let mapped = map_usage(&value);
+    let mut mapped = map_usage(&value);
     if mapped.malformed_success {
         return Err(ProviderError::new(ErrorCategory::Error, source));
     }
     if !mapped.windows.is_empty() {
+        attach_reset_credit_expiries(&mut mapped.windows, context.observed_unix(), || {
+            client.get_json(RESET_CREDITS_URL, &headers, source)
+        });
         let plan = mapped.plan.or_else(|| identity.plan.clone());
         let email = mapped.email.or_else(|| identity.email.clone());
         let account_id = mapped
@@ -604,6 +614,7 @@ fn map_credits(value: Option<&Value>) -> Option<QuotaWindow> {
         remaining_value: Some(balance.max(0.0)),
         limit_value: None,
         value_unit: Some("usd"),
+        expiries: Vec::new(),
     })
 }
 
@@ -614,7 +625,7 @@ fn map_reset_credits(value: Option<&Value>) -> Option<QuotaWindow> {
         return None;
     }
     Some(QuotaWindow {
-        id: "reset_credits".to_owned(),
+        id: RESET_CREDITS_ID.to_owned(),
         title: "Reset Credits".to_owned(),
         used_percent: 0.0,
         resets_at: None,
@@ -623,8 +634,50 @@ fn map_reset_credits(value: Option<&Value>) -> Option<QuotaWindow> {
         remaining_value: Some(count),
         limit_value: None,
         value_unit: Some("count"),
+        expiries: Vec::new(),
     })
 }
+
+/// When the Reset Credits a reading counted lapse, from the list behind the count.
+///
+/// Asked only when there is at least one credit to describe. The count stays the usage
+/// document's `available_count`: the list may be truncated, and a credit it does not describe
+/// is one the reader is told does not expire. A list that cannot be read — a failed request, a
+/// body without `credits`, or one describing more credits than were counted — leaves the
+/// count on its own. That is the provider-owned fallback `docs/providers/codex.md` documents,
+/// not a failed reading.
+pub(super) fn attach_reset_credit_expiries<F>(windows: &mut [QuotaWindow], now: i64, fetch: F)
+where
+    F: FnOnce() -> Result<(u16, Value), ProviderError>,
+{
+    let Some(window) = windows
+        .iter_mut()
+        .find(|window| window.id == RESET_CREDITS_ID)
+    else {
+        return;
+    };
+    let Some(total) = window.remaining_value.filter(|count| *count > 0.0) else {
+        return;
+    };
+    let Ok((_, list)) = fetch() else {
+        return;
+    };
+    let Some(credits) = obj_get(&list, "credits").and_then(Value::as_array) else {
+        return;
+    };
+    window.expiries = QuotaExpiry::group(
+        credits
+            .iter()
+            .filter(|credit| string(obj_get(credit, "status")).as_deref() == Some("available"))
+            .filter_map(|credit| {
+                parse_date(obj_get_any(credit, &["expires_at", "expiresAt"])).map(|at| (at, 1))
+            }),
+        now,
+        total,
+    );
+}
+
+const RESET_CREDITS_ID: &str = "reset_credits";
 
 fn map_window(value: &Value, id: &str, title: &str) -> Option<QuotaWindow> {
     let used =
@@ -642,6 +695,7 @@ fn map_window(value: &Value, id: &str, title: &str) -> Option<QuotaWindow> {
         remaining_value: None,
         limit_value: None,
         value_unit: None,
+        expiries: Vec::new(),
     })
 }
 
@@ -864,6 +918,7 @@ mod tests {
                 &context,
                 &format!("http://{address}/whoami"),
                 &format!("http://{address}/usage"),
+                &format!("http://{address}/rate-limit-reset-credits"),
             )
             .expect("snapshot");
             assert_eq!(snapshot.windows.len(), 1);

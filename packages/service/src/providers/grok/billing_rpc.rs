@@ -207,6 +207,7 @@ fn billing_window(billing: &Billing, now: i64) -> QuotaWindow {
         remaining_value: None,
         limit_value: None,
         value_unit: None,
+        expiries: Vec::new(),
     }
 }
 

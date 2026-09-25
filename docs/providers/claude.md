@@ -50,8 +50,9 @@ Catalog id `claude`. Common collection ladder, bounds, and identity rules live i
    `access_denied` as above; anything else is `auth_required` with "Open Claude Code to refresh
    the sign-in". No Claude Code on this Mac, no refresh token in a readable entry, no
    `claudeAiOauth` at all, and no withheld Keychain item each mean no attempt and no record.
-4. Call `GET https://api.anthropic.com/api/oauth/usage` with
-   `anthropic-beta: oauth-2025-04-20`.
+4. Call `GET https://api.anthropic.com/api/oauth/usage?cedar_ember=1` with
+   `anthropic-beta: oauth-2025-04-20`. Every usage request, on both rungs, carries
+   `cedar_ember=1`: without it the limit-reset block (step 5) answers `null`.
 5. Map the five-hour, seven-day, model-scoped, and extra-usage windows that are present. Titles are
    **5 Hours**, **Weekly**, **Sonnet Weekly**, **Opus Weekly**, **OAuth Apps Weekly**,
    **{Model} Only**, **Daily Routines**, and **Extra Usage**. The five-hour and seven-day
@@ -63,6 +64,22 @@ Catalog id `claude`. Common collection ladder, bounds, and identity rules live i
    mapped to `remaining_value` / `limit_value` / `value_unit: usd`. Utilization may be null when
    the cap is on; used/limit then supplies `used_percent`. A utilization-only extra_usage object
    still maps as a percent window. Extra usage that is off is omitted.
+
+   The `cedar_ember` block is Claude's limit resets: `{ eligible, ineligible_reason, at_limit,
+   weekly_resets_at, cooldown_until, next_grant_id, grants: [{ id, label, resets_total,
+   resets_left, starts_at, ends_at, clears[], paused, usable_now, use_requires_limit,
+   percent_used }] }` (support.claude.com article 17007452; the shape comes from third-party
+   reverse engineering and is read tolerantly). It maps to **Reset Credits** (id
+   `reset_credits`, `value_unit: count`, `used_percent: 0`, no `primary_cadence`):
+   `remaining_value` is the sum of `resets_left` over every grant that is not `paused` and whose
+   RFC 3339 `ends_at` has not passed, and `expiries` groups those grants' `resets_left` by
+   `ends_at`, nearest first. A grant with no `ends_at` is counted and lists no expiry. The window
+   is omitted when the block is `null` or absent, when `eligible` is `false` (a caller Anthropic
+   does not count as a surface that can use them is answered `ineligible_reason: "surface"`), or
+   when there are no grants; a block this build
+   cannot read — a `resets_left` that is not a non-negative whole number, `grants` that is not a
+   list — is omitted too, and never fails the reading beside it. Unknown fields are ignored.
+   Nothing here redeems a reset (`reset_rate_limits` is not called).
 6. Enrich identity best-effort through `/api/oauth/profile`; usage remains valid if enrichment fails.
 7. Usage accepts `utilization` / `resets_at` and the aliases `utilization_pct` / `reset_at`.
 8. If no credential exists or the OAuth rung answers `auth_required`, and a stored Claude
@@ -70,7 +87,7 @@ Catalog id `claude`. Common collection ladder, bounds, and identity rules live i
    (`sessionKey` plus optional `lastActiveOrg`) to `https://claude.ai/api/organizations` and
    `/api/account` best-effort for the masked label and plan (QuotaBar asks in turn; the iPhone
    asks for both at once, since neither depends on the other), then
-   `/organizations/{id}/usage`. Prefer the listed org matching `lastActiveOrg`, then the org on
+   `/organizations/{id}/usage?cedar_ember=1`, mapped as step 5 maps the OAuth body. Prefer the listed org matching `lastActiveOrg`, then the org on
    `/api/account`, unless that org is `api_disabled`; otherwise the first chat-capable org. The
    org list alone is not proof: the same usage document has to map before the session is stored.
    The `sessionKey` value must start with `sk-ant-`. QuotaBar acquires `sessionKey` and optional
@@ -85,8 +102,11 @@ Collection never drives the Claude CLI to read quota, in any form: step 3 asks C
 a credential, never to report one, and a grant still out of time afterwards is reported as the
 sign-in it is. The local service never submits the Claude refresh token or writes its credential
 file or Keychain entry — Claude Code alone rotates that token and writes what it gets back. The
-Keychain read is performed once per refresh and shared, plus once more when a renewal ran. The usage request presents
-`User-Agent: claude-code/<version>`, the official CLI's identity rather than this build's, carrying
-the installed Claude Code version read as [Official CLI identity](../provider-collection.md#official-cli-identity)
-describes and falling back to `claude-code/2.1.0` when none could be read. The profile request
-sends no `User-Agent` of its own.
+Keychain read is performed once per refresh and shared, plus once more when a renewal ran. Both
+OAuth requests — usage and profile — present one identity, `User-Agent: claude-cli/<version>
+(external, cli)`, the official CLI's rather than this build's, carrying the installed Claude Code
+version read as [Official CLI identity](../provider-collection.md#official-cli-identity) describes
+and falling back to `claude-cli/2.1.0 (external, cli)` when none could be read. That is the
+identity the usage endpoint answers the limit-reset block for: measured 2026-09-25, the same
+account asked as `claude-code/<version>` was answered `eligible: false`, `ineligible_reason:
+"surface"`. The web rung keeps this build's own `User-Agent`.

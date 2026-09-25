@@ -496,6 +496,12 @@ private struct DashboardQuotaWindowCard: View {
           .quotaMetaStyle()
       }
 
+      let expiries = ExpiryCopy.lines(window.expiries, total: window.remainingValue, now: now)
+      ForEach(Array(expiries.enumerated()), id: \.offset) { _, line in
+        Text(line)
+          .quotaMetaStyle()
+      }
+
       if let paceHeadline {
         Text(paceHeadline.text)
           .quotaFont(.meta)

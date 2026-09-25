@@ -51,7 +51,10 @@ let package = Package(
     ),
     .target(
       name: "QuotaProviderWeb",
-      dependencies: ["QuotaWire"]
+      dependencies: [
+        "QuotaWire",
+        .product(name: "QuotaPresentation", package: "QuotaAppleShared"),
+      ]
     ),
     .target(
       name: "QuotaProviderSessions",

@@ -1,4 +1,5 @@
 import Foundation
+import QuotaPresentation
 import QuotaWire
 
 /// Codex's usage document, read the way the Rust collector reads it.
@@ -36,12 +37,58 @@ enum CodexUsage {
       contentsOf: additional(value.get(any: ["additional_rate_limits", "additionalRateLimits"])))
     windows.append(
       contentsOf: codeReview(value.get(any: ["code_review_rate_limit", "codeReviewRateLimit"])))
+    if let window = resetCredits(
+      value.get(any: ["rate_limit_reset_credits", "rateLimitResetCredits"]))
+    {
+      windows.append(window)
+    }
     let malformedPrimary = (primarySlot.map { !$0.isNull } ?? false) && primary == nil
     let malformedSecondary = (secondarySlot.map { !$0.isNull } ?? false) && secondary == nil
     mapped.malformedSuccess =
       windows.isEmpty && (malformedPrimary || malformedSecondary)
     mapped.windows = windows
     return mapped
+  }
+
+  static let resetCreditsID = "reset_credits"
+
+  /// Earned rate-limit resets the account can redeem. This is a count, not a dollar wallet.
+  static func resetCredits(_ value: JSONValue?) -> QuotaWindow? {
+    guard
+      let count = ProviderJSON.number(value?.get(any: ["available_count", "availableCount"])),
+      count >= 0
+    else { return nil }
+    return QuotaWindow(
+      id: resetCreditsID, title: "Reset Credits", usedPercent: 0, remainingValue: count,
+      valueUnit: .count)
+  }
+
+  /// When the Reset Credits a reading counted lapse, from the list behind the count — the Rust
+  /// collector's `attach_reset_credit_expiries`. Asked only when there is a credit to describe;
+  /// a list that cannot be read leaves the count on its own.
+  static func attachingExpiries(
+    to windows: [QuotaWindow],
+    now: Date,
+    fetch: () async throws -> JSONValue
+  ) async -> [QuotaWindow] {
+    guard let index = windows.firstIndex(where: { $0.id == resetCreditsID }),
+      let total = windows[index].remainingValue, total > 0,
+      let list = try? await fetch(),
+      let credits = list.get("credits")?.arrayValue
+    else { return windows }
+    let units = credits.compactMap { credit -> (Int, Int)? in
+      guard ProviderJSON.string(credit.get("status")) == "available",
+        let expiresAt = ProviderJSON.date(credit.get(any: ["expires_at", "expiresAt"]))
+      else { return nil }
+      return (expiresAt, 1)
+    }
+    var result = windows
+    let window = windows[index]
+    result[index] = QuotaWindow(
+      id: window.id, title: window.title, usedPercent: window.usedPercent,
+      remainingValue: window.remainingValue, valueUnit: window.valueUnit,
+      expiries: ProviderJSON.expiries(units, now: now, total: total))
+    return result
   }
 
   /// A window whose reported duration names no known cadence keeps the cadence of the payload

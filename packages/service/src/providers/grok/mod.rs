@@ -346,6 +346,7 @@ fn map_billing(value: &Value) -> Result<QuotaWindow, ProviderError> {
         remaining_value,
         limit_value,
         value_unit,
+        expiries: Vec::new(),
     })
 }
 

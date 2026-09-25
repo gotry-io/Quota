@@ -161,7 +161,9 @@ Body, in order:
    then one `meta` line joining reset copy and pace copy with ` · ` (pace warns →
    `QuotaTheme.warning`). Every other window is a compact row under a hairline: title (`support`)
    … remaining (`.body.monospacedDigit().weight(.semibold)`) with a 4pt meter beneath; reset and
-   pace as `meta`. Status pages are fetched on this device (`QuotaProviderStatus`) on the helper's
+   pace as `meta`. A count window that never resets and lists when its units lapse (Reset
+   Credits) takes the nearest of those instants as its `meta` line instead of reset copy:
+   **Next expires Oct 22** (`ExpiryCopy.next`). Status pages are fetched on this device (`QuotaProviderStatus`) on the helper's
    ten-minute cadence while the app is in the foreground (`AppModel` holds the timer) and again on
    a background refresh; a failed poll keeps the last reading. Relay does not forward them.
    Widgets do not show the incident mark. Remaining is the strongest number, with meters filled by
@@ -222,7 +224,11 @@ An inset-grouped `List` after the header:
 
 - Quota: one `QuotaCard` per window. Title in `support` / `.secondary`, remaining in
   `remainingValue`, `QuotaMeter`, the live countdown row, and pace headline plus even-pace
-  detail. Remaining is the strongest text. Empty: **No quota windows yet.**
+  detail. A window that lists expiries adds one `meta` line per instant still ahead, nearest
+  first — **2 · Expire Oct 22, 16:00**, local 24-hour time — then **1 · No expiry** for the units
+  it does not list (`ExpiryCopy.lines`, answered by `reset-copy-conformance.json` › `expiries`;
+  identifier `subscription.expiry`). Remaining is the strongest text. Empty: **No quota windows
+  yet.**
 - Remaining history: a `QuotaCard` titled **Remaining history** with **This iPhone** beside the
   title when the chart is this phone's own samples. While the Account history switch is on and
   the merged series has points, the same card draws that series and the caption is **From your
@@ -941,7 +947,7 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 | `loading` | No account, two provider sessions, nothing read yet, first refresh running: two placeholder cards, **Updating…**, refresh button busy |
 | `launch` | The `content` Overview under the launch overlay, its mark held still; `--launch-progress <0…1>` picks how far the fill has come (default 0.5; 0 is the faint track alone, 1 is filled) |
 | `updating` | The `content` account with a refresh running: **Updating… 2 of 3**, refresh button busy, Claude's card waiting with a mini spinner |
-| `content` | Signed-in Overview with synthetic Codex / Claude / Grok windows and Today values. Claude has a last-good `minor` status-page reading (**Partial System Outage**), so the row shows the 8pt incident dot. Codex reports from two devices so subscription detail can show per-device readings; Usage has four periods with increasing totals, one provider group of more than five models, and an in-memory Activity heatmap of the last 365 UTC days |
+| `content` | Signed-in Overview with synthetic Codex / Claude / Grok windows and Today values. Claude has a last-good `minor` status-page reading (**Partial System Outage**), so the row shows the 8pt incident dot. Codex reports from two devices so subscription detail can show per-device readings, and its Reset Credits window lists two of its three credits expiring in 27 days; Usage has four periods with increasing totals, one provider group of more than five models, and an in-memory Activity heatmap of the last 365 UTC days |
 | `cached-error` | Same content plus **Showing saved data. Couldn't refresh.** |
 | `empty` | Signed-in Overview with empty quota and **No usage today.** Devices remain so Mac setup does not occupy this screen. Usage of every period is **No usage** / **No usage was reported for this period.** Activity is **No activity in the last year.** |
 | `no-devices` | Signed-in Overview with no devices and no subscriptions (compact Mac setup Section) |
