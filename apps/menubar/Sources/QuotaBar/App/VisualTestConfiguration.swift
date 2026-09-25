@@ -643,8 +643,11 @@
                   id: "reset_credits",
                   title: "Reset Credits",
                   usedPercent: 0,
-                  remainingValue: 2,
-                  valueUnit: .count
+                  remainingValue: 3,
+                  valueUnit: .count,
+                  expiries: [
+                    QuotaExpiry(expiresAt: date.addingTimeInterval(27 * 86_400), count: 2)
+                  ]
                 ),
               ],
               observedAt: date.addingTimeInterval(-90)

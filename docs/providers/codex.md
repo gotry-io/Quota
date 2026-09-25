@@ -70,14 +70,25 @@ Catalog id `codex`. Common collection ladder, bounds, and identity rules live in
    (`remaining_value` / `value_unit: usd`). Unlimited or `has_credits: false` is omitted.
    `rate_limit_reset_credits.available_count` is a count of earned rate-limit resets, mapped as
    **Reset Credits** (`remaining_value` / `value_unit: count`); it is not a dollar wallet and is
-   not redeemed here.
+   not redeemed here. When that count is above zero, one more request with the same credential
+   and headers as the usage request it followed — `GET
+   https://chatgpt.com/backend-api/wham/rate-limit-reset-credits` — answers `{ credits: [{ id,
+   reset_type, status, granted_at, expires_at?, title?, description? }], available_count,
+   total_earned_count? }` (openai/codex `codex-rs/backend-client/src/types.rs`). Credits whose
+   `status` is `available` and whose RFC 3339 `expires_at` is still ahead are grouped by that
+   instant into the window's `expiries`, nearest first and at most sixteen instants. A null
+   `expires_at` never expires. The count stays `available_count`: the list may be truncated,
+   and a credit it does not describe is one the reader is told does not expire. A list request
+   that fails, a body without `credits`, or a list describing more credits than were counted
+   keeps the count-only window — a documented provider-owned fallback, not a failed reading.
+   The `/consume` endpoint beside it redeems a credit and is never called.
 6. Do not fall back after a successful but malformed response; report the parser failure instead.
 7. If neither credential exists or both answer `auth_required`, and a stored ChatGPT
    [browser session](../provider-collection.md#browser-session) exists, read `GET https://chatgpt.com/api/auth/session`
    (then `/backend-api/me`) with the catalog session cookies. That document has to name an
    account — `account.id`, an email, or an `accessToken` — or the session is refused. A session
    `accessToken` is spent as Bearer on the same WHAM URL; otherwise the Cookie header goes to it
-   directly. QuotaBar acquires those cookies from `chatgpt.com` / `www.chatgpt.com`: the
+   directly, and to the reset-credit list after it (step 5). QuotaBar acquires those cookies from `chatgpt.com` / `www.chatgpt.com`: the
    `__Secure-`/`__Host-` NextAuth and Auth.js session tokens, their numbered chunks, and the
    optional `_account` context cookie. The fingerprint is the same `account_id` namespace the
    OAuth rung uses.

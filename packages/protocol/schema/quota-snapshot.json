@@ -10,14 +10,13 @@
       "const": 6
     },
     "generation": {
-      "minimum": 1,
       "$ref": "#/$defs/__schema0"
     },
     "snapshots": {
       "maxItems": 32,
       "type": "array",
       "items": {
-        "$ref": "#/$defs/__schema1"
+        "$ref": "#/$defs/__schema2"
       }
     }
   },
@@ -25,11 +24,15 @@
   "additionalProperties": false,
   "$defs": {
     "__schema0": {
+      "minimum": 1,
+      "$ref": "#/$defs/__schema1"
+    },
+    "__schema1": {
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991
     },
-    "__schema1": {
+    "__schema2": {
       "type": "object",
       "properties": {
         "provider": {
@@ -80,7 +83,7 @@
           "maxItems": 16,
           "type": "array",
           "items": {
-            "$ref": "#/$defs/__schema2"
+            "$ref": "#/$defs/__schema3"
           }
         },
         "status": {
@@ -88,61 +91,112 @@
           "enum": ["available", "stale", "auth_required", "unavailable", "unsupported", "error"]
         },
         "observed_at": {
-          "$ref": "#/$defs/__schema3"
+          "$ref": "#/$defs/__schema8"
         }
       },
       "required": ["provider", "account", "windows", "status", "observed_at"],
       "additionalProperties": false
     },
-    "__schema2": {
+    "__schema3": {
       "type": "object",
       "properties": {
         "id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 64,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$"
+          "$ref": "#/$defs/__schema4"
         },
         "title": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128
+          "$ref": "#/$defs/__schema5"
         },
         "used_percent": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 100
+          "$ref": "#/$defs/__schema6"
         },
         "resets_at": {
-          "$ref": "#/$defs/__schema3"
+          "$ref": "#/$defs/__schema7"
         },
         "duration_seconds": {
-          "$ref": "#/$defs/__schema0"
+          "$ref": "#/$defs/__schema9"
         },
         "primary_cadence": {
-          "type": "string",
-          "enum": ["five_hour", "weekly", "monthly"]
+          "$ref": "#/$defs/__schema10"
         },
         "remaining_value": {
-          "type": "number"
+          "$ref": "#/$defs/__schema11"
         },
         "limit_value": {
-          "type": "number",
-          "minimum": 0
+          "$ref": "#/$defs/__schema12"
         },
         "value_unit": {
-          "type": "string",
-          "enum": ["usd", "credits", "count"]
+          "$ref": "#/$defs/__schema13"
+        },
+        "expiries": {
+          "$ref": "#/$defs/__schema14"
         }
       },
       "required": ["id", "title", "used_percent"],
       "additionalProperties": false
     },
-    "__schema3": {
+    "__schema4": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]*$"
+    },
+    "__schema5": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "__schema6": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "__schema7": {
+      "$ref": "#/$defs/__schema8"
+    },
+    "__schema8": {
       "type": "string",
       "maxLength": 64,
       "format": "date-time",
       "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+    },
+    "__schema9": {
+      "$ref": "#/$defs/__schema1"
+    },
+    "__schema10": {
+      "type": "string",
+      "enum": ["five_hour", "weekly", "monthly"]
+    },
+    "__schema11": {
+      "type": "number"
+    },
+    "__schema12": {
+      "type": "number",
+      "minimum": 0
+    },
+    "__schema13": {
+      "type": "string",
+      "enum": ["usd", "credits", "count"]
+    },
+    "__schema14": {
+      "minItems": 1,
+      "maxItems": 16,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema15"
+      }
+    },
+    "__schema15": {
+      "type": "object",
+      "properties": {
+        "expires_at": {
+          "$ref": "#/$defs/__schema8"
+        },
+        "count": {
+          "$ref": "#/$defs/__schema0"
+        }
+      },
+      "required": ["expires_at", "count"],
+      "additionalProperties": false
     }
   }
 }

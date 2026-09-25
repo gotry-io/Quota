@@ -7,10 +7,10 @@ use std::time::Duration;
 
 use super::common::{
     Cadence, CliTool, CollectionContext, ErrorCategory, HttpClient, KeychainSecret,
-    LOCAL_FILE_LIMIT, ProviderError, ProviderSession, QuotaAccount, QuotaSnapshot, QuotaWindow,
-    ValidatedBrowserSession, account_identity, clamp_percent, collect_official_or_browser,
-    discover_official_or_browser, mask_email, number, obj_get, obj_get_any, parse_date, plan_slug,
-    read_bounded_file, run_bounded_command, slug, string,
+    LOCAL_FILE_LIMIT, ProviderError, ProviderSession, QuotaAccount, QuotaExpiry, QuotaSnapshot,
+    QuotaWindow, ValidatedBrowserSession, account_identity, clamp_percent,
+    collect_official_or_browser, discover_official_or_browser, mask_email, number, obj_get,
+    obj_get_any, parse_date, plan_slug, read_bounded_file, run_bounded_command, slug, string,
 };
 
 pub mod refresh;
@@ -26,18 +26,29 @@ pub const WEB_SOURCE: &str = web::SOURCE;
 /// withheld Keychain item is `access_denied` instead: opening Claude Code can rewrite the
 /// file from the grant this process was refused.
 pub const SIGNED_OUT_SOURCE: &str = "anthropic_oauth_signed_out";
-pub const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
+/// The query every usage request carries, on both routes: `cedar_ember=1` asks for the
+/// limit-reset grants block, which answers `null` without it.
+macro_rules! usage_query {
+    () => {
+        "cedar_ember=1"
+    };
+}
+pub const USAGE_URL: &str = concat!("https://api.anthropic.com/api/oauth/usage?", usage_query!());
+pub(super) const USAGE_QUERY: &str = usage_query!();
 pub const PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
 pub const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 const AUTH_REFRESH_SKEW: i64 = 60;
 /// What the header claims when this device has no readable Claude Code install to ask.
 const FALLBACK_CLI_VERSION: &str = "2.1.0";
 
-/// The usage endpoint answers Claude Code, so the request identifies as Claude Code — with
-/// the version of the install that is actually on this device when one could be read.
+/// The OAuth endpoints answer Claude Code, so every OAuth request identifies as the Claude Code
+/// CLI — `claude-cli/<version> (external, cli)`, with the version of the install that is
+/// actually on this device when one could be read. That is the identity the usage endpoint
+/// answers the limit-reset block for; `claude-code/<version>` was answered
+/// `eligible: false`, `ineligible_reason: "surface"` (live probe, 2026-09-25).
 fn user_agent(context: &CollectionContext) -> String {
     format!(
-        "claude-code/{}",
+        "claude-cli/{} (external, cli)",
         context
             .cli_version(CliTool::Claude)
             .unwrap_or(FALLBACK_CLI_VERSION)
@@ -489,7 +500,7 @@ fn collect_at(
         Ok((_, value)) => value,
         Err(error) => return Err(error),
     };
-    let windows = map_usage(&usage);
+    let windows = map_reading(&usage, context.observed_unix());
     // An account that answers for a window this build knows, even to say it has none, has
     // nothing to report and is read successfully.  A response that answers for none of them
     // is one this build cannot read, and only that is a collection failure.  Reporting both
@@ -502,6 +513,7 @@ fn collect_at(
         let profile_headers = [
             ("Authorization", bearer.as_str()),
             ("Accept", "application/json"),
+            ("User-Agent", user_agent.as_str()),
         ];
         match client.get_json(profile_url, &profile_headers, SOURCE) {
             Ok((_, value)) => map_profile(&value),
@@ -596,6 +608,7 @@ pub(super) fn map_usage(value: &Value) -> Vec<QuotaWindow> {
                 remaining_value: None,
                 limit_value: None,
                 value_unit: None,
+                expiries: Vec::new(),
             });
         }
     }
@@ -626,6 +639,63 @@ pub(super) fn map_usage(value: &Value) -> Vec<QuotaWindow> {
     }
     inherit_weekly_reset(&mut windows, &weekly_group);
     windows
+}
+
+/// Every window a reading reports: the usage windows, then the limit resets granted beside them.
+pub(super) fn map_reading(value: &Value, now: i64) -> Vec<QuotaWindow> {
+    let mut windows = map_usage(value);
+    windows.extend(map_limit_resets(obj_get(value, "cedar_ember"), now));
+    windows
+}
+
+/// Claude's limit resets: grants of rate-limit resets, each with its own count left and,
+/// usually, an end date. The block answers only when the request asked for it
+/// (`cedar_ember=1`) and the account can use them. A caller Anthropic does not count as a
+/// surface that can use them is answered `eligible: false` with `ineligible_reason: "surface"`;
+/// the OAuth rung's [`user_agent`] is one it does count.
+///
+/// The count is what is left on every grant that is neither paused nor past its end; a grant
+/// with no end is counted and lists no expiry. A block this build cannot read is left out
+/// rather than failing the reading beside it. Nothing here redeems a reset.
+fn map_limit_resets(value: Option<&Value>, now: i64) -> Option<QuotaWindow> {
+    let block = value?;
+    if obj_get(block, "eligible").and_then(Value::as_bool) == Some(false) {
+        return None;
+    }
+    let grants = obj_get(block, "grants")
+        .and_then(Value::as_array)
+        .filter(|grants| !grants.is_empty())?;
+    let mut usable = Vec::new();
+    for grant in grants {
+        let left = number(obj_get(grant, "resets_left")).filter(|left| {
+            *left >= 0.0 && left.fract() == 0.0 && *left <= 9_007_199_254_740_991.0
+        })? as u64;
+        let ends_at = parse_date(obj_get(grant, "ends_at"));
+        let paused = obj_get(grant, "paused").and_then(Value::as_bool) == Some(true);
+        if paused || ends_at.is_some_and(|ends_at| ends_at <= now) {
+            continue;
+        }
+        usable.push((ends_at, left));
+    }
+    let total: u64 = usable.iter().map(|(_, left)| left).sum();
+    Some(QuotaWindow {
+        id: "reset_credits".to_owned(),
+        title: "Reset Credits".to_owned(),
+        used_percent: 0.0,
+        resets_at: None,
+        duration_seconds: None,
+        primary_cadence: None,
+        remaining_value: Some(total as f64),
+        limit_value: None,
+        value_unit: Some("count"),
+        expiries: QuotaExpiry::group(
+            usable
+                .into_iter()
+                .filter_map(|(ends_at, left)| ends_at.map(|ends_at| (ends_at, left))),
+            now,
+            total as f64,
+        ),
+    })
 }
 
 /// Extra usage is a monthly USD spend cap. Anthropic reports `used_credits` and
@@ -664,6 +734,7 @@ fn map_extra_usage(value: Option<&Value>) -> Option<QuotaWindow> {
             remaining_value: Some((limit_usd - used_usd).max(0.0)),
             limit_value: Some(limit_usd),
             value_unit: Some("usd"),
+            expiries: Vec::new(),
         });
     }
     Some(QuotaWindow {
@@ -676,6 +747,7 @@ fn map_extra_usage(value: Option<&Value>) -> Option<QuotaWindow> {
         remaining_value: None,
         limit_value: None,
         value_unit: None,
+        expiries: Vec::new(),
     })
 }
 
@@ -703,6 +775,7 @@ fn usage_window(
         remaining_value: None,
         limit_value: None,
         value_unit: None,
+        expiries: Vec::new(),
     })
 }
 
@@ -882,18 +955,21 @@ mod tests {
         }
     }
 
-    /// The usage endpoint answers Claude Code, so the request says it is Claude Code — and
-    /// says which one.  A device that could not read an install still asks, under the version
-    /// this build falls back to, because the reading matters more than the accuracy of a
-    /// header field neither side can verify.
+    /// The OAuth endpoints answer the Claude Code CLI, so both OAuth requests say they are it —
+    /// and say which one.  A device that could not read an install still asks, under the
+    /// version this build falls back to, because the reading matters more than the accuracy of
+    /// a header field neither side can verify.
     #[test]
-    fn the_usage_request_names_the_installed_claude_code() {
+    fn every_oauth_request_names_the_installed_claude_cli() {
         use std::io::{Read as _, Write as _};
         use std::net::TcpListener;
 
         for (installed, expected) in [
-            (Some("2.4.7"), "user-agent: claude-code/2.4.7"),
-            (None, "user-agent: claude-code/2.1.0"),
+            (
+                Some("2.4.7"),
+                "user-agent: claude-cli/2.4.7 (external, cli)",
+            ),
+            (None, "user-agent: claude-cli/2.1.0 (external, cli)"),
         ] {
             let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
             let address = listener.local_addr().expect("address");
@@ -934,7 +1010,10 @@ mod tests {
             .expect("snapshot");
             assert_eq!(snapshot.windows.len(), 1);
             let heads = server.join().expect("server");
-            assert!(heads[0].contains(expected), "{}", heads[0]);
+            assert_eq!(heads.len(), 2);
+            for head in &heads {
+                assert!(head.contains(expected), "{head}");
+            }
             assert!(heads[0].contains("anthropic-beta: oauth-2025-04-20"));
         }
     }

@@ -191,7 +191,8 @@ struct QuotaWindowRow: View {
   let provider: ProviderID
   let isStale: Bool
   let now: Date
-  /// Provider detail prints the even-pace explanation under the headline; the panel does not.
+  /// Provider detail prints the even-pace explanation under the headline and every instant a
+  /// count window's units lapse; the panel prints the headline and the nearest instant.
   var showsPaceDetail: Bool = false
   @AppStorage(ResetCopyStylePreference.storageKey) private var resetCopyStyle =
     ResetCopyStylePreference.fallback
@@ -262,6 +263,19 @@ struct QuotaWindowRow: View {
       } else if window.resetsAt == nil, FreshnessCopy.showsNoResetTime(window) {
         Text(FreshnessCopy.noResetTime)
           .quotaMetaStyle()
+      } else if !showsPaceDetail, window.resetsAt == nil,
+        let next = ExpiryCopy.next(window.expiries, now: now)
+      {
+        Text(next)
+          .quotaMetaStyle()
+      }
+
+      if showsPaceDetail {
+        let lines = ExpiryCopy.lines(window.expiries, total: window.remainingValue, now: now)
+        ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+          Text(line)
+            .quotaMetaStyle()
+        }
       }
 
       if let paceHeadline {

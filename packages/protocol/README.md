@@ -27,6 +27,12 @@ shape of a released contract still moves its version.
   self-hosted payloads.
 - Quota windows may include optional absolute fields (`remaining_value`, `limit_value`,
   `value_unit`) for credits-class meters; consumers that only understand `used_percent` remain valid.
+- A `count` window may list `expiries`: `{ expires_at, count }` groups of its units that lapse at
+  one instant, ascending, one to sixteen distinct instants, never more units than
+  `remaining_value`. Units not listed do not expire. The write schema refuses the list on any
+  other unit; a reader takes the items it can read without judging them against the window.
+  Relay validates uploads strictly, so a Relay that knows `expiries` ships before a client that
+  sends it.
 - Pricing schemas and pure calculation code do not contain a canonical price catalog. The managed
   Relay supplies the validated catalog used by clients.
 - `fixtures/pricing-conformance.json` is the language-neutral pricing validation, resolution, and

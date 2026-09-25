@@ -86,6 +86,9 @@ public struct QuotaWindow: Codable, Equatable, Identifiable, Sendable {
   public let remainingValue: Double?
   public let limitValue: Double?
   public let valueUnit: QuotaValueUnit?
+  /// When units of a count window lapse, ascending. Empty when the reading lists none; units it
+  /// does not list do not expire. ``ExpiryCopy`` says them.
+  public let expiries: [QuotaExpiry]
   /// Whether this window's burn rate lasts to its reset, as the reading's holder derived it.
   ///
   /// QuotaBar's service states it on every window of the IPC state it publishes, because the
@@ -108,6 +111,7 @@ public struct QuotaWindow: Codable, Equatable, Identifiable, Sendable {
     remainingValue: Double? = nil,
     limitValue: Double? = nil,
     valueUnit: QuotaValueUnit? = nil,
+    expiries: [QuotaExpiry] = [],
     primaryCadence: PrimaryCadence? = nil,
     pace: QuotaPace? = nil,
     history: QuotaHistory? = nil
@@ -121,6 +125,7 @@ public struct QuotaWindow: Codable, Equatable, Identifiable, Sendable {
     self.remainingValue = remainingValue
     self.limitValue = limitValue
     self.valueUnit = valueUnit
+    self.expiries = expiries
     self.pace = pace
     self.history = history
   }
@@ -136,6 +141,7 @@ public struct QuotaWindow: Codable, Equatable, Identifiable, Sendable {
     remainingValue = try container.decodeIfPresent(Double.self, forKey: .remainingValue)
     limitValue = try container.decodeIfPresent(Double.self, forKey: .limitValue)
     valueUnit = try container.decodeIfPresent(QuotaValueUnit.self, forKey: .valueUnit)
+    expiries = try container.decodeIfPresent([QuotaExpiry].self, forKey: .expiries) ?? []
     pace = try container.decodeIfPresent(QuotaPace.self, forKey: .pace)
     history = try container.decodeIfPresent(QuotaHistory.self, forKey: .history)
     guard isValid else {
@@ -155,6 +161,31 @@ public struct QuotaWindow: Codable, Equatable, Identifiable, Sendable {
       && (durationSeconds.map { WireValidation.isSafeNonnegative($0) } ?? true)
       && (remainingValue?.isFinite ?? true)
       && (limitValue.map { $0.isFinite && $0 >= 0 } ?? true)
+      && expiries.count <= Self.maximumExpiries
+      && expiries.allSatisfy { WireValidation.isSafeNonnegative($0.count) && $0.count > 0 }
+  }
+
+  /// The contract's `MAXIMUM_QUOTA_EXPIRIES`.
+  static let maximumExpiries = 16
+
+  /// Written as synthesized coding would, except that an empty expiry list is no list at all:
+  /// the contract refuses `expiries: []`.
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(id, forKey: .id)
+    try container.encode(title, forKey: .title)
+    try container.encode(usedPercent, forKey: .usedPercent)
+    try container.encodeIfPresent(resetsAt, forKey: .resetsAt)
+    try container.encodeIfPresent(durationSeconds, forKey: .durationSeconds)
+    try container.encodeIfPresent(primaryCadence, forKey: .primaryCadence)
+    try container.encodeIfPresent(remainingValue, forKey: .remainingValue)
+    try container.encodeIfPresent(limitValue, forKey: .limitValue)
+    try container.encodeIfPresent(valueUnit, forKey: .valueUnit)
+    if !expiries.isEmpty {
+      try container.encode(expiries, forKey: .expiries)
+    }
+    try container.encodeIfPresent(pace, forKey: .pace)
+    try container.encodeIfPresent(history, forKey: .history)
   }
 
   private enum CodingKeys: String, CodingKey {
@@ -167,6 +198,7 @@ public struct QuotaWindow: Codable, Equatable, Identifiable, Sendable {
     case remainingValue
     case limitValue
     case valueUnit
+    case expiries
     case pace
     case history
   }

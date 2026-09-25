@@ -529,6 +529,14 @@ enum VisualFixtureContent {
           resetsAt: date.addingTimeInterval(4 * 86_400),
           durationSeconds: 604_800
         ),
+        QuotaWindow(
+          id: "reset_credits",
+          title: "Reset Credits",
+          usedPercent: 0,
+          remainingValue: 3,
+          valueUnit: .count,
+          expiries: [QuotaExpiry(expiresAt: date.addingTimeInterval(27 * 86_400), count: 2)]
+        ),
       ],
       status: .available,
       observedAt: studioObserved

@@ -470,6 +470,7 @@ fn window(id: &str, title: &str, detail: &Detail) -> QuotaWindow {
         remaining_value: Some(detail.remaining.max(0.0)),
         limit_value: (denom > 0.0).then_some(denom),
         value_unit: Some("count"),
+        expiries: Vec::new(),
     }
 }
 

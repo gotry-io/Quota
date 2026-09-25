@@ -336,6 +336,7 @@ fn included_windows(value: &Value, resets_at: Option<String>) -> Vec<QuotaWindow
                 .map(|(remaining, _)| remaining),
             limit_value: api.then_some(api_money).flatten().map(|(_, limit)| limit),
             value_unit: (api && api_money.is_some()).then_some("usd"),
+            expiries: Vec::new(),
         })
     })
     .collect()
@@ -371,6 +372,7 @@ fn request_window(value: &Value, resets_at: Option<String>) -> Option<QuotaWindo
         remaining_value: Some((limit - used).max(0.0)),
         limit_value: Some(limit),
         value_unit: Some("count"),
+        expiries: Vec::new(),
     })
 }
 
@@ -397,6 +399,7 @@ fn grok_bot_window(value: &Value) -> Option<QuotaWindow> {
         remaining_value: None,
         limit_value: None,
         value_unit: None,
+        expiries: Vec::new(),
     })
 }
 
@@ -428,6 +431,7 @@ fn money_window(
         remaining_value: Some(remaining / 100.0),
         limit_value: Some(limit / 100.0),
         value_unit: Some("usd"),
+        expiries: Vec::new(),
     })
 }
 

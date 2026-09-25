@@ -43,6 +43,7 @@ const CAPABILITIES = [
   { key: "quota.monthly", group: "quota", label: "monthly" },
   { key: "quota.plan_cycle", group: "quota", label: "plan cycle" },
   { key: "quota.balance", group: "quota", label: "balance" },
+  { key: "quota.reset_credits", group: "quota", label: "reset credits" },
   { key: "usage.local_logs", group: "usage", label: "local logs" },
   { key: "channel.cli_credentials", group: "channel", label: "CLI credentials" },
   { key: "channel.api_key", group: "channel", label: "API key" },
@@ -413,7 +414,7 @@ ${anchorRows.join("\n")}
 
 ## Window kinds
 
-The seven \`quota.*\` keys name the window kinds a collector emits, as
+The eight \`quota.*\` keys name the window kinds a collector emits, as
 \`docs/providers/<id>.md\` titles them. \`five_hour\`, \`weekly\`, and \`monthly\` are the protocol's
 \`primary_cadence\` members — the meter a reader means when they ask how much is left.
 
@@ -426,6 +427,7 @@ The seven \`quota.*\` keys name the window kinds a collector emits, as
 | \`quota.monthly\` | A monthly or 30-day window. |
 | \`quota.plan_cycle\` | A meter over the plan's billing cycle with no duration of its own. |
 | \`quota.balance\` | A window reporting absolute remaining value (\`remaining_value\` with a \`value_unit\`) rather than only a percentage. |
+| \`quota.reset_credits\` | **Reset Credits**: a \`count\` of earned rate-limit resets, with \`expiries\` when the provider says when they lapse. |
 `;
 }
 

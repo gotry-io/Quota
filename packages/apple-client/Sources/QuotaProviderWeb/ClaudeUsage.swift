@@ -1,4 +1,5 @@
 import Foundation
+import QuotaPresentation
 import QuotaWire
 
 /// Claude's usage document, read the way the Rust collector reads it.
@@ -101,6 +102,46 @@ enum ClaudeUsage {
         QuotaWindow.make(id: "extra_usage", title: "Extra Usage", usedPercent: utilization))
     }
     return inheritWeeklyReset(mapped, group: weeklyGroup)
+  }
+
+  /// Every window a reading reports: the usage windows, then the limit resets granted beside them.
+  static func mapReading(_ value: JSONValue, now: Date) -> [QuotaWindow] {
+    var windows = map(value)
+    if let resets = limitResets(value.get("cedar_ember"), now: now) {
+      windows.append(resets)
+    }
+    return windows
+  }
+
+  /// Claude's limit resets, read the way the Rust collector's `map_limit_resets` reads them: the
+  /// count left on every grant neither paused nor past its end, grouped by when each ends. An
+  /// ineligible or unreadable block is left out rather than failing the reading beside it.
+  static func limitResets(_ value: JSONValue?, now: Date) -> QuotaWindow? {
+    guard let value, value.get("eligible") != .bool(false),
+      let grants = value.get("grants")?.arrayValue, !grants.isEmpty
+    else { return nil }
+    let nowSeconds = Int(now.timeIntervalSince1970.rounded(.down))
+    var usable: [(endsAt: Int?, left: Int)] = []
+    for grant in grants {
+      guard let left = ProviderJSON.number(grant.get("resets_left")),
+        left >= 0, left == left.rounded(.down), left <= 9_007_199_254_740_991
+      else { return nil }
+      let endsAt = ProviderJSON.date(grant.get("ends_at"))
+      if grant.get("paused") == .bool(true) { continue }
+      if let endsAt, endsAt <= nowSeconds { continue }
+      usable.append((endsAt, Int(left)))
+    }
+    let total = usable.reduce(0) { $0 + $1.left }
+    return QuotaWindow(
+      id: CodexUsage.resetCreditsID,
+      title: "Reset Credits",
+      usedPercent: 0,
+      remainingValue: Double(total),
+      valueUnit: .count,
+      expiries: ProviderJSON.expiries(
+        usable.compactMap { entry in entry.endsAt.map { ($0, entry.left) } },
+        now: now, total: Double(total))
+    )
   }
 
   static func usageWindow(

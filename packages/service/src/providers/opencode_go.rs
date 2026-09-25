@@ -269,6 +269,7 @@ fn percent_window(
         remaining_value: remaining.filter(|value| *value >= 0.0),
         limit_value: limit.filter(|value| *value > 0.0),
         value_unit: remaining.or(limit).map(|_| "usd"),
+        expiries: Vec::new(),
     })
 }
 
@@ -345,6 +346,7 @@ fn usd_window(cadence: Cadence, used: f64, limit: f64, reset_ms: Option<i64>) ->
         remaining_value: Some(remaining),
         limit_value: Some(limit),
         value_unit: Some("usd"),
+        expiries: Vec::new(),
     }
 }
 

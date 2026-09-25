@@ -14,7 +14,9 @@ use super::super::common::{
     VALIDATION_TIMEOUT, ValidatedBrowserSession, account_identity, cookie_named_value, mask_email,
     obj_get, obj_get_any, string,
 };
-use super::{Credentials, Identity, collect_api, map_usage, snapshot};
+use super::{
+    Credentials, Identity, attach_reset_credit_expiries, collect_api, map_usage, snapshot,
+};
 
 pub const SOURCE: &str = "chatgpt_web_usage_api";
 const ORIGIN: &str = "https://chatgpt.com";
@@ -23,6 +25,9 @@ const ME_PATH: &str = "/backend-api/me";
 /// The usage document, relative to the same origin. [`super::USAGE_URL`] is that path on
 /// [`ORIGIN`], and `the_usage_path_is_the_usage_url` holds the two together.
 const USAGE_PATH: &str = "/backend-api/wham/usage";
+/// The Reset Credits list, relative to the same origin; [`super::RESET_CREDITS_URL`] on
+/// [`ORIGIN`].
+const RESET_CREDITS_PATH: &str = "/backend-api/wham/rate-limit-reset-credits";
 
 /// Proves the cookie belongs to a signed-in ChatGPT account before anything is stored.
 ///
@@ -106,13 +111,16 @@ fn collect_web_usage(
         headers.push(("ChatGPT-Account-Id", account_id));
     }
     let (_, value) = client.get_json_session(&format!("{origin}{USAGE_PATH}"), &headers, SOURCE)?;
-    let mapped = map_usage(&value);
+    let mut mapped = map_usage(&value);
     if mapped.malformed_success {
         return Err(ProviderError::new(ErrorCategory::Error, SOURCE));
     }
     if mapped.windows.is_empty() {
         return Err(ProviderError::new(ErrorCategory::Unavailable, SOURCE));
     }
+    attach_reset_credit_expiries(&mut mapped.windows, context.observed_unix(), || {
+        client.get_json_session(&format!("{origin}{RESET_CREDITS_PATH}"), &headers, SOURCE)
+    });
     Ok(snapshot(
         &mapped.windows,
         mapped.plan.or_else(|| session.plan.clone()).as_deref(),
@@ -253,6 +261,10 @@ mod tests {
     #[test]
     fn the_usage_path_is_the_usage_url() {
         assert_eq!(format!("{ORIGIN}{USAGE_PATH}"), super::super::USAGE_URL);
+        assert_eq!(
+            format!("{ORIGIN}{RESET_CREDITS_PATH}"),
+            super::super::RESET_CREDITS_URL
+        );
     }
 
     #[test]

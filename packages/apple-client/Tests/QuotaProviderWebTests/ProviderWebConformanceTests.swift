@@ -87,7 +87,7 @@ actor StubTransport: ProviderWebTransport {
     }
     let exchange = exchanges[served]
     served += 1
-    let path = request.url?.path ?? ""
+    let path = [request.url?.path, request.url?.query].compactMap { $0 }.joined(separator: "?")
     let method = request.httpMethod ?? ""
     if path != exchange.path || method != exchange.method {
       mismatch = mismatch ?? "expected \(exchange.method) \(exchange.path), sent \(method) \(path)"

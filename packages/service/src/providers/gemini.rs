@@ -421,6 +421,7 @@ fn map_windows(value: &Value, now: i64) -> Vec<QuotaWindow> {
                 remaining_value: Some(remaining.max(0.0)),
                 limit_value: (limit > 0.0).then_some(limit),
                 value_unit: Some("count"),
+                expiries: Vec::new(),
             }
         })
         .collect()

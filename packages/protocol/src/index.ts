@@ -226,7 +226,23 @@ export type QuotaValueUnit = z.infer<typeof QuotaValueUnitSchema>;
 const PrimaryCadenceSchema = z.enum(["five_hour", "weekly", "monthly"]);
 export type PrimaryCadence = z.infer<typeof PrimaryCadenceSchema>;
 
-const QuotaWindowSchema = z
+/** How many distinct expiry instants one window may list. */
+export const MAXIMUM_QUOTA_EXPIRIES = 16;
+
+/**
+ * Units of a count window that stop being usable at one instant — earned rate-limit resets a
+ * provider grants with an end date. Units without an expiry are not listed; the window's
+ * `remaining_value` stays the total, so the unlisted remainder is the part that does not expire.
+ */
+const QuotaExpirySchema = z
+  .object({
+    expires_at: Rfc3339InstantSchema,
+    count: SafePositiveIntegerSchema,
+  })
+  .strict();
+export type QuotaExpiry = z.infer<typeof QuotaExpirySchema>;
+
+const QuotaWindowFields = z
   .object({
     id: z.string().min(1).max(64).regex(BILLING_DIMENSION_PATTERN),
     title: z.string().trim().min(1).max(128),
@@ -239,8 +255,48 @@ const QuotaWindowSchema = z
     remaining_value: z.number().finite().optional(),
     limit_value: z.number().finite().nonnegative().optional(),
     value_unit: QuotaValueUnitSchema.optional(),
+    /** Ascending, one entry per instant; only on a `count` window. See {@link QuotaExpirySchema}. */
+    expiries: z.array(QuotaExpirySchema).min(1).max(MAXIMUM_QUOTA_EXPIRIES).optional(),
   })
   .strict();
+
+/**
+ * What an expiry list claims beyond its items' shape: it describes whole units of the window's
+ * own count, in the order they lapse, and never more of them than the window holds.
+ */
+function validateExpiries(
+  window: z.infer<typeof QuotaWindowFields>,
+  context: z.RefinementCtx,
+): void {
+  const expiries = window.expiries;
+  if (expiries === undefined) return;
+  if (window.value_unit !== "count") {
+    context.addIssue({
+      code: "custom",
+      path: ["expiries"],
+      message: "Only a count window lists expiries.",
+    });
+    return;
+  }
+  const instants = expiries.map((expiry) => Date.parse(expiry.expires_at));
+  if (instants.some((instant, index) => index > 0 && instant <= (instants[index - 1] ?? 0))) {
+    context.addIssue({
+      code: "custom",
+      path: ["expiries"],
+      message: "Expiries are ascending and name each instant once.",
+    });
+  }
+  const listed = expiries.reduce((sum, expiry) => sum + expiry.count, 0);
+  if (window.remaining_value === undefined || listed > window.remaining_value) {
+    context.addIssue({
+      code: "custom",
+      path: ["expiries"],
+      message: "Expiries list no more units than the window holds.",
+    });
+  }
+}
+
+const QuotaWindowSchema = QuotaWindowFields.superRefine(validateExpiries);
 export type QuotaWindow = z.infer<typeof QuotaWindowSchema>;
 
 const QuotaAccountSchema = z
@@ -2196,9 +2252,12 @@ export type PublicUsageResponse = z.infer<typeof PublicUsageResponseSchema>;
  */
 const ReadEnumSchema = z.string().min(1).max(64).regex(WIRE_ENUM_PATTERN);
 
-const QuotaWindowReadSchema = QuotaWindowSchema.extend({
+// A reader takes the expiries it can read and does not re-judge the list against the window: a
+// unit this build has not heard of may be one a newer Relay lists them on.
+const QuotaWindowReadSchema = QuotaWindowFields.extend({
   value_unit: ReadEnumSchema.optional(),
   primary_cadence: ReadEnumSchema.optional(),
+  expiries: z.array(QuotaExpirySchema.loose()).max(MAXIMUM_QUOTA_EXPIRIES).optional(),
 }).loose();
 
 const QuotaAccountReadSchema = QuotaAccountSchema.extend({

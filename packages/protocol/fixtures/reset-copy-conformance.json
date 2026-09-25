@@ -1,5 +1,5 @@
 {
-  "$comment": "When a window refills, in the words every Quota client uses. Relative is the default: a countdown under a day, then a local weekday and 24-hour time, then a month and day. Absolute always uses the local date. English is fixed; weekday and month cases pin `now` and `resets_at` as RFC 3339 with an offset so every runtime formats that local time. `packages/quota-model`, `packages/apple-shared` FreshnessCopy, `apps/web/src/lib/format.ts`, and `packages/service` `copy.rs` all answer this file.",
+  "$comment": "When a window refills, in the words every Quota client uses. Relative is the default: a countdown under a day, then a local weekday and 24-hour time, then a month and day. Absolute always uses the local date. English is fixed; weekday and month cases pin `now` and `resets_at` as RFC 3339 with an offset so every runtime formats that local time. `packages/quota-model`, `packages/apple-shared` FreshnessCopy, `apps/web/src/lib/format.ts`, and `packages/service` `copy.rs` all answer this file. `expiries` states when a count window's units lapse: `next` is the meta line under the window on a row and `lines` the list its detail shows, local 24-hour time in the offset `now` names. Only `packages/apple-shared` ExpiryCopy shows expiries today, so it alone answers that group.",
   "cases": [
     {
       "name": "the last second before a minute still rounds up to a minute",
@@ -96,6 +96,63 @@
       "resets_at": "2026-09-06T14:00:00-07:00",
       "relative": null,
       "absolute": null
+    }
+  ],
+  "expiries": [
+    {
+      "name": "each instant ahead is a line, nearest first, and the unlisted remainder does not expire",
+      "now": "2026-10-20T09:00:00-07:00",
+      "remaining_value": 4,
+      "expiries": [
+        {
+          "expires_at": "2026-10-22T23:00:00Z",
+          "count": 2
+        },
+        {
+          "expires_at": "2026-11-05T08:30:00Z",
+          "count": 1
+        }
+      ],
+      "next": "Next expires Oct 22",
+      "lines": ["2 · Expire Oct 22, 16:00", "1 · Expires Nov 5, 01:30", "1 · No expiry"]
+    },
+    {
+      "name": "a group already past is not named and still counts as listed",
+      "now": "2026-10-23T00:00:00-07:00",
+      "remaining_value": 4,
+      "expiries": [
+        {
+          "expires_at": "2026-10-22T23:00:00Z",
+          "count": 2
+        },
+        {
+          "expires_at": "2026-11-05T08:30:00Z",
+          "count": 1
+        }
+      ],
+      "next": "Next expires Nov 5",
+      "lines": ["1 · Expires Nov 5, 01:30", "1 · No expiry"]
+    },
+    {
+      "name": "every unit listed leaves no remainder line",
+      "now": "2026-10-20T09:00:00-07:00",
+      "remaining_value": 2,
+      "expiries": [
+        {
+          "expires_at": "2026-10-22T23:00:00Z",
+          "count": 2
+        }
+      ],
+      "next": "Next expires Oct 22",
+      "lines": ["2 · Expire Oct 22, 16:00"]
+    },
+    {
+      "name": "a window that lists no expiries prints nothing, not a remainder",
+      "now": "2026-10-20T09:00:00-07:00",
+      "remaining_value": 3,
+      "expiries": [],
+      "next": null,
+      "lines": []
     }
   ]
 }

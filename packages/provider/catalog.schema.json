@@ -204,6 +204,7 @@
               "quota.monthly",
               "quota.plan_cycle",
               "quota.balance",
+              "quota.reset_credits",
               "usage.local_logs",
               "channel.cli_credentials",
               "channel.api_key",
