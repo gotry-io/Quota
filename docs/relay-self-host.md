@@ -97,6 +97,11 @@ value refuses to start.
 4. Check `docker logs quota-relay` for `relay_migrations_applied` and
    `https://quota.gotry.io/api/v2/info` for the new version.
 
+Deploy Relay before tagging an app release that reads what the Relay release adds (for example the
+period read's `model_series`). Clients read such a field as optional
+([ADR 0023](decisions/0023-strict-writes-tolerant-reads.md)), so an app ahead of Relay loses the
+feature — iOS and QuotaBar's Account source draw no model river — rather than failing the read.
+
 ## Rollback
 
 Roll back by deploying a previous `ghcr.io/gotry-io/quota-relay:<version>` image the same way
