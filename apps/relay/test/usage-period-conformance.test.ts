@@ -1,5 +1,9 @@
 import type { DeviceWriterPrincipal, UsageUpload } from "@gotry-io/relay-core";
-import { AccountUsagePeriodResponseSchema, USAGE_HOUR_GRID_RULE } from "@gotry-io/quota-protocol";
+import {
+  AccountUsagePeriodResponseSchema,
+  USAGE_HOUR_GRID_RULE,
+  USAGE_MODEL_SERIES_LIMIT,
+} from "@gotry-io/quota-protocol";
 import { beforeEach, describe, expect, it } from "vitest";
 import conformanceJson from "../../../packages/protocol/fixtures/usage-period-conformance.json" with {
   type: "json",
@@ -24,6 +28,13 @@ type PeriodBody = {
   cost: { status: string; amount_microusd: string | null; unpriced_rows: number };
   days: PeriodDay[];
   agents?: unknown[];
+  model_series?: {
+    models: Array<{ model: string; provider: string | null }>;
+    days: Array<{
+      date: string;
+      models: Array<{ model: string; total_tokens: number; cost_microusd: string | null }>;
+    }>;
+  };
   coverage: {
     partial: boolean;
     daily_retained_from: string | null;
@@ -42,12 +53,23 @@ type Expected = {
   coverage?: PeriodBody["coverage"];
   etag_stable_next_day?: boolean;
   midnight_hour?: string;
+  model_series?: {
+    models: Array<{ model: string; provider: string | null }>;
+    days: Array<{
+      date: string;
+      models: Array<{ model: string; total_tokens: number; priced?: boolean }>;
+    }>;
+  };
 };
+
+type SeedRow = { model: string; input_tokens?: number };
 
 type SeedHour = {
   bucket_start_utc: string;
   device?: string;
+  agent?: UsageUpload["agent"];
   model?: string;
+  rows?: SeedRow[];
   partial?: boolean;
 };
 
@@ -71,11 +93,13 @@ type Case = {
   delete_devices?: string[];
   delete_account?: boolean;
   run_maintenance?: boolean;
+  series?: boolean;
 };
 
 const conformance = conformanceJson as unknown as {
   hour_grid_rule: string;
   maximum_local_days: number;
+  model_series_limit: number;
   cases: Case[];
 };
 
@@ -108,6 +132,7 @@ describe("Account usage period conformance", () => {
   it("answers every fixture case as producer", async () => {
     expect(conformance.hour_grid_rule).toBe(USAGE_HOUR_GRID_RULE);
     expect(conformance.maximum_local_days).toBe(366);
+    expect(conformance.model_series_limit).toBe(USAGE_MODEL_SERIES_LIMIT);
     for (const testCase of conformance.cases) {
       await db.batch(
         ["usage_daily", "usage_hourly", "usage_hour_scans", "devices", "accounts"].map((table) =>
@@ -122,24 +147,24 @@ describe("Account usage period conformance", () => {
       const devices = testCase.seed?.devices ?? ["alpha"];
       for (const name of devices) await addDevice(name, checkedAt);
       const hours = seedHours(testCase);
-      const byDevice = new Map<string, SeedHour[]>();
+      const byUploader = new Map<string, SeedHour[]>();
       for (const hour of hours) {
-        const device = hour.device ?? devices[0] ?? "alpha";
-        const list = byDevice.get(device);
+        const key = JSON.stringify([hour.device ?? devices[0] ?? "alpha", hour.agent ?? "codex"]);
+        const list = byUploader.get(key);
         if (list) list.push(hour);
-        else byDevice.set(device, [hour]);
+        else byUploader.set(key, [hour]);
       }
       const usage = new D1UsageState(db);
-      for (const [name, deviceHours] of byDevice) {
-        for (let index = 0; index < deviceHours.length; index += 64) {
+      for (const [key, uploaderHours] of byUploader) {
+        const [name, agent] = JSON.parse(key) as [string, UsageUpload["agent"]];
+        for (let index = 0; index < uploaderHours.length; index += 64) {
           await usage.recordUsage(
             principal(name, checkedAt),
             upload(
-              deviceHours
+              uploaderHours
                 .slice(index, index + 64)
-                .map((hour, offset) =>
-                  hourOf(hour.bucket_start_utc, index + offset + 1, hour.model, hour.partial),
-                ),
+                .map((hour, offset) => seedHourOf(hour, index + offset + 1, agent)),
+              agent,
             ),
             checkedAt.toISOString(),
           );
@@ -191,7 +216,14 @@ describe("Account usage period conformance", () => {
       if (!testCase.from || !testCase.to || !testCase.expected) {
         throw new Error(`${testCase.name} is missing from/to/expected`);
       }
-      const body = await readPeriod(app, testCase.timezone, testCase.from, testCase.to);
+      const body = await readPeriod(
+        app,
+        testCase.timezone,
+        testCase.from,
+        testCase.to,
+        false,
+        testCase.series,
+      );
       expectPeriod(body, testCase.expected, testCase.name);
       if (testCase.adjacent && testCase.adjacent_expected) {
         const next = await readPeriod(
@@ -215,7 +247,7 @@ describe("Account usage period conformance", () => {
     }
   });
 
-  it("refuses a malformed date, a reversed range, a span over 366 days, and an unknown zone", async () => {
+  it("refuses a malformed date, a reversed range, a span over 366 days, an unknown zone, and an unknown series", async () => {
     await addDevice("alpha", new Date("2026-08-10T12:00:00Z"));
     const app = signedInApp(new Date("2026-08-10T12:00:00Z"));
     const period = "https://quota.gotry.io/api/v6/account/usage/period";
@@ -243,6 +275,14 @@ describe("Account usage period conformance", () => {
     expect(
       (await app.request(`${period}?from=2026-08-10&to=2026-08-10&timezone=UTC&extra=1`)).status,
     ).toBe(400);
+    expect(
+      (await app.request(`${period}?from=2026-08-10&to=2026-08-10&timezone=UTC&series=agent`))
+        .status,
+    ).toBe(400);
+    expect(
+      (await app.request(`${period}?from=2026-08-10&to=2026-08-10&timezone=UTC&series=model`))
+        .status,
+    ).toBe(200);
   });
 
   it("answers 304 from the validator before any Usage SQL", async () => {
@@ -262,6 +302,7 @@ describe("Account usage period conformance", () => {
     const body = (await first.json()) as PeriodBody;
     expect(AccountUsagePeriodResponseSchema.safeParse(body).success).toBe(true);
     expect(Object.hasOwn(body, "agents")).toBe(false);
+    expect(Object.hasOwn(body, "model_series")).toBe(false);
     const etag = first.headers.get("ETag");
     expect(etag).toMatch(/^"[0-9a-f]{64}"$/);
     expect(first.headers.get("Cache-Control")).toBe("private, no-cache");
@@ -279,6 +320,11 @@ describe("Account usage period conformance", () => {
     const detailed = (await withAgents.json()) as PeriodBody;
     expect(Array.isArray(detailed.agents)).toBe(true);
     expect(withAgents.headers.get("ETag")).not.toBe(etag);
+    const withSeries = await app.request(`${path}&series=model`, {
+      headers: { "If-None-Match": etag ?? "" },
+    });
+    expect(withSeries.status).toBe(200);
+    expect(withSeries.headers.get("ETag")).not.toBe(etag);
 
     await db
       .prepare(
@@ -368,6 +414,31 @@ function expectPeriod(body: PeriodBody, expected: Expected, name: string, label 
     expect(body.cost.unpriced_rows, tag).toBeGreaterThan(0);
   }
   if (expected.coverage) expect(body.coverage, tag).toEqual(expected.coverage);
+  if (expected.model_series) {
+    const series = body.model_series;
+    expect(series?.models, tag).toEqual(expected.model_series.models);
+    expect(
+      series?.days.map((day) => ({
+        date: day.date,
+        models: day.models.map((cell) => [cell.model, cell.total_tokens]),
+      })),
+      tag,
+    ).toEqual(
+      expected.model_series.days.map((day) => ({
+        date: day.date,
+        models: day.models.map((cell) => [cell.model, cell.total_tokens]),
+      })),
+    );
+    for (const [dayIndex, day] of expected.model_series.days.entries()) {
+      for (const [cellIndex, cell] of day.models.entries()) {
+        if (cell.priced === undefined) continue;
+        const cost = series?.days[dayIndex]?.models[cellIndex]?.cost_microusd;
+        expect(cost !== null && cost !== undefined, `${tag} ${day.date} ${cell.model}`).toBe(
+          cell.priced,
+        );
+      }
+    }
+  }
 }
 
 async function readPeriod(
@@ -376,9 +447,11 @@ async function readPeriod(
   from: string,
   to: string,
   breakdown = false,
+  series = false,
 ): Promise<PeriodBody> {
   const params = new URLSearchParams({ from, to, timezone });
   if (breakdown) params.set("breakdown", "1");
+  if (series) params.set("series", "model");
   const response = await app.request(
     `https://quota.gotry.io/api/v6/account/usage/period?${params.toString()}`,
   );
@@ -430,19 +503,34 @@ function principal(name: string, at: Date): DeviceWriterPrincipal {
   };
 }
 
+function seedHourOf(hour: SeedHour, scanVersion: number, agent: UsageUpload["agent"]) {
+  const rows = hour.rows ?? [{ model: hour.model ?? "gpt-5.6-sol" }];
+  return hourOf(
+    hour.bucket_start_utc,
+    scanVersion,
+    undefined,
+    hour.partial,
+    rows.map((row) => row.model),
+    agent,
+    rows.map((row) => row.input_tokens ?? 10),
+  );
+}
+
 function hourOf(
   bucket: string,
   scanVersion: number,
   model = "gpt-5.6-sol",
   partial = false,
   models: readonly string[] = [model],
+  agent: UsageUpload["agent"] = "codex",
+  inputTokens: readonly number[] = [],
 ) {
   return {
     bucket_start_utc: bucket,
     scan_version: scanVersion,
     partial,
-    rows: models.map((item) => ({
-      agent: "codex" as const,
+    rows: models.map((item, index) => ({
+      agent,
       billing_channel: "openai_direct" as const,
       channel_source: "agent_default" as const,
       model: item,
@@ -450,7 +538,7 @@ function hourOf(
       service_tier: "unknown",
       speed: "unknown",
       inference_geo: "unknown",
-      input_tokens: 10,
+      input_tokens: inputTokens[index] ?? 10,
       cache_read_tokens: 0,
       cache_write_5m_tokens: 0,
       cache_write_1h_tokens: 0,
@@ -465,8 +553,11 @@ function hourOf(
   };
 }
 
-function upload(hours: ReturnType<typeof hourOf>[]): UsageUpload {
-  return { protocol_version: 6, generation: 1, agent: "codex", hours };
+function upload(
+  hours: ReturnType<typeof hourOf>[],
+  agent: UsageUpload["agent"] = "codex",
+): UsageUpload {
+  return { protocol_version: 6, generation: 1, agent, hours };
 }
 
 function signedInApp(

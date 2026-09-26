@@ -1,7 +1,8 @@
 {
-  "$comment": "How an Account period read answers inclusive local dates in a required IANA timezone. Relay produces this file. A local day begins at the first whole UTC hour whose civil date in timezone is that local date. The UTC hour that contains a fractional-offset midnight is assigned to the previous local day. Counts are never prorated. A DST skip starts at the first hour the zone reads as that date; a DST repeat counts both copies. Presets are the same read: today is from=to=localDate, last_7_days is localDate-6, last_30_days is localDate-29. Missing ≠ zero: a local day with no stored hour is omitted from days[], and totals do not gain a synthetic $0 / 0-token day. Unpriced cost stays unpriced, never \"0\". Clients adopt the file in a later change; they must not fold UTC activity days for these ranges.",
+  "$comment": "How an Account period read answers inclusive local dates in a required IANA timezone. Relay produces this file. A local day begins at the first whole UTC hour whose civil date in timezone is that local date. The UTC hour that contains a fractional-offset midnight is assigned to the previous local day. Counts are never prorated. A DST skip starts at the first hour the zone reads as that date; a DST repeat counts both copies. Presets are the same read: today is from=to=localDate, last_7_days is localDate-6, last_30_days is localDate-29. Missing ≠ zero: a local day with no stored hour is omitted from days[], and totals do not gain a synthetic $0 / 0-token day. Unpriced cost stays unpriced, never \"0\". Clients adopt the file in a later change; they must not fold UTC activity days for these ranges. With series=model the read adds model_series: the model_series_limit largest models of the period by total tokens (largest first, ties by name), then other when anything remains, merged across agents after each agent's rows resolve their own aliases. model_series.days names exactly the dates days[] does; a cell is present only for a model with Usage that date. A cell's cost is null when any row behind it is unpriced.",
   "hour_grid_rule": "first_whole_hour_of_local_date; fractional_midnight_to_previous_day; no_proration",
   "maximum_local_days": 366,
+  "model_series_limit": 8,
   "cases": [
     {
       "name": "preset_equals_custom",
@@ -259,6 +260,169 @@
           }
         }
       ]
+    },
+    {
+      "name": "series_top_n_and_other",
+      "checked_at": "2026-08-10T12:00:00Z",
+      "timezone": "UTC",
+      "from": "2026-08-08",
+      "to": "2026-08-10",
+      "series": true,
+      "seed": {
+        "hours": [
+          {
+            "bucket_start_utc": "2026-08-08T09:00:00Z",
+            "rows": [{ "model": "model-j", "input_tokens": 10 }]
+          },
+          {
+            "bucket_start_utc": "2026-08-10T10:00:00Z",
+            "rows": [
+              { "model": "gpt-5.6-sol", "input_tokens": 1000 },
+              { "model": "model-b", "input_tokens": 100 },
+              { "model": "model-c", "input_tokens": 90 },
+              { "model": "model-d", "input_tokens": 80 },
+              { "model": "model-e", "input_tokens": 70 },
+              { "model": "model-f", "input_tokens": 60 },
+              { "model": "model-g", "input_tokens": 50 },
+              { "model": "model-h", "input_tokens": 40 },
+              { "model": "model-i", "input_tokens": 30 },
+              { "model": "model-j", "input_tokens": 20 }
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "day_dates": ["2026-08-08", "2026-08-10"],
+        "omitted_dates": ["2026-08-09"],
+        "model_series": {
+          "models": [
+            { "model": "gpt-5.6-sol", "provider": "openai" },
+            { "model": "model-b", "provider": "unknown" },
+            { "model": "model-c", "provider": "unknown" },
+            { "model": "model-d", "provider": "unknown" },
+            { "model": "model-e", "provider": "unknown" },
+            { "model": "model-f", "provider": "unknown" },
+            { "model": "model-g", "provider": "unknown" },
+            { "model": "model-h", "provider": "unknown" },
+            { "model": "other", "provider": null }
+          ],
+          "days": [
+            {
+              "date": "2026-08-08",
+              "models": [{ "model": "other", "total_tokens": 12, "priced": false }]
+            },
+            {
+              "date": "2026-08-10",
+              "models": [
+                { "model": "gpt-5.6-sol", "total_tokens": 1002, "priced": true },
+                { "model": "model-b", "total_tokens": 102, "priced": false },
+                { "model": "model-c", "total_tokens": 92, "priced": false },
+                { "model": "model-d", "total_tokens": 82, "priced": false },
+                { "model": "model-e", "total_tokens": 72, "priced": false },
+                { "model": "model-f", "total_tokens": 62, "priced": false },
+                { "model": "model-g", "total_tokens": 52, "priced": false },
+                { "model": "model-h", "total_tokens": 42, "priced": false },
+                { "model": "other", "total_tokens": 54, "priced": false }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "series_merges_agents",
+      "checked_at": "2026-08-10T12:00:00Z",
+      "timezone": "UTC",
+      "from": "2026-08-10",
+      "to": "2026-08-10",
+      "series": true,
+      "seed": {
+        "hours": [
+          {
+            "bucket_start_utc": "2026-08-10T09:00:00Z",
+            "agent": "codex",
+            "rows": [{ "model": "GPT-5.5[1m]", "input_tokens": 40 }]
+          },
+          {
+            "bucket_start_utc": "2026-08-10T09:00:00Z",
+            "agent": "opencode",
+            "rows": [{ "model": "gpt-5.5", "input_tokens": 20 }]
+          }
+        ]
+      },
+      "expected": {
+        "day_dates": ["2026-08-10"],
+        "model_series": {
+          "models": [{ "model": "gpt-5.5", "provider": "openai" }],
+          "days": [{ "date": "2026-08-10", "models": [{ "model": "gpt-5.5", "total_tokens": 64 }] }]
+        }
+      }
+    },
+    {
+      "name": "series_agent_scoped_alias",
+      "checked_at": "2026-08-20T12:00:00Z",
+      "timezone": "UTC",
+      "from": "2026-08-20",
+      "to": "2026-08-20",
+      "series": true,
+      "seed": {
+        "hours": [
+          {
+            "bucket_start_utc": "2026-08-20T09:00:00Z",
+            "agent": "grok",
+            "rows": [{ "model": "grok-4.6-build", "input_tokens": 40 }]
+          },
+          {
+            "bucket_start_utc": "2026-08-20T09:00:00Z",
+            "agent": "opencode",
+            "rows": [{ "model": "grok-4.6-build", "input_tokens": 20 }]
+          }
+        ]
+      },
+      "expected": {
+        "day_dates": ["2026-08-20"],
+        "model_series": {
+          "models": [
+            { "model": "grok-4.6", "provider": "xai" },
+            { "model": "grok-4.6-build", "provider": "xai" }
+          ],
+          "days": [
+            {
+              "date": "2026-08-20",
+              "models": [
+                { "model": "grok-4.6", "total_tokens": 42 },
+                { "model": "grok-4.6-build", "total_tokens": 22 }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "series_dst_back",
+      "checked_at": "2026-11-01T12:00:00Z",
+      "timezone": "America/New_York",
+      "from": "2026-10-31",
+      "to": "2026-11-01",
+      "series": true,
+      "seed": { "every_hour_in_bounds": true },
+      "expected": {
+        "day_dates": ["2026-10-31", "2026-11-01"],
+        "totals": { "messages": 49 },
+        "model_series": {
+          "models": [{ "model": "gpt-5.6-sol", "provider": "openai" }],
+          "days": [
+            {
+              "date": "2026-10-31",
+              "models": [{ "model": "gpt-5.6-sol", "total_tokens": 288, "priced": true }]
+            },
+            {
+              "date": "2026-11-01",
+              "models": [{ "model": "gpt-5.6-sol", "total_tokens": 300, "priced": true }]
+            }
+          ]
+        }
+      }
     }
   ]
 }

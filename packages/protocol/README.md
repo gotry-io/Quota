@@ -75,7 +75,9 @@ shape of a released contract still moves its version.
   cases are answered by `packages/quota-model` and by the Rust two-way merge.
 - `fixtures/usage-period-conformance.json` states the Account period read: inclusive local dates
   in a required IANA timezone, the hour-grid rule, presets as the same read, missing ≠ zero,
-  deletion, and retention coverage. Relay answers it as producer
+  deletion, retention coverage, and the `series=model` legend (top
+  `USAGE_MODEL_SERIES_LIMIT` then `other`, merged across agents after per-agent alias
+  resolution). Relay answers it as producer
   ([ADR 0055](../../docs/decisions/0055-an-account-period-is-a-local-date-range.md)).
 - `fixtures/usage-export-conformance.json` states the CSV / JSON a Usage period export writes from
   the period already on screen. The website and QuotaBar both answer it

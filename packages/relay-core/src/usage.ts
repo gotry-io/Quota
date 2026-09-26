@@ -107,10 +107,17 @@ export interface UsageLocalDayWindow {
 export interface UsageLocalDayQuery {
   windows: readonly UsageLocalDayWindow[];
   limit: number;
+  /**
+   * Keep agent as a grouping dimension. Without it agent is folded away and a row's `agent` is
+   * only one of those behind it — enough to price a day, not to resolve an agent-scoped model
+   * alias, which is what a per-model series needs.
+   */
+  byAgent?: boolean;
 }
 
 /**
- * One pricing identity over one local date, rolled up across devices, hours, and agents.
+ * One pricing identity over one local date, rolled up across devices and hours, and across
+ * agents unless the query kept them.
  *
  * `date` is the local calendar date of the window that claimed these hours, not a UTC date.
  * `partial_hours` counts stored hours behind the row whose scan came up short.

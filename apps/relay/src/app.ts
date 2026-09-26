@@ -1085,7 +1085,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     const checkedAt = now();
     const principal = await accountReader(context, options, checkedAt);
     if (principal instanceof Response) return principal;
-    if (!hasOnlyQueryKeys(context, ["from", "to", "timezone", "breakdown"])) {
+    if (!hasOnlyQueryKeys(context, ["from", "to", "timezone", "breakdown", "series"])) {
       return invalidRequest(context);
     }
     const range = UsagePeriodRangeSchema.safeParse({
@@ -1097,6 +1097,9 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     const breakdown = context.req.query("breakdown");
     if (breakdown !== undefined && breakdown !== "1") return invalidRequest(context);
     const includeAgents = breakdown === "1";
+    const series = context.req.query("series");
+    if (series !== undefined && series !== "model") return invalidRequest(context);
+    const includeSeries = series === "model";
     // Explicit {from,to} does not roll over with the wall clock. Retention still can: a range
     // that reaches a cutoff carries that cutoff, matching the activity read.
     const stamp = await options.state.accountUsageVersionStamp(principal.account_id);
@@ -1127,6 +1130,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
       options.usageState.queryLocalDayUsage(principal.account_id, {
         windows,
         limit: localDayLimit,
+        ...(includeSeries ? { byAgent: true } : {}),
       }),
     ]);
     if (daily.truncated || boundary.truncated || localDays.truncated) return resultLimit(context);
@@ -1137,9 +1141,10 @@ export function createRelayApp(options: RelayAppOptions): Hono {
         modelCatalog,
         includeAgents,
       });
-      const days = buildLocalPeriodDays({
+      const local = buildLocalPeriodDays({
         rows: localDays.rows,
         catalog,
+        ...(includeSeries ? { modelCatalog } : {}),
       });
       const storedPartial =
         folded.partial || localDays.rows.some((row) => (row.partial_hours ?? 0) > 0);
@@ -1155,8 +1160,9 @@ export function createRelayApp(options: RelayAppOptions): Hono {
           totals: folded.totals,
           cost: folded.cost,
           cache_saved: folded.cache_saved,
-          days,
+          days: local.days,
           ...(folded.agents === undefined ? {} : { agents: folded.agents }),
+          ...(local.model_series === undefined ? {} : { model_series: local.model_series }),
           coverage: periodCoverage(plan.start, checkedAt, storedPartial),
           revision: {
             usage_revision: stamp.usage_revision,
