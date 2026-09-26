@@ -214,6 +214,9 @@ struct UsageModelRiverChart: View {
             stacking: .standard
           )
           .foregroundStyle(by: .value("Model", point.seriesID))
+          // Monotone, as QuotaBar's river: a sparse day meets its zero neighbours without the
+          // overshoot a spline draws, so an empty day stays on the baseline as its tick.
+          .interpolationMethod(.monotone)
         } else {
           BarMark(
             x: .value("Day", point.date),
