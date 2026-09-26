@@ -13,6 +13,8 @@ import {
   AccountUsagePeriodResponseSchema,
   AppleNativeSignInRequestSchema,
   BrowserLoginExchangeRequestSchema,
+  CollectionRequestResponseSchema,
+  CollectionRequestSchema,
   DeleteDeviceResponseSchema,
   DeviceProfileUpdateRequestSchema,
   DeviceProfileUpdateResponseSchema,
@@ -78,6 +80,8 @@ const AccountHttpPayloadSchema = z.union([
   QuotaHistoryUploadSchema,
   QuotaHistoryUploadResponseSchema,
   QuotaHistoryResponseSchema,
+  CollectionRequestSchema,
+  CollectionRequestResponseSchema,
   RelayErrorEnvelopeSchema,
 ]);
 

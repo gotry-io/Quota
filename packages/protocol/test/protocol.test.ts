@@ -1574,6 +1574,7 @@ function accountSummary() {
     },
     pricing_revision: "pricing_2026_08_02",
     model_catalog_revision: "model_2026_08_02",
+    collection_requested_at: null,
   };
 }
 

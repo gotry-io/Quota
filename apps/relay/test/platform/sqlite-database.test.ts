@@ -2,6 +2,8 @@ import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it } from "vitest";
 import { applyMigrations } from "../../src/platform/migrations.ts";
 import { SqliteDatabase } from "../../src/platform/sqlite-database.ts";
+import { ladderAfter } from "../migration-ladder.ts";
+import { applyTestMigrations, testDatabase, testMigrations } from "../support/database.ts";
 
 const migrationsDirectory = fileURLToPath(new URL("../../migrations", import.meta.url));
 
@@ -157,5 +159,22 @@ describe("applyMigrations", () => {
     expect(
       await database.prepare("SELECT COUNT(*) AS count FROM accounts").first<number>("count"),
     ).toBe(1);
+  });
+
+  it("starts a deployed Account with no collection request standing", async () => {
+    const ladder = await testMigrations();
+    const later = ladderAfter(ladder, "0034_quota_history.sql");
+    const deployed = await testDatabase(ladder.slice(0, ladder.length - later.length));
+    await deployed
+      .prepare("INSERT INTO accounts (id, created_at, updated_at) VALUES (?1, ?2, ?2)")
+      .bind("account_1", "2026-09-09T00:00:00.000Z")
+      .run();
+    await applyTestMigrations(deployed, later);
+    expect(
+      await deployed
+        .prepare("SELECT updated_at, collection_requested_at FROM accounts WHERE id = ?1")
+        .bind("account_1")
+        .first(),
+    ).toEqual({ updated_at: "2026-09-09T00:00:00.000Z", collection_requested_at: null });
   });
 });
