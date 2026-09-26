@@ -264,8 +264,12 @@ struct QuotaWindowBlock: View {
   @ViewBuilder
   private func meter(height: CGFloat) -> some View {
     if window.showsPercentMeter {
-      QuotaMeter(remainingPercent: window.remainingPercent, height: height)
-        .allowsHitTesting(false)
+      QuotaMeter(
+        remainingPercent: window.remainingPercent,
+        evenPacePercent: EvenPacePosition.remainingPercent(window.paceReading, now: currentNow),
+        height: height
+      )
+      .allowsHitTesting(false)
     }
   }
 

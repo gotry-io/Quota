@@ -156,26 +156,24 @@ it("renders the matching subscription with windows, countdown, and Reporting", (
 
   const { container } = renderDetail();
 
-  expect(screen.getByRole("heading", { name: "Codex" })).toBeTruthy();
+  expect(screen.getByRole("heading", { level: 1, name: "Codex · Plus" })).toBeTruthy();
   expect(screen.getByText("k***@example.com")).toBeTruthy();
-  expect(screen.getByText("Plus")).toBeTruthy();
   expect(screen.getByText("Weekly")).toBeTruthy();
   expect(screen.getByText("Resets in 42m")).toBeTruthy();
   expect(screen.getByText("Reporting")).toBeTruthy();
-  expect(container.textContent).toContain("Studio · 58%");
-  expect(container.textContent).toContain("Device · 30%");
-  const lines = [...container.querySelectorAll(".subscription-source-list li")].map(
-    (item) => item.textContent,
-  );
-  expect(lines[0]).toContain("Studio");
-  expect(lines[0]).toContain("Reporting");
-  expect(lines[1]).toContain("Device");
-  expect(lines[1]).not.toContain("Reporting");
+  const readings = [...container.querySelectorAll(".readings dt")].map((item) => item.textContent);
+  const values = [...container.querySelectorAll(".readings dd")].map((item) => item.textContent);
+  expect(readings[0]).toContain("Studio");
+  expect(readings[0]).toContain("Reporting");
+  expect(values[0]).toBe("58%");
+  expect(readings[1]).toContain("Device");
+  expect(readings[1]).not.toContain("Reporting");
+  expect(values[1]).toBe("30%");
   expect(container.textContent).not.toContain(FINGERPRINT);
   expect(container.textContent).not.toContain(DEVICE_ID);
   expect(container.textContent).not.toContain(SECRET_DEVICE_ID);
   expect(container.textContent).not.toContain(KEY);
-  expect(screen.getByRole("link", { name: "← Overview" }).getAttribute("href")).toBe("/my");
+  expect(screen.getByRole("link", { name: "← Quota" }).getAttribute("href")).toBe("/my/quota");
 });
 
 it("still matches after a newer subscription is inserted first", () => {
@@ -207,8 +205,8 @@ it("still matches after a newer subscription is inserted first", () => {
     },
   });
 
-  expect(screen.getByRole("heading", { name: "Codex" })).toBeTruthy();
-  expect(screen.queryByRole("heading", { name: "Grok" })).toBeNull();
+  expect(screen.getByRole("heading", { level: 1, name: /^Codex/ })).toBeTruthy();
+  expect(screen.queryByRole("heading", { level: 1, name: /^Grok/ })).toBeNull();
 });
 
 it("says the subscription is no longer reported when the selector misses", () => {
@@ -217,7 +215,7 @@ it("says the subscription is no longer reported when the selector misses", () =>
   expect(screen.getByText("This subscription is no longer reported.")).toBeTruthy();
   expect(screen.queryByText("Weekly")).toBeNull();
   expect(screen.queryByText("Reporting")).toBeNull();
-  expect(screen.getByRole("link", { name: "← Overview" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "← Quota" })).toBeTruthy();
 });
 
 it("shows Retry when the summary failed to load", () => {

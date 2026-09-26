@@ -240,6 +240,55 @@ struct RelayClientTests {
     #expect(!body.contains("\"updated_at\""))
   }
 
+  /// `series=model` is asked for, and the series is read the way the protocol's read schema
+  /// reads it: a provider this build does not know is `.unknown`, a key it does not know is
+  /// dropped, `other` names no provider, and an unpriced cell has no cost.
+  @Test
+  func aSeriesReadAsksForTheModelSeriesAndReadsItTolerantly() async throws {
+    var body =
+      try JSONSerialization.jsonObject(
+        with: try Fixtures.accountUsagePeriodJSON(from: "2026-08-10", to: "2026-08-10"))
+      as! [String: Any]
+    func cell(_ model: String, cost: Any) -> [String: Any] {
+      [
+        "model": model, "total_tokens": 30, "input_tokens": 20, "output_tokens": 10,
+        "cache_read_input_tokens": 5, "cache_write_input_tokens": 0, "cost_microusd": cost,
+        "reasoning_tokens": 4,
+      ]
+    }
+    body["model_series"] = [
+      "models": [
+        ["model": "gpt-5.6-sol", "provider": "openai"],
+        ["model": "zeta-1", "provider": "zeta_labs"],
+        ["model": "other", "provider": NSNull()],
+      ],
+      "days": [
+        [
+          "date": "2026-08-10", "partial": false,
+          "models": [cell("gpt-5.6-sol", cost: "1200"), cell("other", cost: NSNull())],
+        ]
+      ],
+    ]
+    let transport = ScriptedTransport([
+      .init(status: 200, body: try JSONSerialization.data(withJSONObject: body))
+    ])
+    let read = try await RelayClient(transport: transport).fetchAccountUsagePeriod(
+      from: "2026-08-10",
+      to: "2026-08-10",
+      timezone: "UTC",
+      modelSeries: true,
+      accessToken: Fixtures.accessToken
+    )
+    #expect(transport.recordedURLs.first?.query?.contains("series=model") == true)
+    guard case .modified(let period, _) = read, let series = period.modelSeries else {
+      Issue.record("expected a period with a model series, got \(read)")
+      return
+    }
+    #expect(series.models.map(\.provider) == [.openai, .unknown, nil])
+    #expect(series.models.map(\.modelFamily) == [.openai, .unknown, nil])
+    #expect(series.days[0].models.map(\.costMicrousd) == ["1200", nil])
+  }
+
   @Test
   func originGuardRejectsNonManagedHosts() {
     #expect(throws: RelayClientError.invalidOrigin) {

@@ -2,6 +2,8 @@ import adapter from "@sveltejs/adapter-cloudflare";
 
 /** @type {import("@sveltejs/kit").Config} */
 const config = {
+  // Component tests read scoped styles through jsdom, which only sees a style that is injected.
+  compilerOptions: process.env.VITEST ? { css: "injected" } : {},
   kit: {
     adapter: adapter(),
     // Every document is rendered per request, so each one carries its own nonce and nothing has

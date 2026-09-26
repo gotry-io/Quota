@@ -7,9 +7,14 @@ live in [`docs/design.md`](../../docs/design.md).
 Run `pnpm generate:design-tokens` after editing it. That writes:
 
 - `apps/web/src/lib/styles/tokens.generated.css` — CSS custom properties with `light-dark()`
-- `apps/web/src/lib/tokens.generated.ts` — remaining-quota band thresholds
+- `apps/web/src/lib/tokens.generated.ts` — remaining-quota band thresholds and the model colour
+  families
 - `packages/apple-shared/Sources/QuotaPresentation/DesignTokens.generated.swift` — Foundation-only
-  RGB, thresholds, spacing, and radii (Apple overrides already applied)
+  RGB, thresholds, spacing, and radii (Apple overrides already applied), plus
+  `DesignTokens.Color.model(_:shade:)` over `DesignTokens.ModelFamily`
+
+Model colours are `color.model.<provider>.<1–4>` and `color.model.other`; each publishes exactly
+`--model-<provider>-<n>` or `--model-other`, and the generator refuses any other name.
 
 `pnpm check:design-tokens` (`--check`) refuses a commit whose generated files drifted.
 

@@ -42,19 +42,17 @@ function onUseAnotherWay(): void {
 }
 </script>
 
-<div class="sign-in-methods">
+<div class="methods">
   {#if sent}
     <div class="email-sent" role="status">
       <h2>Check your email</h2>
       <p>A sign-in link is on its way. It expires in 15 minutes.</p>
-      <button class="button button-secondary" type="button" onclick={onUseAnotherWay}>
-        Use another way
-      </button>
+      <button class="pill" type="button" onclick={onUseAnotherWay}>Use another way</button>
     </div>
   {:else}
     {#each offered.filter((provider) => provider !== "email") as provider (provider)}
       <a
-        class="button {provider === 'apple' ? 'button-apple' : 'button-primary'}"
+        class="pill {provider === 'apple' ? 'apple' : 'primary'}"
         data-provider={provider}
         href={identityStartHref(provider, returnTo)}
         data-sveltekit-reload
@@ -74,8 +72,9 @@ function onUseAnotherWay(): void {
         Continue with {identityProviderDisplayName(provider)}
       </a>
     {/each}
+    <div class="or" aria-hidden="true">or</div>
     <form
-      class="email-sign-in"
+      class="email"
       method="post"
       action="/api/auth/email/start"
       onsubmit={(event) => {
@@ -83,21 +82,20 @@ function onUseAnotherWay(): void {
         void onSendLink();
       }}
     >
-      <label class="email-label" for="sign-in-email">Email</label>
+      <label class="visually-hidden" for="sign-in-email">Email</label>
       <input
         id="sign-in-email"
-        class="email-input"
+        class="input"
         type="email"
         name="email"
         autocomplete="email"
         inputmode="email"
         maxlength="254"
+        placeholder="you@example.com"
         required
         bind:value={email}
       />
-      <button class="button button-primary" type="submit" disabled={sending}>
-        Send sign-in link
-      </button>
+      <button class="pill primary" type="submit" disabled={sending}>Send sign-in link</button>
     </form>
     {#if error}
       <p class="notice" role="alert">{error}</p>
@@ -106,16 +104,9 @@ function onUseAnotherWay(): void {
 </div>
 
 <style>
-.sign-in-methods {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  margin-top: 1.5rem;
-}
-
-.sign-in-methods :global(.button) {
-  justify-content: center;
-  width: 100%;
+.methods {
+  display: grid;
+  gap: 8px;
 }
 
 /*
@@ -123,14 +114,16 @@ function onUseAnotherWay(): void {
  * which is the pair Apple's guidelines allow. It does not follow the site's ink tokens, because
  * the mark and its background are Apple's to specify.
  */
-.button-apple {
-  gap: 8px;
+.apple {
+  border-color: light-dark(#000000, #ffffff);
   color: light-dark(#ffffff, #000000);
   background: light-dark(#000000, #ffffff);
 }
 
-.button-apple:hover {
-  background: light-dark(#1a1a1a, #e6e6e6);
+.apple:hover {
+  border-color: light-dark(#000000, #ffffff);
+  color: light-dark(#ffffff, #000000);
+  opacity: 0.88;
 }
 
 .apple-mark {
@@ -140,45 +133,58 @@ function onUseAnotherWay(): void {
   margin-block-start: -2px;
 }
 
-.email-sign-in {
+.or {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 12px;
+  align-items: center;
+  margin: 6px 0;
+  color: var(--body);
+  font-size: 12px;
+}
+
+.or::before,
+.or::after {
+  content: "";
+  height: 1px;
+  background: var(--hairline);
+}
+
+.email {
   display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  margin-top: 0.5rem;
+  gap: 8px;
 }
 
-.email-label {
-  color: var(--charcoal);
-  font-size: 13px;
-  font-weight: 600;
+.email .input {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
 }
 
-.email-input {
-  width: 100%;
-  min-height: 42px;
-  padding: 8px 12px;
-  border: 1px solid var(--hairline);
-  border-radius: 8px;
-  background: var(--surface-soft);
-  color: var(--ink);
-  font-family: inherit;
-  font-size: 14px;
+.email .pill {
+  width: auto;
+  flex: none;
 }
 
-.email-input:focus {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
+.email-sent {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
 }
 
 .email-sent h2 {
-  margin: 0 0 0.5rem;
-  font-size: 1.15rem;
-  line-height: 1.3;
+  margin: 0;
+  font-family: var(--rounded);
+  font-size: 19px;
+  font-weight: 500;
 }
 
 .email-sent p {
-  margin: 0 0 1rem;
+  margin: 0;
   color: var(--body);
-  line-height: 1.5;
+}
+
+.email-sent .pill {
+  width: auto;
 }
 </style>

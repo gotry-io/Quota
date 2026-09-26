@@ -21,6 +21,9 @@ import {
   parseAccountResponse,
   parseAccountSummaryBody,
   parseAccountUsagePeriodResponse,
+  parseQuotaHistoryResponse,
+  type QuotaHistoryResult,
+  quotaHistoryPath,
   storedPeriod,
   storedPeriodETag,
   storedSummary,
@@ -29,7 +32,7 @@ import {
   storeSummary,
   usagePeriodResourceKey,
 } from "./account-reads.ts";
-import { DASHBOARD_PATH, SETTINGS_PATH, signInHref } from "./routes.ts";
+import { DASHBOARD_PATH, SETTINGS_PATH } from "./routes.ts";
 
 export type {
   AccountActivityResult,
@@ -55,11 +58,6 @@ const jsonRequest = {
   redirect: "error",
   headers: { Accept: "application/json" },
 } satisfies RequestInit;
-
-/** Sign-in is a navigation, not a fetch: it starts on the page that asks which Account this is. */
-export function beginWebLogin(returnTo: string): void {
-  window.location.assign(signInHref(returnTo));
-}
 
 /**
  * End this browser's session, then go where the caller says.
@@ -155,6 +153,20 @@ export async function fetchAccountUsagePeriod(
     const nextETag = response.headers.get("ETag");
     if (nextETag) storePeriod(key, nextETag, parsed.period);
     return parsed;
+  } catch {
+    return classifyAccountError(null);
+  }
+}
+
+export async function fetchQuotaHistory(query: {
+  provider: string;
+  fingerprint: string;
+  since: string;
+}): Promise<QuotaHistoryResult> {
+  try {
+    const response = await fetch(quotaHistoryPath(query), jsonRequest);
+    if (!response.ok) return classifyAccountError(response);
+    return parseQuotaHistoryResponse(response.status, await response.json());
   } catch {
     return classifyAccountError(null);
   }

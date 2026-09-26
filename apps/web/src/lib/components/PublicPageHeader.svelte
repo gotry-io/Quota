@@ -6,12 +6,17 @@
  * someone else's Usage, and no Account navigation. What is left is who made the page and one
  * way to find out what Quota is.
  */
+import QuotaMark from "$lib/components/QuotaMark.svelte";
 </script>
 
 <header class="site-header">
-  <a class="brand" href="/" aria-label="Quota home">
-    <img class="brand-mark" src="/logo.svg" alt="" width="24" height="24" />
-    <span>Quota</span>
-  </a>
-  <a class="button button-primary header-action" href="/download">Get Quota</a>
+  <div class="wrap site-header-row">
+    <a class="brand" href="/" aria-label="Quota home">
+      <QuotaMark size={24} />
+      <span>Quota</span>
+    </a>
+    <div class="site-header-actions">
+      <a class="pill primary" href="/download">Get Quota</a>
+    </div>
+  </div>
 </header>

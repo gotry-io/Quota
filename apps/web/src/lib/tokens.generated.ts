@@ -3,3 +3,18 @@
 
 export const QUOTA_HEALTHY_PERCENT = 40;
 export const QUOTA_WARNING_PERCENT = 15;
+
+/** Inference providers with a model colour family: `--model-<family>-<1…4>`. */
+export const MODEL_COLOR_FAMILIES = [
+  "anthropic",
+  "openai",
+  "google",
+  "xai",
+  "moonshot",
+  "deepseek",
+  "cursor",
+  "unknown",
+] as const;
+export type ModelColorFamily = (typeof MODEL_COLOR_FAMILIES)[number];
+/** Shades per family. A model ranked below this inside its provider takes `--model-other`. */
+export const MODEL_COLOR_SHADES = 4;

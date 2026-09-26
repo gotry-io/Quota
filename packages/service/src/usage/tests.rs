@@ -2,11 +2,11 @@ use super::{
     BillingChannel, ChannelSource, ContextBucket, CoverageReasonCode, CoverageStatus,
     DEFAULT_PARSER_REVISION, DatedUsageRow, InferenceProvider, LocalHourUsage,
     MAX_JSONL_LINE_BYTES, MAX_USAGE_MODELS, MAX_USAGE_PROJECTS, MAX_USAGE_ROWS_PER_HOUR,
-    NormalizedUsageEvent, UsageAgent, UsageFileIndex, UsageRow, UsageScanOptions,
-    aggregate_hour_rows, build_local_usage_rhythm, build_local_usage_summary, fold_rows_into_other,
-    fold_usage_rows, scan_antigravity_usage, scan_claude_usage, scan_codex_usage,
-    scan_cursor_usage, scan_grok_usage, scan_kilo_usage, scan_local_usage, scan_opencode_usage,
-    scan_pi_usage, session_project_key,
+    NormalizedUsageEvent, USAGE_OTHER_MODEL, UsageAgent, UsageFileIndex, UsageRow,
+    UsageScanOptions, aggregate_hour_rows, build_local_model_series, build_local_usage_rhythm,
+    build_local_usage_summary, fold_rows_into_other, fold_usage_rows, scan_antigravity_usage,
+    scan_claude_usage, scan_codex_usage, scan_cursor_usage, scan_grok_usage, scan_kilo_usage,
+    scan_local_usage, scan_opencode_usage, scan_pi_usage, session_project_key,
 };
 use crate::pricing::{
     CalculatedUsageRowCost, PricingCatalog, PricingCatalogEntry, PricingRates, UsageCostAssumption,
@@ -1661,6 +1661,7 @@ fn a_rhythm_names_every_hour_and_groups_days_by_the_local_clock() {
     .map(|(date, hour, input)| LocalHourUsage {
         date: date.to_owned(),
         hour,
+        partial: false,
         row: test_fact_with_input("2026-08-02T00:00:00Z", "gpt-5", input),
     })
     .collect::<Vec<_>>();
@@ -1686,6 +1687,88 @@ fn a_rhythm_names_every_hour_and_groups_days_by_the_local_clock() {
     // row behind it to state one.
     assert_eq!(hours[12].total_tokens, 0);
     assert_eq!(hours[12].cost_microusd, None);
+}
+
+fn series_hour(date: &str, agent: UsageAgent, model: &str, input: u64) -> LocalHourUsage {
+    let mut row = test_fact_with_input("2026-08-02T12:00:00Z", model, input);
+    row.row.agent = agent;
+    LocalHourUsage {
+        date: date.to_owned(),
+        hour: 12,
+        partial: false,
+        row,
+    }
+}
+
+/// An alias may belong to one agent, so each fact is resolved with its own agent before the
+/// series merges agents: Codex's `GPT-5.5[1m]` is `gpt-5.5`, Claude Code's is not.
+#[test]
+fn a_series_resolves_each_agent_before_merging_models_across_agents() {
+    let catalog = serde_json::from_value::<crate::model_catalog::ModelCatalog>(json!({
+        "schema_version": 2,
+        "revision": "test-1",
+        "families": [{"prefix": "gpt-", "provider": "openai"}],
+        "models": [{
+            "canonical_id": "gpt-5.5",
+            "aliases": [{"reported_model": "GPT-5.5[1m]", "provider": "openai", "agent": "codex"}]
+        }]
+    }))
+    .expect("model catalog");
+    let entries = [
+        series_hour("2026-08-02", UsageAgent::Codex, "GPT-5.5[1m]", 30),
+        series_hour("2026-08-02", UsageAgent::ClaudeCode, "gpt-5.5", 20),
+        series_hour("2026-08-03", UsageAgent::ClaudeCode, "GPT-5.5[1m]", 5),
+    ];
+
+    let series = build_local_model_series(&entries, None, Some(&catalog)).expect("series");
+
+    assert_eq!(
+        series
+            .models
+            .iter()
+            .map(|entry| (entry.model.as_str(), entry.provider))
+            .collect::<Vec<_>>(),
+        [
+            ("gpt-5.5", Some(InferenceProvider::Openai)),
+            ("GPT-5.5[1m]", Some(InferenceProvider::Openai)),
+        ]
+    );
+    assert_eq!(series.days.len(), 2);
+    assert_eq!(series.days[0].models.len(), 1);
+    assert_eq!(series.days[0].models[0].input_tokens, 50);
+    assert_eq!(series.days[1].models[0].model, "GPT-5.5[1m]");
+}
+
+/// Eight models are named; the rest — and a reported model that is literally `other` — fold
+/// into one `other` that names no provider. A cell the catalog cannot price states no amount,
+/// and a day any short scan reached is partial.
+#[test]
+fn a_series_names_eight_models_and_folds_the_rest_into_other() {
+    let mut entries = (1..=10u64)
+        .map(|rank| {
+            series_hour(
+                "2026-08-02",
+                UsageAgent::Codex,
+                &format!("gpt-{rank}"),
+                1_000 - rank,
+            )
+        })
+        .collect::<Vec<_>>();
+    entries.push(series_hour("2026-08-02", UsageAgent::Codex, "other", 5_000));
+    entries[0].partial = true;
+
+    let series = build_local_model_series(&entries, None, None).expect("series");
+
+    assert_eq!(series.models.len(), 9);
+    assert_eq!(series.models[7].model, "gpt-8");
+    assert_eq!(series.models[8].model, USAGE_OTHER_MODEL);
+    assert_eq!(series.models[8].provider, None);
+    let day = &series.days[0];
+    assert!(day.partial);
+    let other = day.models.last().expect("other cell");
+    assert_eq!(other.model, USAGE_OTHER_MODEL);
+    assert_eq!(other.input_tokens, 991 + 990 + 5_000);
+    assert_eq!(other.cost_microusd, None);
 }
 
 #[test]

@@ -168,6 +168,55 @@ export function resetCopy(
   return `Resets ${parts.month} ${parts.day}`;
 }
 
+/** The unlisted remainder of a count window that lists expiries. */
+export const NO_EXPIRY_COPY = "No expiry";
+
+type ExpiryView = { expires_at: string; count: number };
+
+/**
+ * When a count window's units lapse: the nearest instant still ahead as a row's meta line, or
+ * null when the window lists none ahead. `reset-copy-conformance.json` › `expiries`.
+ */
+export function expiryNext(
+  expiries: readonly ExpiryView[],
+  now: Date = new Date(),
+  timeZone: string = Intl.DateTimeFormat().resolvedOptions().timeZone,
+): string | null {
+  const ahead = expiries
+    .map((expiry) => Date.parse(expiry.expires_at))
+    .filter((at) => at > now.getTime());
+  if (ahead.length === 0) return null;
+  const parts = zonedDateParts(new Date(Math.min(...ahead)), timeZone);
+  return `Next expires ${parts.month} ${parts.day}`;
+}
+
+/**
+ * One line per instant still ahead, nearest first, then the remainder that does not expire. A
+ * group already past is not named and still counts as listed, so the remainder never grows as a
+ * reading ages; a window that lists nothing prints nothing.
+ */
+export function expiryLines(
+  expiries: readonly ExpiryView[],
+  total: number | undefined,
+  now: Date = new Date(),
+  timeZone: string = Intl.DateTimeFormat().resolvedOptions().timeZone,
+): string[] {
+  if (expiries.length === 0) return [];
+  const lines = expiries
+    .filter((expiry) => Date.parse(expiry.expires_at) > now.getTime())
+    .sort((left, right) => Date.parse(left.expires_at) - Date.parse(right.expires_at))
+    .map((expiry) => {
+      const parts = zonedDateParts(new Date(expiry.expires_at), timeZone);
+      const verb = expiry.count === 1 ? "Expires" : "Expire";
+      return `${expiry.count} · ${verb} ${parts.month} ${parts.day}, ${parts.hour}:${parts.minute}`;
+    });
+  const listed = expiries.reduce((sum, expiry) => sum + expiry.count, 0);
+  if (total !== undefined && Number.isFinite(total) && Math.floor(total) > listed) {
+    lines.push(`${Math.floor(total) - listed} · ${NO_EXPIRY_COPY}`);
+  }
+  return lines;
+}
+
 function zonedDateParts(
   date: Date,
   timeZone: string,

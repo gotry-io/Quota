@@ -15,7 +15,8 @@ protocol ActivityLoading: Sendable {
     from: String,
     to: String,
     timezone: String,
-    breakdown: Bool
+    breakdown: Bool,
+    modelSeries: Bool
   ) async -> AccountPeriodResult
 }
 
@@ -35,13 +36,15 @@ struct AccountClientActivityLoading: ActivityLoading {
     from: String,
     to: String,
     timezone: String,
-    breakdown: Bool
+    breakdown: Bool,
+    modelSeries: Bool
   ) async -> AccountPeriodResult {
     await client.fetchUsagePeriod(
       from: from,
       to: to,
       timezone: timezone,
-      breakdown: breakdown
+      breakdown: breakdown,
+      modelSeries: modelSeries
     )
   }
 }

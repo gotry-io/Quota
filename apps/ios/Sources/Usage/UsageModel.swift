@@ -42,6 +42,9 @@ final class UsageModel {
   var activityDaySheet: ActivityDaySheetState?
   /// The selected period's Account period read, except All which stays on the summary.
   var periodRead: PeriodReadPhase = .idle
+  /// Every chart and ledger on the Usage pages takes its model colours from this one assignment,
+  /// made from the Account's `all` period, so switching period never recolours a model.
+  private(set) var modelColors: ModelColorAssignment = .empty
 
   @ObservationIgnored private var activityGeneration = 0
   @ObservationIgnored private var rhythmGeneration = 0
@@ -80,12 +83,15 @@ final class UsageModel {
   func accountSummaryAccepted(_ summary: AccountSummary?, etag: String?) {
     acceptedSummary = summary
     summaryETag = etag
+    let colors = summary.map { ModelColorAssignment(all: $0.usage.all.agents.modelLeaves) } ?? .empty
+    if colors != modelColors { modelColors = colors }
   }
 
   /// Logout, expiry, or a missing session: reset the same Usage fields `applySignedOut` reset.
   func accountWentAway() {
     acceptedSummary = nil
     summaryETag = nil
+    modelColors = .empty
     usagePeriod = .last30Days
     activityChart = .idle
     activityRhythm = .idle
@@ -157,6 +163,15 @@ final class UsageModel {
     return response.days
   }
 
+  /// The selected period by local date and model (`series=model`), which the river draws. All
+  /// has none; neither has a body a Relay answered without the series.
+  var usagePeriodSeries: UsageModelSeries? {
+    guard usagePeriod != .all, let range = usagePeriodRange, let response = periodRead.response,
+      lastPeriodKey?.from == range.from, lastPeriodKey?.to == range.to
+    else { return nil }
+    return response.modelSeries
+  }
+
   /// Retention cut the asked local range, which the Usage page names in one line.
   var usagePeriodTruncated: Bool {
     guard usagePeriod != .all, let range = usagePeriodRange, let response = periodRead.response,
@@ -220,14 +235,7 @@ final class UsageModel {
       activityFetchedAt = activity.fetchedAt
     }
     for (raw, period) in cache.periods {
-      let parts = raw.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
-      guard parts.count == 4 else { continue }
-      let key = PeriodLoadKey(
-        from: parts[0],
-        to: parts[1],
-        timezone: parts[2],
-        breakdown: parts[3] == "1"
-      )
+      guard let key = PeriodLoadKey(cacheKey: raw) else { continue }
       periodCache[key] = period.response
       periodFetchedAt[key] = period.fetchedAt
     }
@@ -318,7 +326,8 @@ final class UsageModel {
       from: range.from,
       to: range.to,
       timezone: key.timezone,
-      breakdown: true
+      breakdown: true,
+      modelSeries: true
     )
     guard generation == periodGeneration, epoch == sessionEpoch(), isSignedIn(),
       usagePeriodRange?.from == range.from, usagePeriodRange?.to == range.to
@@ -351,7 +360,8 @@ final class UsageModel {
       from: range.from,
       to: range.to,
       timezone: key.timezone,
-      breakdown: false
+      breakdown: false,
+      modelSeries: false
     )
     guard generation == budgetPeriodGeneration, epoch == sessionEpoch(), isSignedIn() else {
       return
@@ -513,12 +523,14 @@ final class UsageModel {
     lastPeriodSummaryETag != summaryETag
   }
 
+  /// The Usage page's read carries the tree and the series; the budget's carries neither.
   private func currentPeriodKey(from: String, to: String, breakdown: Bool) -> PeriodLoadKey {
     PeriodLoadKey(
       from: from,
       to: to,
       timezone: TimeZone.current.identifier,
-      breakdown: breakdown
+      breakdown: breakdown,
+      modelSeries: breakdown
     )
   }
 
@@ -700,6 +712,23 @@ struct PeriodLoadKey: Hashable, Sendable {
   var to: String
   var timezone: String
   var breakdown: Bool
+  var modelSeries: Bool
+}
+
+extension PeriodLoadKey {
+  /// The key `AccountClient` stores a period body under on disk:
+  /// `from|to|timezone|breakdown`, then `|model` when the read asked `series=model`.
+  init?(cacheKey: String) {
+    let parts = cacheKey.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+    guard parts.count == 4 || (parts.count == 5 && parts[4] == "model") else { return nil }
+    self.init(
+      from: parts[0],
+      to: parts[1],
+      timezone: parts[2],
+      breakdown: parts[3] == "1",
+      modelSeries: parts.count == 5
+    )
+  }
 }
 
 enum PeriodReadPhase: Equatable, Sendable {

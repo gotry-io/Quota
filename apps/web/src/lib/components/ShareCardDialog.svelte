@@ -54,7 +54,7 @@ function saveImage(): void {
 }
 </script>
 
-<button id="share-profile" class="button button-primary" type="button" onclick={openDialog}>Share</button>
+<button id="share-profile" class="pill" type="button" onclick={openDialog}>Share</button>
 
 <dialog bind:this={dialog} class="share-dialog" aria-labelledby="share-dialog-title">
   <div class="share-dialog-body">
@@ -68,14 +68,66 @@ function saveImage(): void {
     ></canvas>
     <p class="share-dialog-url">{publicProfileUrl(profile.handle)}</p>
     <div class="share-dialog-actions">
-      <button class="button button-primary" type="button" onclick={saveImage}>Save image</button>
-      <button class="button" type="button" onclick={() => void copyLink()}>
+      <button class="pill primary" type="button" onclick={saveImage}>Save image</button>
+      <button class="pill" type="button" onclick={() => void copyLink()}>
         {copied ? "Copied" : "Copy link"}
       </button>
-      <button class="text-button" type="button" onclick={closeDialog}>Close</button>
+      <button class="pill" type="button" onclick={closeDialog}>Close</button>
     </div>
     <p class="share-dialog-note" role="status">
       {copied ? "Link copied to the clipboard." : ""}
     </p>
   </div>
 </dialog>
+
+<style>
+.share-dialog {
+  width: min(640px, calc(100vw - 32px));
+  max-width: none;
+  padding: 0;
+  border: 1px solid var(--strong);
+  border-radius: 16px;
+  background: var(--canvas);
+  color: var(--ink);
+}
+
+.share-dialog::backdrop {
+  background: color-mix(in srgb, var(--canvas) 70%, transparent);
+}
+
+.share-dialog-body {
+  display: grid;
+  gap: 12px;
+  padding: 20px;
+}
+
+.share-dialog-body h2 {
+  margin: 0;
+  font-family: var(--rounded);
+  font-size: 18px;
+  font-weight: 500;
+}
+
+.share-card-canvas {
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+}
+
+.share-dialog-url,
+.share-dialog-note {
+  min-height: 1em;
+  margin: 0;
+  color: var(--body);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.share-dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+</style>

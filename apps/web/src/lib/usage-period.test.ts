@@ -6,6 +6,7 @@ import {
   DEFAULT_USAGE_PERIOD,
   nextUsagePeriod,
   previousUsagePeriod,
+  previousUsagePeriodRange,
   usagePeriodFromUrl,
   usagePeriodHref,
   usagePeriodRange,
@@ -154,4 +155,18 @@ it("computes the same from/to the period fixture names for presets", () => {
 it("counts the days a range covers, both ends included", () => {
   expect(usageRangeDays({ from: "2026-09-01", to: "2026-09-01" })).toBe(1);
   expect(usageRangeDays({ from: "2026-09-01", to: "2026-09-30" })).toBe(30);
+});
+
+it("compares a running week with the same days of the week before, and a trailing window with the one before it", () => {
+  // Wednesday: this week so far is Monday to Wednesday.
+  const wednesday = new Date(2026, 8, 9, 15);
+  expect(previousUsagePeriodRange({ segment: "week", offset: 0 }, wednesday)).toEqual({
+    from: "2026-08-31",
+    to: "2026-09-02",
+  });
+  expect(previousUsagePeriodRange({ segment: "7d" }, wednesday)).toEqual({
+    from: "2026-08-27",
+    to: "2026-09-02",
+  });
+  expect(previousUsagePeriodRange({ segment: "all" }, wednesday)).toBeNull();
 });

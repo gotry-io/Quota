@@ -207,7 +207,7 @@ export function activityLevel(value: number, maximum: number): number {
  * A source that cannot read is the same problem wherever it runs, so these match what the
  * Apple clients say about a failure on the machine in front of you.
  */
-function observedSnapshotStatusLabel(status: string): string {
+export function observedSnapshotStatusLabel(status: string): string {
   switch (status) {
     case "available":
       return "Available";

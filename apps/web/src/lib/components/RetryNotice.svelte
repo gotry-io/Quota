@@ -16,6 +16,6 @@ let {
 <div {id} class="notice retry-notice" role="alert">
   <p>{message}</p>
   {#if onRetry}
-    <button class="text-button" type="button" onclick={onRetry}>{actionLabel}</button>
+    <button class="pill sm" type="button" onclick={onRetry}>{actionLabel}</button>
   {/if}
 </div>

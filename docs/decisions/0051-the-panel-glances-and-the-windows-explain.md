@@ -5,6 +5,9 @@
 - Superseded by: 0052
 - Amended: 2026-09-21 by [ADR 0062](0062-quota-history-may-follow-the-account.md): samples may
   leave this Mac while the Account's history switch is on.
+- Amended: 2026-09-26 by [ADR 0064](0064-analysis-surfaces-lead-with-model-usage.md): the panel
+  still glances; the Dashboard's Usage page and the website open with model usage, and the
+  website keeps quota in a band and on its own page.
 - Follows [ADR 0035](0035-quota-pace-is-derived-from-the-reading.md),
   [ADR 0037](0037-a-public-profile-shows-usage-not-quota.md),
   [ADR 0039](0039-project-attribution-stays-local.md), and

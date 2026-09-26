@@ -7,8 +7,11 @@ import {
 } from "$lib/account-errors";
 import LoadingBlock from "$lib/components/LoadingBlock.svelte";
 import RetryNotice from "$lib/components/RetryNotice.svelte";
-import UsageBreakdown from "$lib/components/UsageBreakdown.svelte";
+import ModelLedger from "$lib/components/ModelLedger.svelte";
 import { costBasisLabel, formatCost, formatCount } from "$lib/format";
+import type { ModelColors } from "$lib/model-colors";
+import { foldModelRows } from "$lib/model-usage";
+import { MODELS_PATH } from "$lib/routes";
 import {
   ACTIVITY_WEEKDAY_LABELS,
   type ActivityRange,
@@ -29,6 +32,7 @@ let {
   onSelectDate,
   onClose,
   onRetryDetail,
+  colors,
 }: {
   days: UsageActivityDayRead[];
   range: ActivityRange;
@@ -39,6 +43,7 @@ let {
   onSelectDate: (date: string) => void;
   onClose: () => void;
   onRetryDetail: () => void;
+  colors: ModelColors;
 } = $props();
 
 const model = $derived(buildUsageActivityModel(days, range, range.to));
@@ -51,10 +56,7 @@ const selectedCost = $derived(
   selected?.cost ?? { amount_microusd: null, status: "unavailable", basis: "none" },
 );
 const detailAgents = $derived(detail?.agents ?? []);
-const detailPeriod = $derived.by(() => {
-  if (!detail || detailAgents.length === 0) return null;
-  return { totals: detail.totals, partial: false, agents: detailAgents };
-});
+const detailRows = $derived(foldModelRows(detailAgents));
 
 let roverOverride = $state<string | null>(null);
 const roverDate = $derived.by(() => {
@@ -276,8 +278,16 @@ $effect(() => {
           actionLabel={accountNoticeActionLabel(detailError)}
           onRetry={accountNoticeRetry(detailError, onRetryDetail)}
         />
-      {:else if detailPeriod}
-        <UsageBreakdown period={detailPeriod} id="usage-day-breakdown" />
+      {:else if detailRows.length > 0}
+        <div id="usage-day-breakdown">
+          <ModelLedger
+            rows={detailRows}
+            {colors}
+            limit={null}
+            caption="Models on this day"
+            rowHref={(row) => `${MODELS_PATH}?model=${encodeURIComponent(row.model)}`}
+          />
+        </div>
       {:else}
         <p class="empty-state">No Usage on this day.</p>
       {/if}

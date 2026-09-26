@@ -15,6 +15,24 @@ struct ContrastTokenTests {
       env.expect("\(name) on card", color, on: env.card, minimum: Self.bodyText)
     }
   }
+
+  /// A model's shade is its rank inside its provider, so every family must read as one ramp:
+  /// rank 1 strongest against the canvas and each later rank closer to it, in both appearances.
+  /// The fills are not held to 3:1 — a chart always labels its models — but the order is.
+  @Test(arguments: ["light", "dark"])
+  func everyModelFamilyFadesTowardTheCanvasByRank(_ appearance: String) {
+    let env = Environment(appearance)
+    let canvas = env.rgb(DesignTokens.Color.surfaceCanvas)
+    for family in DesignTokens.ModelFamily.allCases {
+      let ratios = (1...4).map { shade in
+        env.ratio(env.rgb(DesignTokens.Color.model(family, shade: shade)), on: canvas)
+      }
+      #expect(
+        zip(ratios, ratios.dropFirst()).allSatisfy { $0 > $1 },
+        "\(appearance) \(family.rawValue) shades \(ratios.map(Environment.format)) do not fade by rank"
+      )
+    }
+  }
 }
 
 private struct Environment {
@@ -42,16 +60,20 @@ private struct Environment {
     Self.rgb(pair, appearance: appearance)
   }
 
+  func ratio(_ foreground: DesignTokens.RGB, on background: DesignTokens.RGB) -> Double {
+    ContrastRatio.ratio(
+      foreground: (foreground.red, foreground.green, foreground.blue),
+      background: (background.red, background.green, background.blue)
+    )
+  }
+
   func expect(
     _ name: String,
     _ foreground: DesignTokens.RGB,
     on background: DesignTokens.RGB,
     minimum: Double
   ) {
-    let value = ContrastRatio.ratio(
-      foreground: (foreground.red, foreground.green, foreground.blue),
-      background: (background.red, background.green, background.blue)
-    )
+    let value = ratio(foreground, on: background)
     print(
       "\(appearance) \(name) \(Self.format(value)):1 (min \(Self.format(minimum)):1)"
     )

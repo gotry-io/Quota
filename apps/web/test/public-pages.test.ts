@@ -59,7 +59,7 @@ test("the published Usage page states its own head and loads only through the do
 
 test("a published page wears no account chrome", () => {
   const layout = readFileSync(join(root, "src/routes/+layout.svelte"), "utf8");
-  assert.match(layout, /isPublishedPagePath\(page\.url\.pathname\)/);
+  assert.match(layout, /isPublicProfilePath\(page\.url\.pathname\)/);
   assert.match(layout, /<PublicPageHeader \/>/);
 
   const header = readFileSync(join(root, "src/lib/components/PublicPageHeader.svelte"), "utf8");

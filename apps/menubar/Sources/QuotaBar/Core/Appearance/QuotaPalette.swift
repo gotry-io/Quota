@@ -51,6 +51,34 @@ enum QuotaPalette {
   static let criticalAction = Color(nsColor: adaptiveCriticalAction)
   static let onCritical = Color.white
 
+  // MARK: Usage charts (ADR 0064)
+
+  /// Cache read in a token mix: the brand, because cache is what Quota helps keep.
+  static let chartCache = adaptive(DesignTokens.Color.chartCache)
+  static let chartCacheWrite = adaptive(DesignTokens.Color.chartCacheWrite)
+  /// Fresh (uncached) input. Neutral.
+  static let chartInput = adaptive(DesignTokens.Color.chartInput)
+  /// Output is `label` at reduced opacity on Apple, so it follows Increase Contrast.
+  static let chartOutput = ink.opacity(0.72)
+
+  /// A model's fill from the one assignment its surface made; a series with no model (the
+  /// Messages stream) is ink.
+  static func model(_ swatch: ModelSwatch?) -> Color {
+    swatch.map { adaptive($0.color) } ?? ink.opacity(0.55)
+  }
+
+  /// A generated light/dark token as an appearance-following colour.
+  static func adaptive(_ token: DesignTokens.AdaptiveRGB) -> Color {
+    Color(
+      nsColor: NSColor(
+        name: nil,
+        dynamicProvider: { appearance in
+          nsColor(isDark(appearance) ? token.dark : token.light)
+        }
+      )
+    )
+  }
+
   // MARK: Usage meters (remaining-based)
 
   static func usageColor(remainingPercent: Double) -> Color {

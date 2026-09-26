@@ -7,6 +7,8 @@ import resetCopyJson from "../../protocol/fixtures/reset-copy-conformance.json" 
 import { describe, expect, it } from "vitest";
 import {
   AMOUNT_OF_LIMIT_PERCENT_TOLERANCE,
+  expiryLines,
+  expiryNext,
   formatRemaining,
   isAmountOfLimit,
   isBalanceOnly,
@@ -42,7 +44,16 @@ const remainingCopy = remainingCopyJson as {
   cases: RemainingCase[];
 };
 
-const resetCopyFixture = resetCopyJson as { cases: ResetCase[] };
+type ExpiryCase = {
+  name: string;
+  now: string;
+  remaining_value: number;
+  expiries: Array<{ expires_at: string; count: number }>;
+  next: string | null;
+  lines: string[];
+};
+
+const resetCopyFixture = resetCopyJson as { cases: ResetCase[]; expiries: ExpiryCase[] };
 
 /** Map an RFC 3339 offset to an IANA zone `Intl` can format. `Etc/GMT` signs are inverted. */
 function timeZoneFromRfc3339(value: string): string {
@@ -95,6 +106,21 @@ describe("reset copy conformance", () => {
         resetCopy(testCase.resets_at, now, zone, "absolute"),
         `${testCase.name} absolute`,
       ).toBe(testCase.absolute);
+    }
+  });
+});
+
+describe("expiry copy conformance", () => {
+  it("answers next and lines for every expiries fixture case", () => {
+    expect(resetCopyFixture.expiries.length).toBeGreaterThan(1);
+    for (const testCase of resetCopyFixture.expiries) {
+      const zone = timeZoneFromRfc3339(testCase.now);
+      const now = new Date(testCase.now);
+      expect(expiryNext(testCase.expiries, now, zone), `${testCase.name} next`).toBe(testCase.next);
+      expect(
+        expiryLines(testCase.expiries, testCase.remaining_value, now, zone),
+        `${testCase.name} lines`,
+      ).toEqual(testCase.lines);
     }
   });
 });

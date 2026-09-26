@@ -1,5 +1,3 @@
-# Support
-
 ## Notifications
 
 Remaining-quota alerts and reset reminders are configured and evaluated in QuotaBar on your Mac. The

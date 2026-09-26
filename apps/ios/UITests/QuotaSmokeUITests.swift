@@ -123,7 +123,7 @@ final class QuotaSmokeUITests: QuotaUITestCase {
   }
 
   /// The period menu really changes the period: Today is what the menu then says, a custom range
-  /// picked in the sheet is applied, the sheet goes, and the headline and title are that range's.
+  /// picked in the sheet is applied, the sheet goes, and the Tokens tab and title are that range's.
   func testUsagePeriodSelectsTodayThenAppliesCustomRange() throws {
     let app = launch(fixture: "content", route: "usage")
     XCTAssertTrue(
@@ -131,14 +131,14 @@ final class QuotaSmokeUITests: QuotaUITestCase {
       "usage.root"
     )
     selectLast30DaysIfNeeded(app)
-    let tokens = app.descendants(matching: .any)["usage.headline.tokens"].firstMatch
+    let tokens = app.descendants(matching: .any)["usage.metric.tokens"].firstMatch
     let title = app.descendants(matching: .any)["usage.period.title"].firstMatch
-    XCTAssertTrue(tokens.waitForExistence(timeout: 5), "usage.headline.tokens")
+    XCTAssertTrue(tokens.waitForExistence(timeout: 5), "usage.metric.tokens")
     let last30Tokens = tokens.label
 
     choosePeriod(app, "Today")
-    let todayTokens = waitForChange(of: tokens, from: last30Tokens, "headline on Today")
-    XCTAssertEqual(todayTokens, "1,704,620 tokens", "the headline is Today's")
+    let todayTokens = waitForChange(of: tokens, from: last30Tokens, "Tokens tab on Today")
+    XCTAssertEqual(todayTokens, "Tokens, 1,704,620 tokens", "the Tokens tab is Today's")
     let todayTitle = title.label
 
     // A fixed range: August 8 to August 12, 2026. The fixture clock is August 14, 2026 (UTC), so
@@ -172,8 +172,9 @@ final class QuotaSmokeUITests: QuotaUITestCase {
     )
     // August 9 (200,000 in + 40,000 out) and August 12 (10,000 + 2,000) are the fixture's only
     // activity days in the range.
-    let customTokens = waitForChange(of: tokens, from: todayTokens, "headline on the custom range")
-    XCTAssertEqual(customTokens, "252,000 tokens", "the headline is the custom range's total")
+    let customTokens = waitForChange(of: tokens, from: todayTokens, "Tokens tab on the custom range")
+    XCTAssertEqual(
+      customTokens, "Tokens, 252,000 tokens", "the Tokens tab is the custom range's total")
     XCTAssertNotEqual(customTokens, last30Tokens, "the custom range is not Last 30 days")
   }
 
@@ -221,14 +222,14 @@ final class QuotaSmokeUITests: QuotaUITestCase {
     try selectTab(app, "Usage", root: "usage.root")
     selectLast30DaysIfNeeded(app)
     XCTAssertTrue(
-      app.descendants(matching: .any)["usage.headline"].waitForExistence(timeout: 5),
-      "usage.headline"
+      app.descendants(matching: .any)["usage.header"].waitForExistence(timeout: 5),
+      "usage.header"
     )
-    let dailyChart = app.descendants(matching: .any)["usage.daily.chart"]
-    for _ in 0..<8 where !dailyChart.exists {
+    let river = app.descendants(matching: .any)["usage.river"]
+    for _ in 0..<8 where !river.exists {
       scrollContent(app, up: true)
     }
-    XCTAssertTrue(dailyChart.waitForExistence(timeout: 5), "Daily chart")
+    XCTAssertTrue(river.waitForExistence(timeout: 5), "Model river")
 
     openUsageDestination(app, link: "usage.open-breakdown", root: "usage.breakdown")
     XCTAssertTrue(
@@ -556,12 +557,12 @@ final class QuotaSmokeUITests: QuotaUITestCase {
     settle(app)
     assertUnclippedEssentialValue(
       app,
-      identifier: "usage.headline.tokens",
+      identifier: "usage.metric.tokens",
       expectedLabel: ContentFixtureLargeType.usageTokens
     )
     assertUnclippedEssentialValue(
       app,
-      identifier: "usage.headline.cost",
+      identifier: "usage.metric.cost",
       expectedLabel: ContentFixtureLargeType.usageCost
     )
 

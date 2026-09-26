@@ -14,6 +14,7 @@ use chrono::{
     Utc,
 };
 use chrono_tz::Tz;
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::catalog::ProviderId;
@@ -2173,13 +2174,15 @@ impl NativeBackend {
         )
         .map_err(|_| BackendError::unavailable())?;
         if let Some(span) = span {
-            let (days, hours) = usage::build_local_usage_rhythm(
-                &self.local_hour_usage(timezone, span)?,
-                pricing_catalog,
-            )
-            .map_err(|_| BackendError::unavailable())?;
+            let hour_usage = self.local_hour_usage(timezone, span)?;
+            let (days, hours) = usage::build_local_usage_rhythm(&hour_usage, pricing_catalog)
+                .map_err(|_| BackendError::unavailable())?;
             summary.days = Some(days);
             summary.hours_of_day = Some(hours);
+            summary.model_series = Some(
+                usage::build_local_model_series(&hour_usage, pricing_catalog, model_catalog)
+                    .map_err(|_| BackendError::unavailable())?,
+            );
         }
         let details_truncated = summary.models_truncated || summary.cost.unpriced_truncated;
         let (from, to) = span
@@ -2217,13 +2220,14 @@ impl NativeBackend {
             .usage_period_hour_rows(Some((span.start.as_str(), span.end.as_str())))
             .map_err(|_| BackendError::unavailable())?
             .into_iter()
-            .map(|(bucket_start_utc, row)| {
+            .map(|(bucket_start_utc, partial, row)| {
                 let local = DateTime::parse_from_rfc3339(&bucket_start_utc)
                     .map_err(|_| BackendError::unavailable())?
                     .with_timezone(&timezone);
                 Ok(usage::LocalHourUsage {
                     date: local.date_naive().format("%Y-%m-%d").to_string(),
                     hour: u8::try_from(local.hour()).map_err(|_| BackendError::unavailable())?,
+                    partial,
                     row,
                 })
             })
@@ -2631,6 +2635,24 @@ impl NativeBackend {
                 .map(|span| span.dates)
                 .unwrap_or_else(|| (today.clone(), today.clone()));
             if let Ok(mut detail) = account_usage_detail(value, &range) {
+                // The summary carries no days. The two trailing ranges a chart draws take theirs,
+                // and their series by model, from the period read, which answers 304 while the
+                // Account has not moved; without it the period keeps its totals and tree.
+                if matches!(period, UsagePeriod::Last7Days | UsagePeriod::Last30Days)
+                    && let Ok(body) = self.account.account_usage_period(
+                        &range.0,
+                        &range.1,
+                        &timezone,
+                        &AtomicBool::new(false),
+                    )
+                    && let Ok(days) = account_period_days(&body)
+                    && let Some(usage) = detail.get_mut("usage")
+                {
+                    usage["days"] = Value::Array(days);
+                    if let Some(series) = account_model_series(body.get("model_series")) {
+                        usage["model_series"] = json!(series);
+                    }
+                }
                 if period != UsagePeriod::All
                     && let Ok(activity) = self.account.account_usage_hours(
                         &range.0,
@@ -3574,7 +3596,6 @@ impl LocalBackend for NativeBackend {
                     from,
                     to,
                     timezone,
-                    true,
                     &AtomicBool::new(false),
                 )?;
                 account_period_detail(&body)
@@ -4552,8 +4573,9 @@ fn local_day_start(timezone: &Tz, date: NaiveDate) -> Result<String, BackendErro
 /// Relay's Account period read, as the panel already draws a Usage period.
 ///
 /// Totals, cost, cache saved, and the agent tree follow the four summary periods. Local `days[]`
-/// drop the per-day `partial` flag the UI does not read. Coverage is the extra the period route
-/// names (incomplete hours and whether retention cut the range).
+/// drop the per-day `partial` flag the UI does not read; `model_series` passes through as the
+/// local report states it. Coverage is the extra the period route names (incomplete hours and
+/// whether retention cut the range).
 fn account_period_detail(value: &Value) -> Result<Value, BackendError> {
     let object = value.as_object().ok_or_else(invalid_usage_detail)?;
     let request = object
@@ -4595,22 +4617,11 @@ fn account_period_detail(value: &Value) -> Result<Value, BackendError> {
         "agents": object.get("agents").cloned().unwrap_or_else(|| json!([])),
     });
     let mut detail = account_usage_detail(&summary_shaped, &(from, to))?;
-    if let Some(days) = object.get("days").and_then(Value::as_array) {
-        let mapped = days
-            .iter()
-            .map(|day| {
-                let day = day.as_object().ok_or_else(invalid_usage_detail)?;
-                let date = day.get("date").cloned().ok_or_else(invalid_usage_detail)?;
-                let totals = day
-                    .get("totals")
-                    .cloned()
-                    .ok_or_else(invalid_usage_detail)?;
-                let cost = day.get("cost").cloned().ok_or_else(invalid_usage_detail)?;
-                Ok(json!({ "date": date, "totals": totals, "cost": cost }))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        if let Some(usage) = detail.get_mut("usage") {
-            usage["days"] = Value::Array(mapped);
+    let days = account_period_days(value)?;
+    if let Some(usage) = detail.get_mut("usage") {
+        usage["days"] = Value::Array(days);
+        if let Some(series) = account_model_series(object.get("model_series")) {
+            usage["model_series"] = json!(series);
         }
     }
     detail["coverage"] = coverage;
@@ -4624,6 +4635,58 @@ fn account_period_detail(value: &Value) -> Result<Value, BackendError> {
         detail["revision"] = revision.clone();
     }
     Ok(detail)
+}
+
+/// A period read's local `days[]`, without the per-day `partial` flag the UI does not read.
+fn account_period_days(value: &Value) -> Result<Vec<Value>, BackendError> {
+    value
+        .get("days")
+        .and_then(Value::as_array)
+        .ok_or_else(invalid_usage_detail)?
+        .iter()
+        .map(|day| {
+            let day = day.as_object().ok_or_else(invalid_usage_detail)?;
+            let date = day.get("date").cloned().ok_or_else(invalid_usage_detail)?;
+            let totals = day
+                .get("totals")
+                .cloned()
+                .ok_or_else(invalid_usage_detail)?;
+            let cost = day.get("cost").cloned().ok_or_else(invalid_usage_detail)?;
+            Ok(json!({ "date": date, "totals": totals, "cost": cost }))
+        })
+        .collect()
+}
+
+#[derive(Deserialize)]
+struct AccountModelSeries {
+    models: Vec<AccountModelSeriesEntry>,
+    days: Vec<usage::UsageModelSeriesDay>,
+}
+
+#[derive(Deserialize)]
+struct AccountModelSeriesEntry {
+    model: String,
+    provider: Option<String>,
+}
+
+/// Relay's `model_series`, read tolerantly (ADR 0023): a provider this build does not name is
+/// `unknown`, and a series that does not parse is dropped rather than failing its period.
+fn account_model_series(value: Option<&Value>) -> Option<usage::UsageModelSeries> {
+    let series = serde_json::from_value::<AccountModelSeries>(value?.clone()).ok()?;
+    Some(usage::UsageModelSeries {
+        models: series
+            .models
+            .into_iter()
+            .map(|entry| usage::UsageModelSeriesEntry {
+                model: entry.model,
+                provider: entry.provider.map(|provider| {
+                    serde_json::from_value(Value::String(provider))
+                        .unwrap_or(usage::InferenceProvider::Unknown)
+                }),
+            })
+            .collect(),
+        days: series.days,
+    })
 }
 
 /// One managed period as the panel reads it.
@@ -5221,6 +5284,9 @@ mod tests {
                         recorded.push(head.clone());
                         let body = if head.contains("/api/v6/account/usage/activity") {
                             activity_hours_response()
+                        } else if head.contains("/api/v6/account/usage/period") {
+                            // A closed connection: the trailing periods keep their totals.
+                            String::new()
                         } else if head.contains("GET /api/v2/account/settings") {
                             if head.to_ascii_lowercase().contains("if-none-match") {
                                 "HTTP/1.1 304 Not Modified\r\nETag: \"0\"\r\nConnection: close\r\n\r\n"
@@ -5280,6 +5346,9 @@ mod tests {
                         wait_gate(&release, "the test never released the relay");
                         let body = if head.contains("/api/v6/account/usage/activity") {
                             activity_hours_response()
+                        } else if head.contains("/api/v6/account/usage/period") {
+                            // A closed connection: the trailing periods keep their totals.
+                            String::new()
                         } else if head.contains("GET /api/v2/account/settings") {
                             if head.to_ascii_lowercase().contains("if-none-match") {
                                 "HTTP/1.1 304 Not Modified\r\nETag: \"0\"\r\nConnection: close\r\n\r\n"
@@ -5648,7 +5717,10 @@ mod tests {
         let sent = relay_server.finish();
         let accounted: Vec<_> = sent
             .iter()
-            .filter(|head| !head.contains("/api/v6/account/usage/activity"))
+            .filter(|head| {
+                !head.contains("/api/v6/account/usage/activity")
+                    && !head.contains("/api/v6/account/usage/period")
+            })
             .collect();
         assert_eq!(accounted.len(), 5, "{sent:?}");
         assert!(
@@ -6408,6 +6480,34 @@ mod tests {
                 .1
                 .is_none()
         );
+    }
+
+    /// Relay's series is a tolerant read: a provider a newer Relay names reads as `unknown`, and
+    /// a series this build cannot read is dropped rather than refusing the period around it.
+    #[test]
+    fn an_account_series_reads_a_new_provider_as_unknown_and_drops_what_it_cannot_read() {
+        let series = account_model_series(Some(&json!({
+            "models": [
+                {"model": "mistral-large", "provider": "mistral"},
+                {"model": "other", "provider": null}
+            ],
+            "days": [{
+                "date": "2026-08-02",
+                "partial": false,
+                "models": [{
+                    "model": "mistral-large", "total_tokens": 3, "input_tokens": 2,
+                    "output_tokens": 1, "cache_read_input_tokens": 0,
+                    "cache_write_input_tokens": 0, "cost_microusd": null
+                }]
+            }]
+        })))
+        .expect("series");
+        assert_eq!(
+            series.models[0].provider,
+            Some(usage::InferenceProvider::Unknown)
+        );
+        assert_eq!(series.models[1].provider, None);
+        assert!(account_model_series(Some(&json!({"models": "none", "days": []}))).is_none());
     }
 
     /// A custom period is drawn on the same calendar the four fixed ones are drawn on.

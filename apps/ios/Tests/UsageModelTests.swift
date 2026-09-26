@@ -405,6 +405,7 @@ struct UsageModelTests {
       #expect(calls[0].from == todayRange.from)
       #expect(calls[0].to == todayRange.to)
       #expect(calls[0].breakdown)
+      #expect(calls[0].modelSeries, "the river is drawn from series=model")
 
       usage.selectUsagePeriod(.all)
       #expect(usage.usagePeriodValue?.totals == summary.usage.all.totals)

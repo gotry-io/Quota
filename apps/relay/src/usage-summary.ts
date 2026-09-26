@@ -19,12 +19,15 @@ import {
   MAXIMUM_USAGE_PERIOD_LEAVES,
   type ModelCatalog,
   type PricingCatalog,
+  USAGE_MODEL_SERIES_LIMIT,
   USAGE_OTHER_MODEL,
   type UsageActivityDay,
   UsageActivityDaySchema,
   exceedsContractBound,
   type UsageCostOutcome,
   UsageCostOutcomeSchema,
+  type UsageModelSeries,
+  UsageModelSeriesSchema,
   type UsagePeriod,
   UsagePeriodSchema,
   type UsagePeriodDayBucket,
@@ -199,15 +202,22 @@ export function foldUsageRows(input: {
 }
 
 /**
- * One bucket per local date, gaps omitted.
+ * One bucket per local date, gaps omitted, and — when a model catalog is given — the same dates
+ * split by model.
  *
  * The SQL already assigned each hour to a local-day window and grouped to a pricing identity,
  * so this only folds those rows. Missing ≠ zero: a local date nothing landed on is not a $0 day.
+ * A series needs rows grouped by agent too (`byAgent`), because an alias may be scoped to one
+ * agent; each row is resolved with its own agent and local date, and only then merged across
+ * agents. Both are folded from the same rows and prices, so the series names exactly the dates
+ * `days` does.
  */
 export function buildLocalPeriodDays(input: {
   rows: readonly StoredUsageLocalDayRow[];
   catalog: PricingCatalog;
-}): UsagePeriodDayBucket[] {
+  /** When set, the rows were grouped by agent and the result carries `model_series`. */
+  modelCatalog?: ModelCatalog;
+}): { days: UsagePeriodDayBucket[]; model_series?: UsageModelSeries } {
   const facts = input.rows.map(localDayFact);
   const prepared = prepareUsageCosts(facts, input.catalog, accountCostMode);
   const byDate = new Map<string, number[]>();
@@ -216,18 +226,131 @@ export function buildLocalPeriodDays(input: {
     if (indexes) indexes.push(index);
     else byDate.set(row.date, [index]);
   }
-  return boundedResult(() =>
-    [...byDate]
-      .sort(([left], [right]) => compareText(left, right))
-      .map(([date, indexes]) =>
-        UsagePeriodDayBucketSchema.parse({
-          date,
-          totals: summaryTotals(facts, indexes),
-          cost: boundedFoldPreparedUsageCosts(prepared, indexes),
-          partial: indexes.some((index) => (input.rows[index]?.partial_hours ?? 0) > 0),
-        }),
-      ),
-  );
+  const dates = [...byDate].sort(([left], [right]) => compareText(left, right));
+  const partial = (indexes: readonly number[]) =>
+    indexes.some((index) => (input.rows[index]?.partial_hours ?? 0) > 0);
+  return boundedResult(() => ({
+    days: dates.map(([date, indexes]) =>
+      UsagePeriodDayBucketSchema.parse({
+        date,
+        totals: summaryTotals(facts, indexes),
+        cost: boundedFoldPreparedUsageCosts(prepared, indexes),
+        partial: partial(indexes),
+      }),
+    ),
+    ...(input.modelCatalog
+      ? { model_series: buildModelSeries(facts, prepared, dates, partial, input.modelCatalog) }
+      : {}),
+  }));
+}
+
+interface SeriesModel {
+  model: string;
+  /** Tokens per inference provider the model's rows resolved to. */
+  providers: Map<InferenceProvider, number>;
+  tokens: number;
+  indexes: number[];
+}
+
+/**
+ * The period's legend and its per-date cells.
+ *
+ * A model is the key the agent tree files a leaf under — the canonical id, or the reported name
+ * when no alias claims it — merged across agents. Its provider is the one its rows resolve to;
+ * should a catalog ever file one model under two, the one carrying more tokens names it. A
+ * reported model that is literally `other` joins the folded series rather than posing as it.
+ */
+function buildModelSeries(
+  facts: readonly DatedUsageRow[],
+  prepared: PreparedUsageCosts,
+  dates: readonly (readonly [string, readonly number[]])[],
+  partial: (indexes: readonly number[]) => boolean,
+  modelCatalog: ModelCatalog,
+): UsageModelSeries {
+  const models = new Map<string, SeriesModel>();
+  const modelOf: string[] = [];
+  for (const [index, fact] of facts.entries()) {
+    const provider = resolveProvider(modelCatalog, fact);
+    const model = resolveModel(modelCatalog, fact) ?? fact.model;
+    const tokens = addSafe(fact.input_tokens, fact.output_tokens);
+    let entry = models.get(model);
+    if (!entry) {
+      entry = { model, providers: new Map(), tokens: 0, indexes: [] };
+      models.set(model, entry);
+    }
+    entry.providers.set(provider, addSafe(entry.providers.get(provider) ?? 0, tokens));
+    entry.tokens = addSafe(entry.tokens, tokens);
+    entry.indexes.push(index);
+    modelOf[index] = model;
+  }
+  const ranked = [...models.values()]
+    .filter((entry) => entry.model !== USAGE_OTHER_MODEL)
+    .sort((left, right) => right.tokens - left.tokens || compareText(left.model, right.model));
+  const named = ranked.slice(0, USAGE_MODEL_SERIES_LIMIT);
+  const legend = new Map<string, number>(named.map((entry, position) => [entry.model, position]));
+  const folded = named.length < models.size;
+  const otherPosition = named.length;
+  const legendPosition = (index: number) =>
+    legend.get(modelOf[index] ?? USAGE_OTHER_MODEL) ?? otherPosition;
+  return UsageModelSeriesSchema.parse({
+    models: [
+      ...named.map((entry) => ({ model: entry.model, provider: dominantProvider(entry) })),
+      ...(folded ? [{ model: USAGE_OTHER_MODEL, provider: null }] : []),
+    ],
+    days: dates.map(([date, indexes]) => {
+      const cells = new Map<number, number[]>();
+      for (const index of indexes) {
+        const position = legendPosition(index);
+        const cell = cells.get(position);
+        if (cell) cell.push(index);
+        else cells.set(position, [index]);
+      }
+      return {
+        date,
+        partial: partial(indexes),
+        models: [...cells]
+          .sort(([left], [right]) => left - right)
+          .map(([position, cellIndexes]) => {
+            const totals = summaryTotals(facts, cellIndexes);
+            return {
+              model: named[position]?.model ?? USAGE_OTHER_MODEL,
+              total_tokens: totals.total_tokens,
+              input_tokens: totals.input_tokens,
+              output_tokens: totals.output_tokens,
+              cache_read_input_tokens: totals.cache_read_input_tokens,
+              cache_write_input_tokens: totals.cache_write_input_tokens,
+              cost_microusd: pricedAmount(prepared, cellIndexes),
+            };
+          }),
+      };
+    }),
+  });
+}
+
+function dominantProvider(entry: SeriesModel): InferenceProvider {
+  let best: [InferenceProvider, number] | undefined;
+  for (const candidate of entry.providers) {
+    if (
+      best === undefined ||
+      candidate[1] > best[1] ||
+      (candidate[1] === best[1] && compareText(candidate[0], best[0]) < 0)
+    ) {
+      best = candidate;
+    }
+  }
+  return best?.[0] ?? "unknown";
+}
+
+/** The summed price of the rows, or null when any of them has none. */
+function pricedAmount(prepared: PreparedUsageCosts, indexes: readonly number[]): string | null {
+  let amount = 0n;
+  for (const index of indexes) {
+    const row = prepared.rows[index];
+    if (!row) throw new UsageSummaryLimitError();
+    if (row.status !== "priced") return null;
+    amount += row.amount_microusd;
+  }
+  return amount.toString();
 }
 
 function localDayFact(row: StoredUsageLocalDayRow): DatedUsageRow {

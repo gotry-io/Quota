@@ -1,6 +1,7 @@
 import type {
   AccountSummaryRead,
   AccountUsagePeriodResponseRead,
+  QuotaHistoryResponseRead,
   UsageActivityDayRead,
   UsageHourOfDay,
 } from "@gotry-io/quota-protocol";
@@ -10,6 +11,7 @@ import {
   fetchAccountActivity,
   fetchAccountSummary,
   fetchAccountUsagePeriod,
+  fetchQuotaHistory,
   requestCollection,
 } from "./account-client.ts";
 import { accountActivityRange, browserTimezone, usagePeriodResourceKey } from "./account-reads.ts";
@@ -42,6 +44,18 @@ export function activityRangeKey(range: { from: string; to: string }): string {
 
 export { usagePeriodResourceKey };
 
+export function quotaHistoryKey(query: { provider: string; fingerprint: string }): string {
+  return `${query.provider}|${query.fingerprint}`;
+}
+
+type PeriodShape = { breakdown: boolean; series?: "model" };
+
+export type PeriodReadOptions = {
+  breakdown?: boolean;
+  series?: "model";
+  maxAgeMs?: number;
+};
+
 export type UsageRhythmRead = {
   hours_of_day: UsageHourOfDay[];
   weekday_hours: number[][];
@@ -68,6 +82,8 @@ export function createAccountStore() {
   let period = $state<Record<string, AccountLoadResource<AccountUsagePeriodResponseRead>>>({});
   let dayDetail = $state<Record<string, AccountLoadResource<UsageActivityDayRead>>>({});
   let rhythm = $state<Record<string, AccountLoadResource<UsageRhythmRead>>>({});
+  let quotaHistory = $state<Record<string, AccountLoadResource<QuotaHistoryResponseRead>>>({});
+  const quotaHistoryInflight = new Map<string, Promise<void>>();
   const selectorCache = new Map<string, string>();
   /** How many Macs the dashboard is waiting on after asking for a fresh reading, or null. */
   let collectionWaitMacs = $state<number | null>(null);
@@ -177,9 +193,9 @@ export function createAccountStore() {
     return pull;
   }
 
-  function pullPeriod(range: { from: string; to: string }, breakdown: boolean): Promise<void> {
+  function pullPeriod(range: { from: string; to: string }, shape: PeriodShape): Promise<void> {
     const timezone = browserTimezone();
-    const key = usagePeriodResourceKey({ ...range, timezone, breakdown });
+    const key = usagePeriodResourceKey({ ...range, timezone, ...shape });
     const existing = periodInflight.get(key);
     if (existing) return existing;
     const current = period[key] ?? emptyResource<AccountUsagePeriodResponseRead>();
@@ -187,7 +203,7 @@ export function createAccountStore() {
       period = { ...period, [key]: { ...current, status: "loading" } };
     }
     const pull = (async () => {
-      const result = await fetchAccountUsagePeriod({ ...range, timezone, breakdown });
+      const result = await fetchAccountUsagePeriod({ ...range, timezone, ...shape });
       if (result.status === "ok") {
         period = {
           ...period,
@@ -214,20 +230,26 @@ export function createAccountStore() {
 
   function ensurePeriod(
     range: { from: string; to: string },
-    { breakdown = false, maxAgeMs = SUMMARY_MAX_AGE_MS } = {},
+    { breakdown = false, series, maxAgeMs = SUMMARY_MAX_AGE_MS }: PeriodReadOptions = {},
   ): Promise<void> {
-    const key = usagePeriodResourceKey({
-      ...range,
-      timezone: browserTimezone(),
-      breakdown,
-    });
-    const entry = period[key];
+    const shape: PeriodShape = series === undefined ? { breakdown } : { breakdown, series };
+    const entry =
+      period[usagePeriodResourceKey({ ...range, timezone: browserTimezone(), ...shape })];
     if (entry !== undefined && entry.data !== null && isFresh(entry.fetchedAt, maxAgeMs)) {
       return Promise.resolve();
     }
-    const pull = pullPeriod(range, breakdown);
+    const pull = pullPeriod(range, shape);
     if (entry?.data !== null && entry?.data !== undefined) return Promise.resolve();
     return pull;
+  }
+
+  /** The period read for these dates and shape in this browser's zone, if one was asked. */
+  function periodFor(
+    range: { from: string; to: string },
+    { breakdown = false, series }: Omit<PeriodReadOptions, "maxAgeMs"> = {},
+  ): AccountLoadResource<AccountUsagePeriodResponseRead> | undefined {
+    const shape: PeriodShape = series === undefined ? { breakdown } : { breakdown, series };
+    return period[usagePeriodResourceKey({ ...range, timezone: browserTimezone(), ...shape })];
   }
 
   function pullDay(date: string): Promise<void> {
@@ -327,6 +349,36 @@ export function createAccountStore() {
   }
 
   /**
+   * One subscription's Account quota history, keyed by `provider|fingerprint`. Refetched on the
+   * summary's cadence; a failure keeps what loaded and draws nothing new.
+   */
+  function ensureQuotaHistory(
+    query: { provider: string; fingerprint: string; since: string },
+    { maxAgeMs = SUMMARY_MAX_AGE_MS } = {},
+  ): Promise<void> {
+    const key = quotaHistoryKey(query);
+    const entry = quotaHistory[key];
+    if (entry !== undefined && isFresh(entry.fetchedAt, maxAgeMs)) return Promise.resolve();
+    const existing = quotaHistoryInflight.get(key);
+    if (existing) return existing;
+    const current = entry ?? emptyResource<QuotaHistoryResponseRead>();
+    const pull = (async () => {
+      const result = await fetchQuotaHistory(query);
+      quotaHistory = {
+        ...quotaHistory,
+        [key]:
+          result.status === "ok"
+            ? { data: result.history, status: "ready", fetchedAt: Date.now(), error: null }
+            : { ...current, status: "error", fetchedAt: Date.now(), error: result },
+      };
+    })().finally(() => {
+      quotaHistoryInflight.delete(key);
+    });
+    quotaHistoryInflight.set(key, pull);
+    return pull;
+  }
+
+  /**
    * Ask the Account's Macs for a fresh reading when one they sent is old, then follow the summary
    * until they answer, the tab is hidden, or three minutes pass. One at a time.
    */
@@ -419,11 +471,16 @@ export function createAccountStore() {
     get rhythm() {
       return rhythm;
     },
+    get quotaHistory() {
+      return quotaHistory;
+    },
     ensureSummary,
     ensureActivity,
     ensurePeriod,
+    periodFor,
     ensureDay,
     ensureRhythm,
+    ensureQuotaHistory,
     refresh,
     demandCollection,
     stopCollectionDemand,

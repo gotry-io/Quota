@@ -275,14 +275,20 @@ export class D1UsageState implements UsageState {
    *
    * The windows are a `json_each` CTE (one bind, not one placeholder per day) so D1 and SQLite
    * run the same statement. Each hour lands in exactly one window because the hour-grid rule
-   * assigns a fractional-offset midnight to the previous local day. Agent is folded away:
-   * days[] prices channel/model/dimensions, not the agent tree.
+   * assigns a fractional-offset midnight to the previous local day. Agent is folded away
+   * unless `byAgent` keeps it: days[] prices channel/model/dimensions, while a model series
+   * resolves agent-scoped aliases and so needs each agent's rows apart.
    */
   async queryLocalDayUsage(
     accountId: string,
     query: UsageLocalDayQuery,
   ): Promise<UsageLocalDayResult> {
     if (query.windows.length === 0) return { rows: [], truncated: false };
+    const grouping = [
+      "windows.date",
+      ...(query.byAgent ? ["hourly.agent"] : []),
+      ...identityColumns.map((column) => `hourly.${column}`),
+    ];
     const rows = await this.database
       .prepare(
         `WITH windows(date, start_utc, end_utc) AS (
@@ -291,7 +297,7 @@ export class D1UsageState implements UsageState {
                   json_extract(window.value, '$.end')
            FROM json_each(?2) AS window
          )
-         SELECT windows.date AS date, MIN(hourly.agent) AS agent,
+         SELECT windows.date AS date, ${query.byAgent ? "hourly.agent" : "MIN(hourly.agent)"} AS agent,
                 ${identityColumns.map((column) => `hourly.${column}`).join(", ")},
                 ${countColumns.map((column) => `SUM(hourly.${column}) AS ${column}`).join(", ")},
                 CASE
@@ -310,8 +316,8 @@ export class D1UsageState implements UsageState {
                 AND hourly.bucket_start_utc >= windows.start_utc
                 AND hourly.bucket_start_utc < windows.end_utc
          WHERE devices.account_id = ?1 AND devices.deleted_at IS NULL
-         GROUP BY windows.date, ${identityColumns.map((column) => `hourly.${column}`).join(", ")}
-         ORDER BY windows.date ASC, ${identityColumns.map((column) => `hourly.${column} ASC`).join(", ")}
+         GROUP BY ${grouping.join(", ")}
+         ORDER BY ${grouping.map((column) => `${column} ASC`).join(", ")}
          LIMIT ?3`,
       )
       .bind(accountId, JSON.stringify(query.windows), query.limit + 1)

@@ -58,12 +58,18 @@ The v6 data contract is eight routes
 - `GET /api/v6/account/usage/period?from&to&timezone=` answers one inclusive local-date range in a
   required IANA zone, at most 366 local days. Totals, cost, and `cache_saved` come from interior
   `usage_daily` plus edge `usage_hourly`. `days[]` is one bucket per **local** date, gaps omitted
-  (missing ≠ zero). Optional `breakdown=1` carries the agent tree, bounded like the summary. A
+  (missing ≠ zero). Optional `breakdown=1` carries the agent tree, bounded like the summary.
+  Optional `series=model` adds `model_series`: a legend of the 8 largest models of the range by
+  tokens (then `other`, which names no provider), and per local date — the same dates as
+  `days[]` — one cell per model with Usage that date (`total_tokens`, `input_tokens`,
+  `output_tokens`, both cache subsets, and `cost_microusd`, null when any row behind it is
+  unpriced). Models are resolved per agent, so an agent-scoped alias holds, then merged across
+  agents; any other `series` value is 400. A
   local day begins at the first whole UTC hour of that civil date; the hour that contains a
   fractional-offset midnight belongs to the previous local day; counts are never prorated. The
   three summary presets are this same read (`today` is `from=to=localDate`). `coverage` names
   retention cutoffs when they cut the range. The ETag is usage-only, keyed on the query string
-  (including `timezone` and `breakdown`) and a retention cutoff only when it cuts; explicit
+  (including `timezone`, `breakdown`, and `series`) and a retention cutoff only when it cuts; explicit
   `{from,to}` does not roll over with the wall clock. A matching `If-None-Match` returns 304
   before any Usage SQL. The contract is
   `packages/protocol/fixtures/usage-period-conformance.json`.

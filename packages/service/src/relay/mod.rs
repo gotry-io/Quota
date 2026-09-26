@@ -280,21 +280,17 @@ impl RelayClient {
         Err(RelayError::InvalidResponse)
     }
 
-    /// Inclusive local-date Account period. Offers the caller's ETag; 304 returns no body.
+    /// Inclusive local-date Account period, with its agent tree and its series by model.
+    /// Offers the caller's ETag; 304 returns no body.
     pub fn account_usage_period(
         &self,
         from: &str,
         to: &str,
         timezone: &str,
-        breakdown: bool,
         token: &str,
         etag: Option<&str>,
     ) -> Result<(Option<String>, Option<Value>), RelayError> {
-        self.conditional_get_json(
-            &account_usage_period_path(from, to, timezone, breakdown),
-            token,
-            etag,
-        )
+        self.conditional_get_json(&account_usage_period_path(from, to, timezone), token, etag)
     }
 
     /// The activity read with `detail=hours`, so Account Usage can draw the same rhythm This Mac
@@ -506,14 +502,13 @@ pub(crate) fn account_settings_put_body(document: &AccountSettingsWriteDocument)
     body
 }
 
-fn account_usage_period_path(from: &str, to: &str, timezone: &str, breakdown: bool) -> String {
+fn account_usage_period_path(from: &str, to: &str, timezone: &str) -> String {
     let mut query = url::form_urlencoded::Serializer::new(String::new());
     query.append_pair("from", from);
     query.append_pair("to", to);
     query.append_pair("timezone", timezone);
-    if breakdown {
-        query.append_pair("breakdown", "1");
-    }
+    query.append_pair("breakdown", "1");
+    query.append_pair("series", "model");
     format!("/api/v6/account/usage/period?{}", query.finish())
 }
 
@@ -1928,7 +1923,6 @@ impl AccountManager {
         from: &str,
         to: &str,
         timezone: &str,
-        breakdown: bool,
         cancel: &AtomicBool,
     ) -> Result<Value, BackendError> {
         if cancel.load(Ordering::Acquire) {
@@ -1969,7 +1963,6 @@ impl AccountManager {
                 from,
                 to,
                 timezone,
-                breakdown,
                 &access_token,
                 cached
                     .as_ref()
@@ -4628,7 +4621,7 @@ mod tests {
         ));
         let cancel = AtomicBool::new(false);
         let period = manager
-            .account_usage_period("2026-08-26", "2026-08-26", "UTC", true, &cancel)
+            .account_usage_period("2026-08-26", "2026-08-26", "UTC", &cancel)
             .expect_err("signed out period");
         assert_eq!(
             period.error.code,
@@ -4680,19 +4673,20 @@ mod tests {
         );
         let cancel = AtomicBool::new(false);
         let first = manager
-            .account_usage_period("2026-08-01", "2026-08-03", "Asia/Singapore", true, &cancel)
+            .account_usage_period("2026-08-01", "2026-08-03", "Asia/Singapore", &cancel)
             .expect("first");
         let second = manager
-            .account_usage_period("2026-08-01", "2026-08-03", "Asia/Singapore", true, &cancel)
+            .account_usage_period("2026-08-01", "2026-08-03", "Asia/Singapore", &cancel)
             .expect("304");
         assert_eq!(first, second);
         assert_eq!(first["coverage"]["truncated_by_retention"], false);
         let sent = server.join().expect("mock server");
         assert_eq!(sent.len(), 2, "{sent:?}");
-        // The calendar is the device's zone, sent percent-encoded, with the breakdown it draws.
+        // The calendar is the device's zone, sent percent-encoded, with the breakdown and the
+        // series by model it draws.
         assert!(
             sent[0].contains(
-                "/api/v6/account/usage/period?from=2026-08-01&to=2026-08-03&timezone=Asia%2FSingapore&breakdown=1"
+                "/api/v6/account/usage/period?from=2026-08-01&to=2026-08-03&timezone=Asia%2FSingapore&breakdown=1&series=model"
             ),
             "{}",
             sent[0]

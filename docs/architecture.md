@@ -190,8 +190,9 @@ duration from then on, so two devices that disagree converge instead of re-backf
 other. The watermark and that fact live in
 `identity.sqlite` and are cleared on sign-out and on `409 history_sync_off`. `413
 quota_history_full` stops the upload until the next collection. Relay merges on the read
-([ADR 0062](decisions/0062-quota-history-may-follow-the-account.md)). The website draws no
-history this cycle. A reading that arrived from another device still has no *local* samples; with
+([ADR 0062](decisions/0062-quota-history-may-follow-the-account.md)). The website reads it only
+to draw a subscription page's pace line under the current window. A reading that arrived from
+another device still has no *local* samples; with
 the switch on, the chart asks `quota_history { since, source: account, provider, fingerprint }`
 and the helper reads `GET /api/v6/account/quota-history` for that one subscription (cached ETag;
 304 reuses the body) and answers the same sample shape as the local read.
@@ -325,10 +326,17 @@ report shape, folded against the catalogs this device already holds; it collects
 reaches no network. Account (`source: account`) is Relay's
 `GET /api/v6/account/usage/period` in the caller's IANA timezone, mapped to that same detail
 shape plus coverage
-([ADR 0055](decisions/0055-an-account-period-is-a-local-date-range.md)). A state change discards the
+([ADR 0055](decisions/0055-an-account-period-is-a-local-date-range.md)). With `series=model` that
+read also answers `model_series`, the range by local date and model, merged across agents; the
+helper always asks for it, and passes it through as the local report's `model_series`. For This
+Mac the helper folds the same shape from its own hours — top eight models by tokens plus `other`,
+each hour resolved with its own agent before agents merge — for every period bounded by two local
+midnights. The Account's 7 Days and 30 Days take their `days[]` and `model_series` from a
+conditional period read each Account refresh makes. A state change discards the
 folds QuotaBar asked for, because the hours behind them moved. The website and Quota iOS read that
 route for every Usage selection except `all`, and for the budget month. QuotaBar Account reads it
-for week / month / custom. The year Activity heatmap still reads UTC activity days.
+for week / month / custom, the budget month, the previous period a model ledger compares with,
+and 7 Days / 30 Days during an Account refresh. The year Activity heatmap still reads UTC activity days.
 
 Alert policy, the monthly spend budget, and the quota-history switch follow the Account
 ([ADR 0061](decisions/0061-alert-policy-and-the-budget-follow-the-account.md),
@@ -434,7 +442,7 @@ and model catalog revisions, and — for the summary — the caller's local date
 moves `today` with no write behind it. The summary stamp is a handful of aggregates over the devices
 and observation rows the response projects, plus the Account's `collection_requested_at`; the activity and period stamps are usage-only (device count, usage
 revision, generation, and the Account's `updated_at`). Activity includes `detail` in the query string it
-keys on; the period read includes `from`, `to`, `timezone`, and `breakdown`. A matching `If-None-Match` returns 304 before any Usage query runs. `detail=hours`
+keys on; the period read includes `from`, `to`, `timezone`, `breakdown`, and `series`. A matching `If-None-Match` returns 304 before any Usage query runs. `detail=hours`
 is the same rule: `tz` is in the query string, so a different clock is a different validator.
 The period read is inclusive local dates in a required IANA timezone, at most 366 days, on the hour
 grid ([ADR 0055](decisions/0055-an-account-period-is-a-local-date-range.md)): a local day begins at
@@ -619,7 +627,7 @@ navigations run through Relay first: Hono keeps `/api`, `/oauth`, `/healthz`, an
 serves a built file from disk when one exists, then renders. Relay reads the `__Host-quota_session` cookie
 through `WebDocumentPort` and writes the signed-in header into the first HTML byte. `/` offers the
 QuotaBar `.dmg` and Homebrew install command, Sign in is in the header, and `/my` is a server redirect
-when unsigned and otherwise a client-rendered dashboard: the browser requests
+to `/sign-in` when unsigned and otherwise a client-rendered dashboard: the browser requests
 `GET /api/v6/account/summary` once with its own IANA timezone. The document layer does not
 aggregate Usage ([ADR 0011](decisions/0011-sveltekit-document-worker.md)). `/`
 is public; every page that shows account data requires a session, Quota Web publishes none

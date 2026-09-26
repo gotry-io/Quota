@@ -9,6 +9,8 @@
   device that uploaded an older bucket in the current on-period backfills that series again.
 - Amended: 2026-09-24: the upload answer names the duration the window held when the upload
   arrived; a device judges liveness by the shorter of it and its own, and adopts a shorter one.
+- Amended: 2026-09-26 by [ADR 0064](0064-analysis-surfaces-lead-with-model-usage.md): the
+  website reads the merged history for a subscription's pace line; "draws nothing" no longer holds.
 - Supersedes the "never leaves" sentence of
   [ADR 0042](0042-quota-history-is-local-samples.md)
 - Amends [ADR 0035](0035-quota-pace-is-derived-from-the-reading.md),

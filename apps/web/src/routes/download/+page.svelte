@@ -1,5 +1,10 @@
 <script lang="ts">
-import InstallOptions from "$lib/components/InstallOptions.svelte";
+import BrewCommand from "$lib/components/BrewCommand.svelte";
+import PageHeader from "$lib/components/PageHeader.svelte";
+import SplitSection from "$lib/components/SplitSection.svelte";
+import { IOS_AVAILABILITY, iosAvailabilityCopy, QUOTABAR_DMG_URL } from "$lib/platforms";
+
+const ios = iosAvailabilityCopy(IOS_AVAILABILITY);
 </script>
 
 <svelte:head>
@@ -11,16 +16,37 @@ import InstallOptions from "$lib/components/InstallOptions.svelte";
   <link rel="canonical" href="https://quota.gotry.io/download" />
 </svelte:head>
 
-<section class="document-page" aria-labelledby="page-title">
-  <p class="eyebrow">QuotaBar</p>
-  <h1 id="page-title">Download</h1>
-  <p class="hero-summary">
-    Install QuotaBar on a Mac with Apple silicon. It updates itself after that.
-  </p>
-  <InstallOptions />
-  <div class="document-notes">
-    <p>Requirements: macOS 14 or later, Apple silicon</p>
-    <p>Updates: QuotaBar updates itself with Sparkle</p>
-    <p>Quota for iPhone: coming soon</p>
+<PageHeader>
+  {#snippet eyebrow()}Download{/snippet}
+  <b>QuotaBar</b> for macOS 14 or later, on Apple silicon. It updates itself.
+</PageHeader>
+
+<SplitSection id="dmg-title" title="Disk image" description="Signed and notarized.">
+  <div class="split-row">
+    <div>
+      <div class="split-row-title">QuotaBar-macos-arm64.dmg</div>
+      <div class="split-row-detail">The latest release. Sparkle keeps it current after that.</div>
+    </div>
+    <a class="pill primary" href={QUOTABAR_DMG_URL}>Download .dmg</a>
   </div>
-</section>
+</SplitSection>
+
+<SplitSection id="brew-title" title="Homebrew" description="Adds the gotry-io tap the first time.">
+  <div class="split-row">
+    <BrewCommand />
+  </div>
+</SplitSection>
+
+<SplitSection id="iphone-title" title="iPhone" description="Reads the same Account.">
+  <div class="split-row">
+    <div>
+      <div class="split-row-title">Quota for iPhone</div>
+      <div class="split-row-detail">{ios.summary}</div>
+    </div>
+    {#if ios.url && ios.actionLabel}
+      <a class="pill" href={ios.url}>{ios.actionLabel}</a>
+    {:else}
+      <span class="tag">{ios.label}</span>
+    {/if}
+  </div>
+</SplitSection>

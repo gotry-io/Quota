@@ -93,81 +93,93 @@ $effect(() => {
 });
 </script>
 
-<section class="settings-group" aria-labelledby="public-profile-title">
-  <h2 id="public-profile-title">Public profile</h2>
-  <p class="settings-note">
-    Publish a read-only page of your Usage totals at
-    <code>quota.gotry.io/u/&lt;handle&gt;</code>. Remaining quota, devices, providers, and your
-    account stay private.
-  </p>
+{#if loading}
+  <LoadingBlock lines={3} label="Loading your public page" />
+{:else}
+  {#if loadError}
+    <RetryNotice
+      id="public-profile-error"
+      message={loadError.message}
+      actionLabel={accountNoticeActionLabel(loadError)}
+      onRetry={accountNoticeRetry(loadError, () => void load())}
+    />
+  {/if}
 
-  {#if loading}
-    <LoadingBlock lines={3} label="Loading your public profile" />
-  {:else}
-    {#if loadError}
-      <RetryNotice
-        id="public-profile-error"
-        message={loadError.message}
-        actionLabel={accountNoticeActionLabel(loadError)}
-        onRetry={accountNoticeRetry(loadError, () => void load())}
-      />
-    {/if}
-
-    <div class="settings-row settings-field">
-      <label for="public-profile-handle">Handle</label>
-      <div class="handle-field">
-        <span class="handle-prefix" aria-hidden="true">quota.gotry.io/u/</span>
-        <input
-          id="public-profile-handle"
-          type="text"
-          autocomplete="off"
-          spellcheck="false"
-          maxlength="30"
-          bind:value={handle}
-          aria-describedby="public-profile-handle-help"
-        />
+  <div class="split-row">
+    <div>
+      <label class="split-row-title" for="public-profile-handle">Handle</label>
+      <div class="split-row-detail" id="public-profile-handle-help">
+        3 to 30 characters: lowercase letters, numbers, and hyphens.
       </div>
     </div>
-    <p id="public-profile-handle-help" class="settings-note">
-      3 to 30 characters: lowercase letters, numbers, and hyphens.
-    </p>
+    <span class="field">
+      <span aria-hidden="true">quota.gotry.io/u/</span>
+      <input
+        id="public-profile-handle"
+        type="text"
+        autocomplete="off"
+        spellcheck="false"
+        maxlength="30"
+        bind:value={handle}
+        aria-describedby="public-profile-handle-help"
+      />
+    </span>
+  </div>
+  <label class="split-row">
+    <span class="split-row-title">Publish this page</span>
+    <input
+      id="public-profile-enabled"
+      class="switch"
+      type="checkbox"
+      role="switch"
+      bind:checked={enabled}
+    />
+  </label>
+  <label class="split-row">
+    <span class="split-row-title">Show which models</span>
+    <input
+      id="public-profile-models"
+      class="switch"
+      type="checkbox"
+      role="switch"
+      bind:checked={showModels}
+    />
+  </label>
+  <label class="split-row">
+    <span class="split-row-title">Show API-equivalent cost</span>
+    <input
+      id="public-profile-cost"
+      class="switch"
+      type="checkbox"
+      role="switch"
+      bind:checked={showCost}
+    />
+  </label>
 
-    <div class="settings-row">
-      <label for="public-profile-enabled">Publish this page</label>
-      <input id="public-profile-enabled" type="checkbox" bind:checked={enabled} />
-    </div>
-    <div class="settings-row">
-      <label for="public-profile-models">Show which models</label>
-      <input id="public-profile-models" type="checkbox" bind:checked={showModels} />
-    </div>
-    <div class="settings-row">
-      <label for="public-profile-cost">Show API-equivalent cost</label>
-      <input id="public-profile-cost" type="checkbox" bind:checked={showCost} />
-    </div>
-
-    <div class="settings-actions">
-      <button
-        id="public-profile-save"
-        class="button button-primary"
-        type="button"
-        disabled={saving}
-        onclick={() => void save()}>{saving ? "Saving…" : "Save"}</button
-      >
+  <div class="split-row">
+    <div class="split-row-actions">
       {#if published}
-        <a class="button" href="/u/{published}">Open page</a>
-        <button class="text-button" type="button" onclick={() => void copyLink()}>
+        <a class="pill" href="/u/{published}">Open page</a>
+        <button class="pill" type="button" onclick={() => void copyLink()}>
           {copied ? "Copied" : "Copy link"}
         </button>
       {/if}
     </div>
-    <p class="settings-note" role="status">
-      {#if problem}
-        <span id="public-profile-problem" class="settings-problem">{problem}</span>
-      {:else if saved && published}
-        Published at {publicProfileUrl(published)}
-      {:else if saved}
-        Saved. This page is not published.
-      {/if}
-    </p>
-  {/if}
-</section>
+    <button
+      id="public-profile-save"
+      class="pill primary"
+      type="button"
+      disabled={saving}
+      onclick={() => void save()}>{saving ? "Saving…" : "Save"}</button
+    >
+  </div>
+  <p class="split-note" role="status">
+    {#if problem}
+      <span id="public-profile-problem" class="split-problem">{problem}</span>
+    {:else if saved && published}
+      Published at {publicProfileUrl(published)}
+    {:else if saved}
+      Saved. This page is not published.
+    {/if}
+  </p>
+{/if}
