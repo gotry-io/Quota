@@ -627,7 +627,7 @@ navigations run through Relay first: Hono keeps `/api`, `/oauth`, `/healthz`, an
 serves a built file from disk when one exists, then renders. Relay reads the `__Host-quota_session` cookie
 through `WebDocumentPort` and writes the signed-in header into the first HTML byte. `/` offers the
 QuotaBar `.dmg` and Homebrew install command, Sign in is in the header, and `/my` is a server redirect
-when unsigned and otherwise a client-rendered dashboard: the browser requests
+to `/sign-in` when unsigned and otherwise a client-rendered dashboard: the browser requests
 `GET /api/v6/account/summary` once with its own IANA timezone. The document layer does not
 aggregate Usage ([ADR 0011](decisions/0011-sveltekit-document-worker.md)). `/`
 is public; every page that shows account data requires a session, Quota Web publishes none

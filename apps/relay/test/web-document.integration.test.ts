@@ -90,7 +90,7 @@ describe("composed Relay documents", () => {
   it("redirects unsigned /my and shipped /app bookmarks", async () => {
     const my = await fetchDocument("/my");
     expect(my.status).toBe(302);
-    expect(my.headers.get("Location")).toBe("/");
+    expect(my.headers.get("Location")).toBe("/sign-in");
     const app = await fetchDocument("/app");
     expect(app.status).toBe(302);
     expect(app.headers.get("Location")).toBe("/my");
@@ -122,7 +122,7 @@ describe("composed Relay documents", () => {
     expect(response.status).toBe(200);
     const html = await response.text();
     expect(html).toContain("octocat");
-    expect(html).toContain('id="dashboard-title"');
+    expect(html).toContain('id="page-title"');
     // The read that fills this page is bounded by the caller's calendar, which a document
     // request cannot know. Rendering one here would answer in UTC and be thrown away.
     expect(html).not.toMatch(/input_tokens|output_tokens|amount_microusd/);
