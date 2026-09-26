@@ -26,6 +26,18 @@ public enum DesignTokens {
     }
   }
 
+  /// Inference providers that own a model colour family (`color.model.<family>`).
+  public enum ModelFamily: String, CaseIterable, Sendable {
+    case anthropic
+    case openai
+    case google
+    case xai
+    case moonshot
+    case deepseek
+    case cursor
+    case unknown
+  }
+
   public enum Color {
     public static let brandAccent = AdaptiveRGB(
       light: RGB(red: 8.0 / 255.0, green: 116.0 / 255.0, blue: 86.0 / 255.0),
@@ -132,20 +144,230 @@ public enum DesignTokens {
       dark: RGB(red: 81.0 / 255.0, green: 179.0 / 255.0, blue: 145.0 / 255.0)
     )
 
-    public static let chartInput = AdaptiveRGB(
+    public static let chartCache = AdaptiveRGB(
       light: RGB(red: 8.0 / 255.0, green: 116.0 / 255.0, blue: 86.0 / 255.0),
       dark: RGB(red: 130.0 / 255.0, green: 221.0 / 255.0, blue: 184.0 / 255.0)
     )
 
-    public static let chartCache = AdaptiveRGB(
-      light: RGB(red: 57.0 / 255.0, green: 144.0 / 255.0, blue: 120.0 / 255.0),
-      dark: RGB(red: 45.0 / 255.0, green: 147.0 / 255.0, blue: 116.0 / 255.0)
+    public static let chartCacheWrite = AdaptiveRGB(
+      light: RGB(red: 130.0 / 255.0, green: 221.0 / 255.0, blue: 184.0 / 255.0),
+      dark: RGB(red: 26.0 / 255.0, green: 122.0 / 255.0, blue: 88.0 / 255.0)
+    )
+
+    public static let chartInput = AdaptiveRGB(
+      light: RGB(red: 207.0 / 255.0, green: 207.0 / 255.0, blue: 207.0 / 255.0),
+      dark: RGB(red: 74.0 / 255.0, green: 74.0 / 255.0, blue: 74.0 / 255.0)
     )
 
     public static let chartOutput = AdaptiveRGB(
-      light: RGB(red: 8.0 / 255.0, green: 116.0 / 255.0, blue: 86.0 / 255.0),
-      dark: RGB(red: 130.0 / 255.0, green: 221.0 / 255.0, blue: 184.0 / 255.0)
+      light: RGB(red: 58.0 / 255.0, green: 63.0 / 255.0, blue: 69.0 / 255.0),
+      dark: RGB(red: 209.0 / 255.0, green: 216.0 / 255.0, blue: 225.0 / 255.0)
     )
+
+    public static let modelAnthropic1 = AdaptiveRGB(
+      light: RGB(red: 144.0 / 255.0, green: 80.0 / 255.0, blue: 42.0 / 255.0),
+      dark: RGB(red: 242.0 / 255.0, green: 171.0 / 255.0, blue: 131.0 / 255.0)
+    )
+
+    public static let modelAnthropic2 = AdaptiveRGB(
+      light: RGB(red: 182.0 / 255.0, green: 115.0 / 255.0, blue: 77.0 / 255.0),
+      dark: RGB(red: 202.0 / 255.0, green: 134.0 / 255.0, blue: 95.0 / 255.0)
+    )
+
+    public static let modelAnthropic3 = AdaptiveRGB(
+      light: RGB(red: 210.0 / 255.0, green: 157.0 / 255.0, blue: 128.0 / 255.0),
+      dark: RGB(red: 152.0 / 255.0, green: 103.0 / 255.0, blue: 76.0 / 255.0)
+    )
+
+    public static let modelAnthropic4 = AdaptiveRGB(
+      light: RGB(red: 234.0 / 255.0, green: 197.0 / 255.0, blue: 177.0 / 255.0),
+      dark: RGB(red: 105.0 / 255.0, green: 75.0 / 255.0, blue: 57.0 / 255.0)
+    )
+
+    public static let modelOpenai1 = AdaptiveRGB(
+      light: RGB(red: 92.0 / 255.0, green: 100.0 / 255.0, blue: 111.0 / 255.0),
+      dark: RGB(red: 181.0 / 255.0, green: 191.0 / 255.0, blue: 203.0 / 255.0)
+    )
+
+    public static let modelOpenai2 = AdaptiveRGB(
+      light: RGB(red: 126.0 / 255.0, green: 135.0 / 255.0, blue: 146.0 / 255.0),
+      dark: RGB(red: 144.0 / 255.0, green: 153.0 / 255.0, blue: 165.0 / 255.0)
+    )
+
+    public static let modelOpenai3 = AdaptiveRGB(
+      light: RGB(red: 165.0 / 255.0, green: 171.0 / 255.0, blue: 180.0 / 255.0),
+      dark: RGB(red: 111.0 / 255.0, green: 117.0 / 255.0, blue: 125.0 / 255.0)
+    )
+
+    public static let modelOpenai4 = AdaptiveRGB(
+      light: RGB(red: 201.0 / 255.0, green: 206.0 / 255.0, blue: 212.0 / 255.0),
+      dark: RGB(red: 79.0 / 255.0, green: 83.0 / 255.0, blue: 88.0 / 255.0)
+    )
+
+    public static let modelGoogle1 = AdaptiveRGB(
+      light: RGB(red: 62.0 / 255.0, green: 102.0 / 255.0, blue: 143.0 / 255.0),
+      dark: RGB(red: 151.0 / 255.0, green: 194.0 / 255.0, blue: 240.0 / 255.0)
+    )
+
+    public static let modelGoogle2 = AdaptiveRGB(
+      light: RGB(red: 96.0 / 255.0, green: 138.0 / 255.0, blue: 181.0 / 255.0),
+      dark: RGB(red: 114.0 / 255.0, green: 156.0 / 255.0, blue: 200.0 / 255.0)
+    )
+
+    public static let modelGoogle3 = AdaptiveRGB(
+      light: RGB(red: 143.0 / 255.0, green: 174.0 / 255.0, blue: 208.0 / 255.0),
+      dark: RGB(red: 89.0 / 255.0, green: 119.0 / 255.0, blue: 151.0 / 255.0)
+    )
+
+    public static let modelGoogle4 = AdaptiveRGB(
+      light: RGB(red: 187.0 / 255.0, green: 208.0 / 255.0, blue: 232.0 / 255.0),
+      dark: RGB(red: 66.0 / 255.0, green: 84.0 / 255.0, blue: 104.0 / 255.0)
+    )
+
+    public static let modelXai1 = AdaptiveRGB(
+      light: RGB(red: 74.0 / 255.0, green: 104.0 / 255.0, blue: 121.0 / 255.0),
+      dark: RGB(red: 163.0 / 255.0, green: 195.0 / 255.0, blue: 215.0 / 255.0)
+    )
+
+    public static let modelXai2 = AdaptiveRGB(
+      light: RGB(red: 108.0 / 255.0, green: 139.0 / 255.0, blue: 158.0 / 255.0),
+      dark: RGB(red: 126.0 / 255.0, green: 157.0 / 255.0, blue: 176.0 / 255.0)
+    )
+
+    public static let modelXai3 = AdaptiveRGB(
+      light: RGB(red: 151.0 / 255.0, green: 175.0 / 255.0, blue: 189.0 / 255.0),
+      dark: RGB(red: 98.0 / 255.0, green: 120.0 / 255.0, blue: 134.0 / 255.0)
+    )
+
+    public static let modelXai4 = AdaptiveRGB(
+      light: RGB(red: 192.0 / 255.0, green: 209.0 / 255.0, blue: 219.0 / 255.0),
+      dark: RGB(red: 71.0 / 255.0, green: 85.0 / 255.0, blue: 93.0 / 255.0)
+    )
+
+    public static let modelMoonshot1 = AdaptiveRGB(
+      light: RGB(red: 115.0 / 255.0, green: 87.0 / 255.0, blue: 123.0 / 255.0),
+      dark: RGB(red: 208.0 / 255.0, green: 177.0 / 255.0, blue: 217.0 / 255.0)
+    )
+
+    public static let modelMoonshot2 = AdaptiveRGB(
+      light: RGB(red: 151.0 / 255.0, green: 122.0 / 255.0, blue: 160.0 / 255.0),
+      dark: RGB(red: 169.0 / 255.0, green: 140.0 / 255.0, blue: 179.0 / 255.0)
+    )
+
+    public static let modelMoonshot3 = AdaptiveRGB(
+      light: RGB(red: 184.0 / 255.0, green: 162.0 / 255.0, blue: 191.0 / 255.0),
+      dark: RGB(red: 129.0 / 255.0, green: 108.0 / 255.0, blue: 135.0 / 255.0)
+    )
+
+    public static let modelMoonshot4 = AdaptiveRGB(
+      light: RGB(red: 215.0 / 255.0, green: 199.0 / 255.0, blue: 220.0 / 255.0),
+      dark: RGB(red: 90.0 / 255.0, green: 77.0 / 255.0, blue: 94.0 / 255.0)
+    )
+
+    public static let modelDeepseek1 = AdaptiveRGB(
+      light: RGB(red: 82.0 / 255.0, green: 96.0 / 255.0, blue: 148.0 / 255.0),
+      dark: RGB(red: 170.0 / 255.0, green: 187.0 / 255.0, blue: 245.0 / 255.0)
+    )
+
+    public static let modelDeepseek2 = AdaptiveRGB(
+      light: RGB(red: 116.0 / 255.0, green: 131.0 / 255.0, blue: 186.0 / 255.0),
+      dark: RGB(red: 134.0 / 255.0, green: 149.0 / 255.0, blue: 205.0 / 255.0)
+    )
+
+    public static let modelDeepseek3 = AdaptiveRGB(
+      light: RGB(red: 156.0 / 255.0, green: 169.0 / 255.0, blue: 212.0 / 255.0),
+      dark: RGB(red: 103.0 / 255.0, green: 114.0 / 255.0, blue: 154.0 / 255.0)
+    )
+
+    public static let modelDeepseek4 = AdaptiveRGB(
+      light: RGB(red: 196.0 / 255.0, green: 205.0 / 255.0, blue: 234.0 / 255.0),
+      dark: RGB(red: 74.0 / 255.0, green: 81.0 / 255.0, blue: 106.0 / 255.0)
+    )
+
+    public static let modelCursor1 = AdaptiveRGB(
+      light: RGB(red: 108.0 / 255.0, green: 98.0 / 255.0, blue: 80.0 / 255.0),
+      dark: RGB(red: 200.0 / 255.0, green: 188.0 / 255.0, blue: 169.0 / 255.0)
+    )
+
+    public static let modelCursor2 = AdaptiveRGB(
+      light: RGB(red: 144.0 / 255.0, green: 133.0 / 255.0, blue: 114.0 / 255.0),
+      dark: RGB(red: 162.0 / 255.0, green: 151.0 / 255.0, blue: 132.0 / 255.0)
+    )
+
+    public static let modelCursor3 = AdaptiveRGB(
+      light: RGB(red: 178.0 / 255.0, green: 170.0 / 255.0, blue: 155.0 / 255.0),
+      dark: RGB(red: 124.0 / 255.0, green: 115.0 / 255.0, blue: 102.0 / 255.0)
+    )
+
+    public static let modelCursor4 = AdaptiveRGB(
+      light: RGB(red: 211.0 / 255.0, green: 205.0 / 255.0, blue: 195.0 / 255.0),
+      dark: RGB(red: 87.0 / 255.0, green: 82.0 / 255.0, blue: 73.0 / 255.0)
+    )
+
+    public static let modelUnknown1 = AdaptiveRGB(
+      light: RGB(red: 99.0 / 255.0, green: 99.0 / 255.0, blue: 99.0 / 255.0),
+      dark: RGB(red: 190.0 / 255.0, green: 190.0 / 255.0, blue: 190.0 / 255.0)
+    )
+
+    public static let modelUnknown2 = AdaptiveRGB(
+      light: RGB(red: 134.0 / 255.0, green: 134.0 / 255.0, blue: 134.0 / 255.0),
+      dark: RGB(red: 152.0 / 255.0, green: 152.0 / 255.0, blue: 152.0 / 255.0)
+    )
+
+    public static let modelUnknown3 = AdaptiveRGB(
+      light: RGB(red: 171.0 / 255.0, green: 171.0 / 255.0, blue: 171.0 / 255.0),
+      dark: RGB(red: 116.0 / 255.0, green: 116.0 / 255.0, blue: 116.0 / 255.0)
+    )
+
+    public static let modelUnknown4 = AdaptiveRGB(
+      light: RGB(red: 206.0 / 255.0, green: 206.0 / 255.0, blue: 206.0 / 255.0),
+      dark: RGB(red: 82.0 / 255.0, green: 82.0 / 255.0, blue: 82.0 / 255.0)
+    )
+
+    public static let modelOther = AdaptiveRGB(
+      light: RGB(red: 212.0 / 255.0, green: 212.0 / 255.0, blue: 212.0 / 255.0),
+      dark: RGB(red: 56.0 / 255.0, green: 56.0 / 255.0, blue: 56.0 / 255.0)
+    )
+
+    /// A model's colour: its provider's family at the model's rank inside that provider,
+    /// 1…4. Any other rank is `modelOther`.
+    public static func model(_ family: ModelFamily, shade: Int) -> AdaptiveRGB {
+      switch (family, shade) {
+      case (.anthropic, 1): modelAnthropic1
+      case (.anthropic, 2): modelAnthropic2
+      case (.anthropic, 3): modelAnthropic3
+      case (.anthropic, 4): modelAnthropic4
+      case (.openai, 1): modelOpenai1
+      case (.openai, 2): modelOpenai2
+      case (.openai, 3): modelOpenai3
+      case (.openai, 4): modelOpenai4
+      case (.google, 1): modelGoogle1
+      case (.google, 2): modelGoogle2
+      case (.google, 3): modelGoogle3
+      case (.google, 4): modelGoogle4
+      case (.xai, 1): modelXai1
+      case (.xai, 2): modelXai2
+      case (.xai, 3): modelXai3
+      case (.xai, 4): modelXai4
+      case (.moonshot, 1): modelMoonshot1
+      case (.moonshot, 2): modelMoonshot2
+      case (.moonshot, 3): modelMoonshot3
+      case (.moonshot, 4): modelMoonshot4
+      case (.deepseek, 1): modelDeepseek1
+      case (.deepseek, 2): modelDeepseek2
+      case (.deepseek, 3): modelDeepseek3
+      case (.deepseek, 4): modelDeepseek4
+      case (.cursor, 1): modelCursor1
+      case (.cursor, 2): modelCursor2
+      case (.cursor, 3): modelCursor3
+      case (.cursor, 4): modelCursor4
+      case (.unknown, 1): modelUnknown1
+      case (.unknown, 2): modelUnknown2
+      case (.unknown, 3): modelUnknown3
+      case (.unknown, 4): modelUnknown4
+      default: modelOther
+      }
+    }
   }
 
   /// Apple system colour roles recorded in tokens.json. QuotaTheme / QuotaPalette map these;

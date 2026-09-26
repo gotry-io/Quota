@@ -61,7 +61,7 @@ instructions. Stable ADR URLs stay.
 | [0048](./0048-sync-is-free-and-billing-is-gone.md) | Sync is free, and billing is gone | Accepted |  |  |
 | [0049](./0049-one-relay-two-runtimes.md) | One Relay, two runtimes | Superseded | [0058](./0058-relay-runs-on-node-only.md) |  |
 | [0050](./0050-the-worker-and-d1-are-retired.md) | The production Worker and D1 are retired | Accepted |  | 2026-09-21 |
-| [0051](./0051-the-panel-glances-and-the-windows-explain.md) | The panel glances, and the windows explain | Partially superseded | [0052](./0052-quotabar-is-the-app-and-the-menu-bar-is-part-of-it.md) | 2026-09-21 |
+| [0051](./0051-the-panel-glances-and-the-windows-explain.md) | The panel glances, and the windows explain | Partially superseded | [0052](./0052-quotabar-is-the-app-and-the-menu-bar-is-part-of-it.md) | 2026-09-21, 2026-09-26 |
 | [0052](./0052-quotabar-is-the-app-and-the-menu-bar-is-part-of-it.md) | QuotaBar is the app, and the menu bar is part of it | Accepted |  | 2026-09-18, 2026-09-21 |
 | [0053](./0053-one-alert-delivery-package-for-both-apps.md) | One alert delivery package for both Apple apps | Accepted |  | 2026-09-21 |
 | [0054](./0054-quotabar-is-resident-in-the-menu-bar.md) | QuotaBar is resident in the menu bar | Accepted |  |  |
@@ -74,3 +74,4 @@ instructions. Stable ADR URLs stay.
 | [0061](./0061-alert-policy-and-the-budget-follow-the-account.md) | Alert policy and the budget follow the Account | Accepted |  | 2026-09-21 |
 | [0062](./0062-quota-history-may-follow-the-account.md) | Quota history may follow the Account, when the Account says so | Accepted |  | 2026-09-22, 2026-09-23, 2026-09-24 |
 | [0063](./0063-collection-follows-demand-and-activity.md) | Collection follows demand and activity | Accepted |  |  |
+| [0064](./0064-analysis-surfaces-lead-with-model-usage.md) | Analysis surfaces lead with model usage; glance surfaces lead with quota | Accepted |  |  |
