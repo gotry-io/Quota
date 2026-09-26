@@ -469,10 +469,8 @@ struct CadenceState {
     last_complete_collection: Option<DateTime<Utc>>,
 }
 
-/// One provider's periodic clock: the pass that last included it, and the jitter its next tick
-/// carries.
-#[derive(Clone, Copy)]
 /// What the scheduler plans for one provider.
+#[derive(Clone, Copy)]
 struct ProviderPlan {
     interval: Duration,
     /// Nothing but a manual refresh asks it before this ([`cadence::not_before`]).
@@ -493,6 +491,8 @@ fn earliest_asks(
         .collect()
 }
 
+/// One provider's periodic clock: the pass that last included it, and the jitter its next tick
+/// carries.
 struct ProviderClock {
     last: Instant,
     jitter: f64,
