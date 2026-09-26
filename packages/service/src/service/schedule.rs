@@ -85,6 +85,21 @@ pub fn due_providers(next_due: &BTreeMap<ProviderId, Instant>, now: Instant) -> 
         .collect()
 }
 
+/// When a pass taking `due` should start so that none of them waits for a pass of its own: the
+/// latest instant one of them may be asked, when that is still ahead. A provider held by its
+/// floor for a few more seconds would otherwise be left out and run alone right after, reading
+/// the Account and uploading a second time.
+pub fn shared_pass_at(
+    due: &[ProviderId],
+    earliest: &BTreeMap<ProviderId, Instant>,
+    now: Instant,
+) -> Option<Instant> {
+    due.iter()
+        .filter_map(|provider| earliest.get(provider).copied())
+        .filter(|at| *at > now && *at <= now + DUE_SLACK)
+        .max()
+}
+
 pub fn next_wake(
     next_account: Instant,
     next_quota: Instant,
@@ -327,5 +342,23 @@ mod tests {
             due_providers(&next_due, now),
             [ProviderId::Codex, ProviderId::Grok]
         );
+    }
+
+    /// Codex is due now and Claude's floor ends nine seconds later: the pass waits for Claude
+    /// rather than leave it to a pass of its own. Nobody held means no wait.
+    #[test]
+    fn a_pass_waits_for_a_due_provider_its_floor_holds_for_a_few_seconds() {
+        let now = Instant::now();
+        let due = [ProviderId::Codex, ProviderId::Claude];
+        let earliest = BTreeMap::from([
+            (ProviderId::Codex, now - Duration::from_secs(5)),
+            (ProviderId::Claude, now + Duration::from_secs(9)),
+        ]);
+        assert_eq!(
+            shared_pass_at(&due, &earliest, now),
+            Some(now + Duration::from_secs(9))
+        );
+        let free = BTreeMap::from([(ProviderId::Codex, now - Duration::from_secs(5))]);
+        assert_eq!(shared_pass_at(&due, &free, now), None);
     }
 }

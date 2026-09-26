@@ -684,6 +684,9 @@ impl LocalService {
         let mut last_usage = start;
         let mut writes: BTreeMap<ProviderId, DateTime<Utc>> = BTreeMap::new();
         let mut next_probe = start;
+        // A pass waiting a few seconds for a provider its floor still holds, so both are asked
+        // together ([`schedule::shared_pass_at`]).
+        let mut gather_until: Option<Instant> = None;
         loop {
             if self.is_shutdown() {
                 break;
@@ -721,6 +724,7 @@ impl LocalService {
                 })
                 .collect();
             let next_quota = next_due.values().min().copied().unwrap_or(now + fixed);
+            let next_quota = gather_until.map_or(next_quota, |at| next_quota.max(at));
             self.store_next_due(&next_due);
             let reset_at = self.reset_deadline_instant();
             let (kind, wake_at) =
@@ -782,6 +786,13 @@ impl LocalService {
                         now_utc,
                         now,
                     );
+                    if gather_until.is_none()
+                        && let Some(at) = schedule::shared_pass_at(&due, &earliest, now)
+                    {
+                        gather_until = Some(at);
+                        continue;
+                    }
+                    gather_until = None;
                     due.retain(|provider| earliest.get(provider).is_none_or(|at| *at <= now));
                     for provider in &due {
                         clocks.insert(*provider, ProviderClock::restart(now));

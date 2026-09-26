@@ -106,7 +106,9 @@ provider are Claude Code → `claude`, Codex → `codex`, Gemini CLI → `gemini
 CLI → `grok`, Copilot CLI → `copilot`, and Antigravity → `antigravity`. OpenCode, Pi, and Kilo can
 speak for any provider, and saying which would mean parsing their logs, so they do not count. A
 provider with no mapped agent (OpenRouter, DeepSeek, …) is always Normal. A pass takes every
-provider due within 30 seconds, so providers on one interval share it. Usage is scanned every five
+provider due within 30 seconds, so providers on one interval share it; when one of those is
+still held by its floor for a few seconds, the pass waits for it rather than leave it to a pass
+(and an Account read and upload) of its own. Usage is scanned every five
 minutes under Automatic, whatever the tiers are, and at the fixed interval otherwise. Settings shows
 the fastest tier among the providers in use, for example **Automatic · every 1 min while Codex is
 active** or **Automatic · every 3 min while Claude Code is active**.
