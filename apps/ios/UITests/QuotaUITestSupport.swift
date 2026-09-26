@@ -932,7 +932,7 @@ enum ContentFixtureLargeType {
   static let todayTokens = "1.7M tokens"
   static let todayCost = "$1.49 API-equivalent"
   static let todayCombined = "Today, 1,704,620 tokens, $1.49 API-equivalent cost"
-  static let usageTokens = "11,400,000 tokens"
+  static let usageTokens = "Tokens, 11,400,000 tokens"
   static let usageCost = "API-equivalent cost, $8.50, complete"
 }
 
@@ -953,6 +953,12 @@ private let keptAuditorExemptions: [KeptAuditorExemption] = [
   .init(
     type: "dynamic-type", screen: "overview.root", identifier: "section.header.mac-setup",
     label: "", rule: "dynamic-type-section.header.mac-setup"),
+  .init(
+    type: "dynamic-type", screen: "overview.root", identifier: "section.header.next-resets",
+    label: "", rule: "dynamic-type-section.header.next-resets"),
+  .init(
+    type: "dynamic-type", screen: "usage.root", identifier: "section.header.models",
+    label: "", rule: "dynamic-type-section.header.models"),
   .init(
     type: "dynamic-type", screen: "settings.notifications.root",
     identifier: "section.header.codex", label: "",
@@ -988,6 +994,25 @@ private let keptAuditorExemptions: [KeptAuditorExemption] = [
   .init(
     type: "dynamic-type", screen: "usage.root", identifier: "usage.budget",
     label: "", rule: "dynamic-type-usage.budget"),
+  // The Usage metric tabs (Plan 16): each tab is one combined element, as a stat tile is, and
+  // iOS 26.3 still reports its two inner texts as partial Dynamic Type; both wrap and grow.
+  .init(
+    type: "dynamic-type", screen: "usage.root", identifier: "usage.metric.tokens.title",
+    label: "", rule: "dynamic-type-usage.metric.tokens.title"),
+  .init(
+    type: "dynamic-type", screen: "usage.root", identifier: "usage.metric.tokens.value",
+    label: "", rule: "dynamic-type-usage.metric.tokens.value"),
+  .init(
+    type: "dynamic-type", screen: "usage.root", identifier: "usage.metric.cost.title",
+    label: "", rule: "dynamic-type-usage.metric.cost.title"),
+  .init(
+    type: "dynamic-type", screen: "usage.root", identifier: "usage.metric.cost.value",
+    label: "", rule: "dynamic-type-usage.metric.cost.value"),
+  // The period menu's system Picker label, reported once the page carries the model ledger
+  // under it (Plan 16); the label is system-drawn and grows with the text.
+  .init(
+    type: "dynamic-type", screen: "usage.root", identifier: "", label: "Usage period",
+    rule: "dynamic-type-label-Usage-period"),
   .init(
     type: "dynamic-type", screen: "settings.root", identifier: "settings.budget",
     label: "", rule: "dynamic-type-settings.budget"),

@@ -17,6 +17,13 @@ struct OverviewView: View {
 
       quotaSection
 
+      if model.overviewPlaceholders == 0 {
+        NextResetsSection(
+          subscriptions: model.providerCards.flatMap(\.subscriptions),
+          now: displayClock.now()
+        )
+      }
+
       // Today Usage is the Account's fold of what every device reported. A phone with no account
       // has no such number, and a zero it never measured would be a lie rather than an empty
       // state.

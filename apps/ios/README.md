@@ -213,8 +213,8 @@ classes with two jobs:
 Journeys and interaction contracts, **no accessibility audit and no screen census**: Overview's
 Today row opens Usage already on Today and a quota row opens subscription detail and comes back;
 Usage opens breakdown and Activity patterns, a day sheet from View day, and returns; the period menu
-says Today with Today's headline once Today is chosen, and a fixed custom range (August 8 – 12, 2026,
-picked day by day in the sheet's calendars) is applied, the sheet goes, and the title and headline are
+says Today with Today's Tokens tab once Today is chosen, and a fixed custom range (August 8 – 12, 2026,
+picked day by day in the sheet's calendars) is applied, the sheet goes, and the title and Tokens tab are
 that range's; Settings opens Notifications, Appearance and About and returns, with Log Out still on
 the hub; Settings › Devices is its own journey; the Overview's **Sign in to Quota** opens the sign-in
 sheet with every way in, and pulling the sheet down returns to the same Overview; the connecting,
@@ -222,7 +222,7 @@ pending-refresh, confirm-account and local-only states assert the controls they 
 reading opens its detail and comes back and its Settings has no Devices row, and a refused provider
 session offers **Sign in again** (the affordance — the provider login it starts leaves the
 fixture). It also asserts the seven essential values — Overview remaining, Today tokens, cost and
-the combined Today label, Usage headline tokens and cost, subscription remaining — at
+the combined Today label, Usage metric tabs' tokens and cost, subscription remaining — at
 `accessibilityExtraLarge`, the size that truncates first: each exists, is hittable, carries its
 whole accessibility label and sits on screen.
 

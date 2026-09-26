@@ -6,6 +6,7 @@ struct UsageView: View {
   @Bindable var model: AppModel
   @State private var rangeEditor = false
   @State private var budgetEditor = false
+  @State private var metric: UsageMetric = .tokens
 
   var body: some View {
     @Bindable var usage = model.usage
@@ -13,18 +14,7 @@ struct UsageView: View {
       if !model.hasAccountSession {
         signedOutInvitation
       } else {
-        periodSection
-
-        if let period = usage.usagePeriodValue, period.totals.totalTokens > 0 {
-          Section {
-            UsageHeadlineSection(
-              period: period,
-              truncatedByRetention: usage.usagePeriodTruncated
-            )
-            .quotaCardRow()
-          }
-        }
-
+        headerSection
         signedInContent
         destinations
       }
@@ -73,17 +63,35 @@ struct UsageView: View {
     }
   }
 
-  /// The days the Daily chart draws: the period's local `days[]` on every asked date.
-  ///
-  /// A date absent from `days[]` keeps its slot; it is not a $0 / 0-token day. All has no
-  /// first day, so it has no table.
-  private var dailyRows: [UsageDailyFold.Row] {
-    guard let range = model.usage.usagePeriodRange else { return [] }
-    return UsageDailyFold.rows(
-      days: model.usage.usagePeriodDays,
+  /// The river the selected period's `model_series` draws, on every asked local date. All has
+  /// no first day and no series, so it has none.
+  private var river: UsageModelRiver.River? {
+    guard let range = model.usage.usagePeriodRange,
+      let series = model.usage.usagePeriodSeries
+    else { return nil }
+    let river = UsageModelRiver.make(
+      series: series,
       from: range.from,
-      to: range.to
+      to: range.to,
+      today: UsageDateText.date(model.displayNow),
+      metric: metric,
+      colors: model.usage.modelColors
     )
+    return river.hasUsage ? river : nil
+  }
+
+  /// The period's models, merged across agents, largest first.
+  private func ledgerRows(_ period: UsagePeriod) -> [ModelLedgerRow<BillingAgent>] {
+    ModelLedger.rows(period.agents.modelLeaves)
+  }
+
+  /// Days of the asked range that reported Usage, and the range's length. All has none.
+  private var activeDays: (active: Int, of: Int)? {
+    guard let range = model.usage.usagePeriodRange,
+      let length = UsageDateText.days(from: range.from, to: range.to)
+    else { return nil }
+    let active = model.usage.usagePeriodDays.filter { $0.totals.totalTokens > 0 }.count
+    return (active, length)
   }
 
   private var signedOutInvitation: some View {
@@ -104,27 +112,58 @@ struct UsageView: View {
     .listRowSeparator(.hidden)
   }
 
-  private var periodSection: some View {
-    Section {
-      ViewThatFits(in: .horizontal) {
-        HStack(alignment: .center, spacing: 12) {
-          periodPicker
-          Spacer(minLength: 8)
-          periodStepping
+  /// The period controls and the range they cover, then the sentence header: one sentence from
+  /// the period's numbers and the facts under it (docs/design.md, Sentence header).
+  private var headerSection: some View {
+    Group {
+      Section {
+        ViewThatFits(in: .horizontal) {
+          HStack(alignment: .center, spacing: 12) {
+            periodPicker
+            Spacer(minLength: 8)
+            periodStepping
+          }
+          VStack(alignment: .leading, spacing: 8) {
+            periodPicker
+            periodStepping
+          }
         }
-        VStack(alignment: .leading, spacing: 8) {
-          periodPicker
-          periodStepping
+        .frame(minHeight: QuotaTheme.minimumTouchTarget)
+
+        Text(periodRangeLine)
+          .font(QuotaDesign.Typography.support)
+          .foregroundStyle(Color.primary)
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityIdentifier("usage.period.title")
+      }
+
+      if let period = model.usage.usagePeriodValue, period.totals.totalTokens > 0 {
+        Section {
+          VStack(alignment: .leading, spacing: 12) {
+            UsageSentence(
+              totals: period.totals,
+              rows: ledgerRows(period),
+              isToday: model.usage.usagePeriod == .today
+            )
+            UsageHeaderMeta(
+              period: period,
+              activeDays: activeDays,
+              truncatedByRetention: model.usage.usagePeriodTruncated
+            )
+          }
+          .padding(.vertical, 4)
+          .accessibilityElement(children: .contain)
+          .accessibilityIdentifier("usage.header")
+        }
+      } else if model.usage.usagePeriodValue == nil, model.usage.periodRead == .loading {
+        Section {
+          Text("Reading this period…")
+            .font(.title3)
+            .foregroundStyle(QuotaTheme.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("usage.sentence")
         }
       }
-      .frame(minHeight: QuotaTheme.minimumTouchTarget)
-
-      Text(periodRangeLine)
-        .font(QuotaDesign.Typography.support)
-        .foregroundStyle(Color.primary)
-        .fixedSize(horizontal: false, vertical: true)
-        .accessibilityIdentifier("usage.period.title")
-
     }
   }
 
@@ -133,22 +172,32 @@ struct UsageView: View {
     if let period = model.usage.usagePeriodValue {
       if period.totals.totalTokens == 0 {
         emptyPeriod
-      }
-      if model.selectedTab == .usage, UsageDailyFold.hasUsage(dailyRows) {
-        UsageDailySection(rows: dailyRows) { date in
-          Task { await model.usage.openActivityDay(date: date) }
+      } else {
+        Section {
+          QuotaCard {
+            UsageMetricTabs(metric: $metric, totals: period.totals, cost: period.cost)
+            if model.selectedTab == .usage, let river {
+              UsageModelRiverChart(river: river, metric: metric) { date in
+                Task { await model.usage.openActivityDay(date: date) }
+              }
+            }
+          }
+          .quotaCardRow()
         }
+        UsageModelLedgerSection(rows: ledgerRows(period), colors: model.usage.modelColors)
+        UsageTokenMixSection(totals: period.totals, cacheSaved: period.cacheSaved)
       }
-    } else if model.selectedTab == .usage {
+    } else if model.selectedTab == .usage, model.usage.periodRead != .loading {
       emptyPeriod
     }
   }
+
 
   @ViewBuilder
   private var destinations: some View {
     Section {
       NavigationLink(value: UsageDestination.breakdown) {
-        Text("By provider / By model")
+        Text("All models")
           .fixedSize(horizontal: false, vertical: true)
           .accessibilityIdentifier("usage.open-breakdown")
       }
@@ -272,80 +321,6 @@ struct UsageView: View {
       .fixedSize(horizontal: false, vertical: true)
     }
     .accessibilityIdentifier("usage.empty")
-  }
-}
-
-/// Two headline values: tokens and API-equivalent cost, with coverage under them.
-struct UsageHeadlineSection: View {
-  let totals: UsageSummaryTotals
-  let cost: UsageCostOutcome
-  let partial: Bool
-  var truncatedByRetention: Bool = false
-  var partialCopy: String = "Some hours in this period were scanned incompletely."
-  var truncatedCopy: String = "This range goes past what Quota still keeps."
-  var identifier: String = "usage.headline"
-
-  init(
-    period: UsagePeriod,
-    truncatedByRetention: Bool = false,
-    identifier: String = "usage.headline"
-  ) {
-    totals = period.totals
-    cost = period.cost
-    partial = period.partial
-    self.truncatedByRetention = truncatedByRetention
-    self.identifier = identifier
-  }
-
-  var body: some View {
-    QuotaCard {
-      QuotaStatGrid {
-        tokensTile
-        costTile
-      }
-
-      Text("\(QuotaFormat.costBasis(cost)) · \(QuotaFormat.costPriced(cost))")
-        .font(QuotaDesign.Typography.meta)
-        .foregroundStyle(.primary)
-        .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityIdentifier("\(identifier).priced")
-
-      if partial {
-        Label(partialCopy, systemImage: "exclamationmark.triangle")
-          .font(QuotaDesign.Typography.meta)
-          .foregroundStyle(QuotaTheme.warning)
-          .fixedSize(horizontal: false, vertical: true)
-      }
-
-      if truncatedByRetention {
-        Label(truncatedCopy, systemImage: "exclamationmark.triangle")
-          .font(QuotaDesign.Typography.meta)
-          .foregroundStyle(QuotaTheme.warning)
-          .fixedSize(horizontal: false, vertical: true)
-          .accessibilityIdentifier("\(identifier).retention")
-      }
-    }
-    .accessibilityElement(children: .contain)
-    .accessibilityIdentifier(identifier)
-  }
-
-  private var tokensTile: some View {
-    QuotaStatTile(
-      label: "Tokens",
-      value: QuotaFormat.compactCount(totals.totalTokens)
-    )
-    .accessibilityLabel("\(QuotaFormat.accessibleCount(totals.totalTokens)) tokens")
-    .accessibilityIdentifier("\(identifier).tokens")
-  }
-
-  private var costTile: some View {
-    QuotaStatTile(
-      label: "API-equivalent",
-      value: QuotaFormat.cost(cost)
-    )
-    .accessibilityLabel("API-equivalent cost, \(QuotaFormat.costAccessibility(cost))")
-    .accessibilityIdentifier("\(identifier).cost")
   }
 }
 
@@ -482,69 +457,6 @@ struct UsageTotalsSection: View {
   }
 }
 
-/// The three models this period was mostly spent on, above the tree that holds all of them.
-struct UsageTopModelsSection: View {
-  let sections: [UsageBreakdown.AgentSection]
-  let periodTokens: Int
-
-  var body: some View {
-    let ranked = Array(UsageBreakdown.rankedModels(in: sections).prefix(3))
-    if ranked.count > 1 {
-      let topTokens = ranked[0].totals.totalTokens
-      Section {
-        ForEach(Array(ranked.enumerated()), id: \.element.id) { index, row in
-          let share = QuotaFormat.share(row.totals.totalTokens, of: periodTokens) ?? "—"
-          let fraction = topTokens > 0 ? Double(row.totals.totalTokens) / Double(topTokens) : 0
-          VStack(alignment: .leading, spacing: 6) {
-            ViewThatFits(in: .horizontal) {
-              HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("\(index + 1)")
-                  .font(.caption.monospacedDigit())
-                  .foregroundStyle(QuotaTheme.secondary)
-                  .accessibilityHidden(true)
-                Text(row.displayName)
-                  .font(.subheadline)
-                  .foregroundStyle(Color.primary)
-                  .fixedSize(horizontal: false, vertical: true)
-                  .accessibilityHidden(true)
-                Spacer(minLength: 8)
-                Text("\(share) · \(QuotaFormat.compactCount(row.totals.totalTokens))")
-                  .font(.subheadline.monospacedDigit())
-                  .foregroundStyle(.primary)
-                  .fixedSize(horizontal: false, vertical: true)
-                  .accessibilityHidden(true)
-              }
-              VStack(alignment: .leading, spacing: 2) {
-                Text(row.displayName)
-                  .font(.subheadline)
-                  .foregroundStyle(Color.primary)
-                  .fixedSize(horizontal: false, vertical: true)
-                  .accessibilityHidden(true)
-                Text("\(share) · \(QuotaFormat.compactCount(row.totals.totalTokens))")
-                  .font(.subheadline.monospacedDigit())
-                  .foregroundStyle(.primary)
-                  .fixedSize(horizontal: false, vertical: true)
-                  .accessibilityHidden(true)
-              }
-            }
-            QuotaShareBar(share: fraction)
-              .accessibilityHidden(true)
-          }
-          .accessibilityElement(children: .ignore)
-          .accessibilityLabel(row.displayName)
-          .accessibilityValue(
-            "\(QuotaFormat.share(row.totals.totalTokens, of: periodTokens) ?? "no share"), \(QuotaFormat.accessibleCount(row.totals.totalTokens)) tokens"
-          )
-          .accessibilityIdentifier("usage.top-model")
-        }
-      } header: {
-        Text("Top models")
-          .accessibilityIdentifier("section.header.top-models")
-      }
-    }
-  }
-}
-
 struct UsageAgentListSections: View {
   let sections: [UsageBreakdown.AgentSection]
   var periodTokens: Int = 0
@@ -602,7 +514,10 @@ struct UsageAgentListSections: View {
       )
       .accessibilityIdentifier("usage.provider.\(provider.id)")
 
-      QuotaShareBar(share: shareFraction(providerTokens, of: periodTokens))
+      ModelShareBar(
+        fraction: shareFraction(providerTokens, of: periodTokens),
+        fill: QuotaTheme.modelFill(.shade(provider.provider.modelFamily, 1))
+      )
 
       ForEach(visible) { row in
         modelRow(row)
@@ -671,23 +586,5 @@ struct UsageAgentListSections: View {
       "\(row.displayName), \(QuotaFormat.accessibleCount(row.totals.totalTokens)) tokens, \(QuotaFormat.costAccessibility(row.cost))"
     )
     .accessibilityIdentifier(modelIdentifier)
-  }
-}
-
-/// A share of a whole, drawn once under a name. Fill is emerald.
-struct QuotaShareBar: View {
-  let share: Double
-
-  var body: some View {
-    GeometryReader { proxy in
-      ZStack(alignment: .leading) {
-        Capsule().fill(QuotaTheme.meterTrack)
-        Capsule()
-          .fill(QuotaTheme.emerald)
-          .frame(width: proxy.size.width * share)
-      }
-    }
-    .frame(height: 4)
-    .accessibilityHidden(true)
   }
 }

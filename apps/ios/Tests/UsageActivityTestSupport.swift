@@ -112,6 +112,7 @@ actor GatedActivityLoader: ActivityLoading {
     var to: String
     var timezone: String
     var breakdown: Bool
+    var modelSeries: Bool
   }
 
   private var results: [AccountActivityResult]
@@ -158,10 +159,12 @@ actor GatedActivityLoader: ActivityLoading {
     from: String,
     to: String,
     timezone: String,
-    breakdown: Bool
+    breakdown: Bool,
+    modelSeries: Bool
   ) async -> AccountPeriodResult {
     periodCalls.append(
-      PeriodCall(from: from, to: to, timezone: timezone, breakdown: breakdown))
+      PeriodCall(
+        from: from, to: to, timezone: timezone, breakdown: breakdown, modelSeries: modelSeries))
     if permits > 0 {
       permits -= 1
     } else {
@@ -187,6 +190,7 @@ actor ScriptedActivityLoader: ActivityLoading {
     var to: String
     var timezone: String
     var breakdown: Bool
+    var modelSeries: Bool
   }
 
   private var results: [AccountActivityResult]
@@ -216,10 +220,12 @@ actor ScriptedActivityLoader: ActivityLoading {
     from: String,
     to: String,
     timezone: String,
-    breakdown: Bool
+    breakdown: Bool,
+    modelSeries: Bool
   ) async -> AccountPeriodResult {
     periodCalls.append(
-      PeriodCall(from: from, to: to, timezone: timezone, breakdown: breakdown))
+      PeriodCall(
+        from: from, to: to, timezone: timezone, breakdown: breakdown, modelSeries: modelSeries))
     return periodResults.isEmpty
       ? .failure(.relay(.unavailable)) : periodResults.removeFirst()
   }

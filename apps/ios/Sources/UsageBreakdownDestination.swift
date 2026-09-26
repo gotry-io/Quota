@@ -2,7 +2,8 @@ import QuotaPresentation
 import QuotaWire
 import SwiftUI
 
-/// Provider and model shares, plus the secondary token counts the Usage root no longer shows.
+/// All models: the secondary token counts, every model of the period as the full ledger, then
+/// which agent sent what to which provider and model.
 struct UsageBreakdownDestination: View {
   @Bindable var model: AppModel
   @State private var expandedProviderIDs: Set<String> = []
@@ -12,7 +13,12 @@ struct UsageBreakdownDestination: View {
       if let period = model.usage.usagePeriodValue {
         secondaryCounts(period)
         let sections = UsageBreakdown.sections(in: period)
-        UsageTopModelsSection(sections: sections, periodTokens: period.totals.totalTokens)
+        UsageModelLedgerSection(
+          rows: ModelLedger.rows(period.agents.modelLeaves),
+          colors: model.usage.modelColors,
+          visible: nil,
+          showsAgents: true
+        )
         UsageAgentListSections(
           sections: sections,
           periodTokens: period.totals.totalTokens,
@@ -28,7 +34,7 @@ struct UsageBreakdownDestination: View {
       }
     }
     .listStyle(.insetGrouped)
-    .navigationTitle("By provider / By model")
+    .navigationTitle("All models")
     .navigationBarTitleDisplayMode(.inline)
     .accessibilityIdentifier("usage.breakdown")
   }

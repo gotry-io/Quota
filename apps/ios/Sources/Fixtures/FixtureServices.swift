@@ -64,7 +64,8 @@ final class FixtureActivityLoader: ActivityLoading, @unchecked Sendable {
     from: String,
     to: String,
     timezone: String,
-    breakdown: Bool
+    breakdown: Bool,
+    modelSeries: Bool
   ) async -> AccountPeriodResult {
     await MainActor.run {
       let calendar = Calendar.current
@@ -92,7 +93,7 @@ final class FixtureActivityLoader: ActivityLoading, @unchecked Sendable {
         usage: period,
         days: days
       )
-      if breakdown { return .period(response) }
+      if breakdown, modelSeries { return .period(response) }
       return .period(
         AccountUsagePeriodResponse(
           request: response.request,
@@ -101,7 +102,8 @@ final class FixtureActivityLoader: ActivityLoading, @unchecked Sendable {
           cost: response.cost,
           cacheSaved: response.cacheSaved,
           days: response.days,
-          agents: nil,
+          agents: breakdown ? response.agents : nil,
+          modelSeries: modelSeries ? response.modelSeries : nil,
           coverage: response.coverage,
           revision: response.revision
         )

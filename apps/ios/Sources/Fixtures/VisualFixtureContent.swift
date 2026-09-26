@@ -400,6 +400,7 @@ enum VisualFixtureContent {
       cacheSaved: usage.cacheSaved,
       days: buckets,
       agents: usage.agents,
+      modelSeries: modelSeries(agents: usage.agents, days: buckets),
       coverage: UsagePeriodCoverage(
         partial: usage.partial,
         truncatedByRetention: truncatedByRetention
@@ -413,6 +414,52 @@ enum VisualFixtureContent {
         foldVersion: 1
       )
     )
+  }
+
+  /// A `series=model` answer shaped the way Relay's is: the period's largest models, then
+  /// `other`, and each day's tokens and cost split across them. The split leans a little
+  /// differently each day so the river reads as a river; it is synthetic, like everything here.
+  static func modelSeries(agents: [UsageAgentUsage], days: [UsagePeriodDayBucket])
+    -> UsageModelSeries
+  {
+    let rows = ModelLedger.rows(agents.modelLeaves)
+    let named = rows.prefix(UsageModelSeries.limit)
+    var entries = named.map { row in
+      UsageModelSeriesEntry(
+        model: row.key.model,
+        provider: InferenceProvider(rawValue: row.key.family.rawValue) ?? .unknown
+      )
+    }
+    var weights = named.map { Double($0.totals.totalTokens) }
+    let rest = rows.dropFirst(UsageModelSeries.limit).reduce(0) { $0 + $1.totals.totalTokens }
+    if rest > 0 {
+      entries.append(UsageModelSeriesEntry(model: UsageModelSeries.otherModel, provider: nil))
+      weights.append(Double(rest))
+    }
+    let seriesDays = days.enumerated().map { dayIndex, day in
+      let leaning = weights.enumerated().map { index, weight in
+        weight * (1 + 0.45 * sin(Double(dayIndex * 2 + index)))
+      }
+      let sum = max(leaning.reduce(0, +), 1)
+      let dayCost = Double(day.cost.amountMicrousd ?? "0") ?? 0
+      let cells = entries.enumerated().compactMap { index, entry -> UsageModelSeriesCell? in
+        let share = leaning[index] / sum
+        let input = Int(Double(day.totals.inputTokens) * share)
+        let output = Int(Double(day.totals.outputTokens) * share)
+        guard input + output > 0 else { return nil }
+        return UsageModelSeriesCell(
+          model: entry.model,
+          totalTokens: input + output,
+          inputTokens: input,
+          outputTokens: output,
+          cacheReadInputTokens: input / 4,
+          cacheWriteInputTokens: 0,
+          costMicrousd: day.cost.amountMicrousd == nil ? nil : String(Int(dayCost * share))
+        )
+      }
+      return UsageModelSeriesDay(date: day.date, partial: day.partial, models: cells)
+    }
+    return UsageModelSeries(models: entries, days: seriesDays)
   }
 
   /// Totals for a fixture range that is not one of the four summary periods.
