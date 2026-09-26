@@ -48,6 +48,13 @@ Object.defineProperty(globalThis, "matchMedia", {
   }),
 });
 
+/** jsdom lays nothing out; `bind:clientWidth` only needs the observer to exist. */
+globalThis.ResizeObserver ??= class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+};
+
 beforeEach(() => {
   storage.clear();
   delete document.documentElement.dataset.theme;

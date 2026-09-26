@@ -1,11 +1,6 @@
-import { remainingPercent } from "@gotry-io/quota-model";
-import type {
-  AccountDeviceRead,
-  AccountSummaryRead,
-  UsagePeriodRead,
-} from "@gotry-io/quota-protocol";
+import type { AccountDeviceRead, AccountSummaryRead } from "@gotry-io/quota-protocol";
 import { deviceActivity } from "./device-activity.ts";
-import { relativeAge, usageModelDisplayName } from "./format.ts";
+import { relativeAge } from "./format.ts";
 import { QUOTA_HEALTHY_PERCENT, QUOTA_WARNING_PERCENT } from "./tokens.generated.ts";
 
 export type MeterTone = "good" | "warn" | "critical";
@@ -22,15 +17,6 @@ export function meterTone(remaining: number): MeterTone {
   return "critical";
 }
 
-export function meterToneForUsedPercent(usedPercent: number): MeterTone {
-  return meterTone(remainingPercent(usedPercent));
-}
-
-/** Accessible name for a remaining-quota meter: window title plus remaining, spoken once. */
-export function quotaMeterName(title: string, remainingText: string): string {
-  return `${title} ${remainingText}`;
-}
-
 /** Stable hue in 0–359 from a provider id, for letter-mark fallbacks. */
 export function providerMarkHue(providerId: string): number {
   let hash = 2166136261;
@@ -45,24 +31,6 @@ export function viewerInitial(label: string | undefined): string {
   const trimmed = label?.trim() ?? "";
   const first = trimmed.charAt(0);
   return first ? first.toUpperCase() : "Q";
-}
-
-/** Largest-token model in a period tree, or an em dash when the tree is empty. */
-export function topUsageModel(period: UsagePeriodRead | null | undefined): string {
-  if (!period) return "—";
-  let best: { name: string; tokens: number } | null = null;
-  for (const agent of period.agents) {
-    for (const provider of agent.providers) {
-      for (const model of provider.models) {
-        const tokens = model.totals.total_tokens;
-        if (best === null || tokens > best.tokens) {
-          best = { name: model.model, tokens };
-        }
-      }
-    }
-  }
-  if (best === null || best.tokens <= 0) return "—";
-  return usageModelDisplayName(best.name);
 }
 
 function newestSubscriptionObservedAt(summary: AccountSummaryRead): string | null {
@@ -92,15 +60,12 @@ export function accountStatusLine(summary: AccountSummaryRead, now?: Date): stri
   return `${quota} · ${reporting} ${noun} reporting`;
 }
 
-export function usageStatusLine(
-  periodLabel: string,
-  partial: boolean,
-  truncatedByRetention = false,
-): string {
-  const parts = [periodLabel];
+/** What a period's missing hours say beside its figures, or null when every hour is in. */
+export function usageGapsNote(partial: boolean, truncatedByRetention: boolean): string | null {
+  const parts: string[] = [];
   if (partial) parts.push("some hours incomplete");
   if (truncatedByRetention) parts.push("some of this range is no longer kept");
-  return parts.join(" · ");
+  return parts.length > 0 ? parts.join(" · ") : null;
 }
 
 function activitySeverity(tone: "available" | "offline" | "unavailable", label: string): number {
@@ -140,8 +105,4 @@ export function devicesSummaryLine(devices: readonly DeviceRow[], now?: Date): s
       : `${reporting} of ${devices.length} reporting`;
   if (!oldest) return count;
   return `${count} · ${oldest.display_name} · ${oldest.label}`;
-}
-
-export function subscriptionCardMeta(deviceName: string, observedAt: string, now?: Date): string {
-  return `${deviceName} · ${relativeAge(observedAt, now)}`;
 }

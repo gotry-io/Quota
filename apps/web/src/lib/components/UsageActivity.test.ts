@@ -73,6 +73,7 @@ it("keeps a single tab stop, moves with the activity keys, and opens with Enter 
   const { container } = render(UsageActivity, {
     days: reported,
     range,
+    colors: new Map(),
     ...events,
   });
 
@@ -130,6 +131,7 @@ it("opens the day panel and returns focus on Close", () => {
   const { container } = render(UsageActivity, {
     days: reported,
     range,
+    colors: new Map(),
     selectedDate: "2026-01-15",
     detail,
     detailLoading: false,
@@ -144,8 +146,7 @@ it("opens the day panel and returns focus on Close", () => {
   ).toBe("2026-01-15");
   expect(screen.getByRole("heading", { name: "January 15, 2026" })).toBeTruthy();
   expect(screen.getByText("UTC")).toBeTruthy();
-  expect(screen.getByRole("rowheader", { name: "Codex" })).toBeTruthy();
-  expect(screen.getByRole("rowheader", { name: "gpt-5" })).toBeTruthy();
+  expect(screen.getByRole("rowheader", { name: /^gpt-5 OpenAI Codex$/ })).toBeTruthy();
 
   const selected = container.querySelector('button.usage-activity-cell[data-date="2026-01-15"]');
   fireEvent.click(screen.getByRole("button", { name: "Close" }));
@@ -157,6 +158,7 @@ it("follows keyboard focus with the tooltip", () => {
   const { container } = render(UsageActivity, {
     days: reported,
     range,
+    colors: new Map(),
     ...handlers(),
   });
   const cell = rover(container);

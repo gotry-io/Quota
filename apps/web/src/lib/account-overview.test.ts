@@ -1,14 +1,7 @@
 import { remainingPercent } from "@gotry-io/quota-model";
 import type { AccountSummaryRead, UsagePeriodRead } from "@gotry-io/quota-protocol";
 import { afterEach, expect, it, vi } from "vitest";
-import {
-  accountStatusLine,
-  devicesSummaryLine,
-  meterTone,
-  meterToneForUsedPercent,
-  subscriptionCardMeta,
-  usageStatusLine,
-} from "./account-overview.ts";
+import { accountStatusLine, devicesSummaryLine, meterTone } from "./account-overview.ts";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -48,7 +41,6 @@ it("classifies remaining-quota meter thresholds", () => {
   expect(meterTone(15)).toBe("warn");
   expect(meterTone(14.9)).toBe("critical");
   expect(meterTone(0)).toBe("critical");
-  expect(meterToneForUsedPercent(32)).toBe("good");
   expect(remainingPercent(32)).toBe(68);
 });
 
@@ -106,15 +98,6 @@ it("names latest quota freshness from subscriptions, not device heartbeats", () 
     "2 devices · all reporting · Kitchen Mac · Idle",
   );
   expect(devicesSummaryLine([])).toBe("No devices yet");
-  expect(subscriptionCardMeta("Studio Mac", "2026-08-12T09:39:00Z")).toBe("Studio Mac · 1m ago");
-  expect(usageStatusLine("30 Days", false)).toBe("30 Days");
-  expect(usageStatusLine("Today", true)).toBe("Today · some hours incomplete");
-  expect(usageStatusLine("Last 30 days", false, true)).toBe(
-    "Last 30 days · some of this range is no longer kept",
-  );
-  expect(usageStatusLine("Custom range", true, true)).toBe(
-    "Custom range · some hours incomplete · some of this range is no longer kept",
-  );
 });
 
 it("selects a never-reporting device as the worst in either input order", () => {

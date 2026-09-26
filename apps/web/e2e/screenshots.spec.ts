@@ -4,12 +4,13 @@ import { fileURLToPath } from "node:url";
 import { expect, type Page, test } from "@playwright/test";
 import {
   accountReadFromSummary,
-  accountUsagePeriod,
   mockAccountSettings,
   screenshotAccountActivity,
   screenshotAccountActivityDay,
   screenshotAccountRhythm,
   screenshotAccountSummary,
+  screenshotAccountUsagePeriod,
+  screenshotQuotaHistory,
 } from "./account-fixture.ts";
 
 const enabled = process.env.SCREENSHOTS === "1";
@@ -79,9 +80,9 @@ async function mockV6(page: Page): Promise<void> {
         status: 200,
         contentType: "application/json",
         body: JSON.stringify(
-          accountUsagePeriod(from, to, timezone, {
+          screenshotAccountUsagePeriod(from, to, timezone, {
             breakdown: asked.searchParams.get("breakdown") === "1",
-            summary: accountSummary,
+            series: asked.searchParams.get("series") === "model",
           }),
         ),
       });
@@ -102,6 +103,16 @@ async function mockV6(page: Page): Promise<void> {
             : hours
               ? screenshotAccountRhythm(from, to)
               : screenshotAccountActivity(from, to),
+        ),
+      });
+      return;
+    }
+    if (url.includes("/api/v6/account/quota-history")) {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(
+          screenshotQuotaHistory(new URL(url).searchParams.get("provider") ?? ""),
         ),
       });
       return;
@@ -130,37 +141,18 @@ for (const appearance of appearances) {
 
     test(`overview ${appearance} desktop`, async ({ page }) => {
       await mockV6(page);
-      await page.goto("/my");
-      await expect(page.locator("#page-title")).toBeVisible();
+      await page.goto("/my/quota");
       await expect(page.getByRole("heading", { name: "Subscriptions" })).toBeVisible();
-      await expect(page.getByRole("heading", { name: "Today" })).toBeVisible();
-      await expect(page.locator(".quota-card")).toHaveCount(3);
-      await expect(page.getByText("pe***@example.com").first()).toBeVisible();
+      await expect(page.locator(".sub")).toHaveCount(6);
       await expect(page.getByText("Studio Mac").first()).toBeVisible();
-      await expect(page.getByText("Kitchen Mac").first()).toBeVisible();
-      await expect(page.getByText("68%").first()).toBeVisible();
-      await expect(page.getByText("84%").first()).toBeVisible();
-      await expect(page.getByText("53%").first()).toBeVisible();
-      await expect(page.getByText("27%").first()).toBeVisible();
-      await expect(page.locator("a.today-strip")).toBeVisible();
-      await expect(page.locator("a.devices-strip")).toBeVisible();
       await shot(page, `web-overview-${appearance}-desktop.png`);
     });
 
     test(`usage ${appearance} desktop`, async ({ page }) => {
       await mockV6(page);
-      await page.goto("/my/usage");
-      await expect(page.locator("#dashboard-title")).toBeVisible();
-      await expect(page.locator("#token-total")).toHaveText("11.4M");
-      await expect(page.locator("#cost-total")).toHaveText("$8.50");
-      await expect(page.locator("#message-total")).toBeVisible();
-      await expect(page.locator(".usage-columns")).toBeVisible();
-      await expect(page.getByRole("button", { name: "Show 2 more" })).toBeVisible();
-      await expect(page.getByRole("heading", { name: "Rhythm" })).toBeVisible();
-      await expect(page.locator(".usage-rhythm-heat")).toBeVisible();
-      await expect(page.getByRole("heading", { name: "Activity" })).toBeVisible();
-      await expect(page.locator("button.usage-activity-cell").first()).toBeVisible();
-      await page.getByRole("heading", { name: "Rhythm" }).scrollIntoViewIfNeeded();
+      await page.goto("/my");
+      await expect(page.getByRole("table", { name: "Models in this period" })).toBeVisible();
+      await expect(page.locator(".river path.band").first()).toBeVisible();
       await shot(page, `web-usage-${appearance}-desktop.png`);
     });
   });
@@ -175,12 +167,7 @@ for (const appearance of appearances) {
     test(`overview ${appearance} mobile`, async ({ page }) => {
       await mockV6(page);
       await page.goto("/my");
-      await expect(page.locator("#page-title")).toBeVisible();
-      await expect(page.getByRole("heading", { name: "Subscriptions" })).toBeVisible();
-      await expect(page.locator(".quota-card")).toHaveCount(3);
-      await expect(page.getByText("pe***@example.com").first()).toBeVisible();
-      await expect(page.getByText("Studio Mac").first()).toBeVisible();
-      await expect(page.getByText("Kitchen Mac").first()).toBeVisible();
+      await expect(page.getByRole("table", { name: "Models in this period" })).toBeVisible();
       await shot(page, `web-overview-${appearance}-mobile.png`);
     });
   });

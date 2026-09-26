@@ -42,8 +42,9 @@ below 768 px) and opens with the same page header: an eyebrow, one sentence whos
 ink, controls on the right, and a meta line. Inside `/my` the site header carries the Account nav
 (Home `/my`, Models `/my/models`, Quota `/my/quota`, Recap `/my/recap`) and an account menu with
 Devices, Settings, Public page (the Settings group), and Sign out; under it, a quota band names
-each subscription's tightest window and links to `/my/subscriptions/<sel>`. `/my/usage` keeps the
-period, Activity, and Export page. Settings groups Sign-in methods, Monthly budget (the amount and
+each subscription's tightest window and links to `/my/subscriptions/<sel>`. Home, Models, and
+Recap draw periods from `GET /api/v6/account/usage/period` with `series=model`; `/my/usage`, the
+shipped address, redirects to Home with its query. Settings groups Sign-in methods, Monthly budget (the amount and
 alert switch follow the Account), Notifications and Privacy (read-only here; QuotaBar and Quota for
 iPhone change them), Public page, and Account. Devices is one table at every width, with the delete
 confirmation in the row. Unsigned visits to any `/my` page redirect to
@@ -60,13 +61,14 @@ the trailing windows start and end — and a document request has no clock, so r
 server would answer in UTC and be thrown away by every browser keeping another calendar. The client
 makes it once, sending its own IANA timezone as `tz`. One account store
 (`src/lib/account-store.svelte.ts`) holds the summary, activity keyed by `from|to`, and per-day
-detail. The `/my` layout calls `ensureSummary()` on account navigations without blocking first
-paint. Usage calls `ensureActivity()` when that route is entered; the activity range is computed
-at access time and the cache key changes at the UTC day boundary. Each tab reads that store: a
-second visit within 60 s is a cache hit (stale-while-revalidate, in-flight dedup), not a new
-request. Switching the Usage period recomputes from the summary and does not refetch.
+detail, period reads keyed by `from|to|timezone|breakdown|series`, and the Account quota history
+a subscription page draws its pace line from. The `/my` layout calls `ensureSummary()` on account
+navigations without blocking first paint. Home calls `ensureActivity()` for its year; the activity
+range is computed at access time and the cache key changes at the UTC day boundary. Each tab reads
+that store: a second visit within 60 s is a cache hit (stale-while-revalidate, in-flight dedup),
+not a new request.
 
-Home asks the Account's Macs for a fresh reading
+The Quota page asks the Account's Macs for a fresh reading
 ([ADR 0063](../../docs/decisions/0063-collection-follows-demand-and-activity.md)): when it opens, and
 when its tab becomes visible again (after re-reading the summary), a subscription whose newest Mac
 reading is older than two minutes or its provider's catalog floor
@@ -74,12 +76,12 @@ reading is older than two minutes or its provider's catalog floor
 (`{"protocol_version":6}`, the cookie session and the browser's same-origin `Origin`). The summary is
 then re-read (conditional GET) every 30 seconds for up to three minutes, stopping once every
 subscription asked about has a Mac reading at or after the `requested_at` Relay answered, when the
-tab is hidden, or when Home is left. One wait at a time; a 404, a 429, or a timeout is silent.
+tab is hidden, or when the Quota page is left. One wait at a time; a 404, a 429, or a timeout is silent.
 The rule and the follow-up live in `src/lib/collection-demand.ts`.
 
-It then renders what Relay resolved: `subscriptions[]` as one card per subscription, whichever of
-Today, the last 7 days, the last 30 days, or all time is selected, and a year of daily totals from
-`GET /api/v6/account/usage/activity`, on UTC dates. All time is the last 730 days. Each Device shows
+The pages render what Relay resolved: `subscriptions[]` as one row per subscription on Quota, the
+selected period's model river and ledger on Home and Models, and a year of daily totals from
+`GET /api/v6/account/usage/activity`, on UTC dates. All is the last 730 days. Each Device shows
 a platform icon, when it was last seen, and when its newest reading was taken, labelled Active, Idle,
 or Not reporting from the newer of the two, newest last-seen first. It is read-only, and a quiet
 Device is asleep or closed rather than broken.

@@ -286,8 +286,9 @@ fixtures named below; change the fixture, not a surface.
   **Custom range**, two inclusive dates someone picked. Relay's `all` is the last 730 UTC days,
   not every day ever stored. A control too narrow for the full name abbreviates it **Day**,
   **Week**, **Month**, **7D**, **30D**, **All**, **Custom**; the accessibility name is always the
-  full one. `UsagePeriodSegment` in `packages/apple-shared` and `USAGE_PERIOD_SEGMENTS` in
-  `apps/web/src/lib/usage-period.ts` are where those pairs are written.
+  full one. The website adds **Last 90 days** (**90D**), which its period read answers and the
+  Apple clients' folded periods do not. `UsagePeriodSegment` in `packages/apple-shared` and
+  `USAGE_PERIOD_SEGMENTS` in `apps/web/src/lib/usage-period.ts` are where those pairs are written.
 - **A period says the range it covers, not the name of its button.** One day is that date
   (**Sep 6, 2026**); a range inside one year drops the repeated year from its first half
   (**Aug 31 – Sep 6, 2026**); `all` has no first day, so it reads **Everything kept**. The step

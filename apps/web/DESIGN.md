@@ -55,24 +55,29 @@ without a skeleton over cached data; a matching `If-None-Match` reuses the last-
 Unsigned visits to `/my…` redirect to `/sign-in?return_to=<path>`; the shipped `/app` bookmark
 redirects to `/my`. Every `/my` route is `noindex, nofollow`.
 
-**Periods.** **Day**, **Week**, **Month**, **7D**, **30D**, **All**, **Custom** (accessible names
-are the full period names); **Last 30 days** is the default. **Previous period** and **Next
-period** step Day, Week, and Month, and Next is disabled on the current unit; Custom is two native
-date inputs bounded by the activity range and **Apply**. The URL is
-`?period=day|week|month|7d|30d|all|custom` plus `&offset=` or `&from=&to=`, so a refresh keeps it.
-Every selection but All reads `GET /api/v6/account/usage/period` with inclusive local dates, this
-browser's zone, `breakdown=1`, and `series=model`; All is the summary's 730 UTC-day window. A
-comparison against the previous period is a second read of the equal range before it. Incomplete
-hours print **some hours incomplete**; a range retention cut prints **some of this range is no
-longer kept**. **Export** (CSV / JSON, `quota-usage-<from>-<to>`) writes the loaded period body
-and is off for All ([ADR 0056](../../docs/decisions/0056-a-period-export-is-the-period-on-screen.md)).
+**Periods.** The control shows **Today**, **7D**, **30D**, and **90D** as segments (accessible
+names are the full period names) and puts **This week**, **This month**, **All**, **Custom
+range…**, **Export CSV**, and **Export JSON** under **More**; **Last 30 days** is the default.
+The website adds **Last 90 days** to the shared periods because its period read answers any range
+up to a year. **Previous period** and **Next period** sit beside the dates for Today, This week,
+and This month, and Next is disabled on the current unit; Custom is two native date inputs
+bounded by the activity range and **Apply**. The URL is
+`?period=day|week|month|7d|30d|90d|all|custom` plus `&offset=` or `&from=&to=`, so a refresh keeps
+it. Every selection but All reads `GET /api/v6/account/usage/period` with inclusive local dates,
+this browser's zone, `breakdown=1`, and `series=model`; a single day's chart reads the seven days
+ending on it. All is the summary's 730 UTC-day window, which has no series, so its chart asks for a
+shorter period. The comparison is a second read of the equal range before it with the tree and no
+series (the same days of the previous unit while a day, week, or month is still running; none
+for All or Custom). Incomplete hours print **some hours incomplete**; a range retention cut
+prints **some of this range is no longer kept**. Export writes the loaded period body and is off
+for All ([ADR 0056](../../docs/decisions/0056-a-period-export-is-the-period-on-screen.md)).
 
 **Quota band.** Under the header on every `/my` page, as specified in
 [Components](../../docs/design.md#components), from the summary already loaded.
 
-**Collection request.** The Quota page asks the Macs to collect on load and when its tab becomes
-visible again, re-reads the summary every 30 seconds for three minutes, and stops when answered,
-hidden, or left; its meta line says **Asking your Mac…** (**Asking your Macs…**) meanwhile, then
+**Collection request.** Only the Quota page asks the Macs to collect: on load and when its tab
+becomes visible again. It re-reads the summary every 30 seconds for three minutes and stops
+when answered, hidden, or left; its meta line says **Asking your Mac…** (**Asking your Macs…**) meanwhile, then
 `Latest quota updated <age> · <n> devices reporting` with **Refresh**. A refusal or timeout says
 nothing ([ADR 0063](../../docs/decisions/0063-collection-follows-demand-and-activity.md)).
 
@@ -85,47 +90,65 @@ in to Quota with the same method, connect a provider, **Download for macOS**.
 ## Routes
 
 **`/my` — Home.** Sentence header: tokens and models for the period and the top model's share;
-period controls and Export; meta line with API-equivalent cost, share of input from cache, active
-days, and change against the previous period. Then: metric tabs (Tokens, API-equivalent cost,
-Messages — each showing its total) over the model river with Amount / Share, and the model ledger
-under it; **What stood out** (up to four sentences from the reader's numbers); **Where the tokens
-went** (token mix) beside **Your year** (activity grid); **Agents → models**, then efficiency
-records (active days, best cache day, models tried). A period with no model breakdown says so in
-one line rather than looking empty. Cost states its basis under the tabs (`Priced N of M rows`, or
-**Cost covers every row** / **Cost skips N rows this catalog can't price**). Choosing a day in the
-grid or river opens an inline panel, not a modal, and writes `?day=YYYY-MM-DD`: the day's tokens,
-input/output, messages, cost and basis, incomplete hours, and its agent tree from
+period controls with Export under More; meta line with API-equivalent cost, share of input from
+cache, active days, and the token change against the previous period. Then: metric tabs (Tokens,
+API-equivalent cost, Messages — each showing its total) over the model river with Amount / Share,
+and the model ledger under it (six rows, then **N more models**). Messages are not split by model
+per day, so that tab draws one neutral stream and says so, and Share is off. The river is one tab
+stop: arrow keys, Home, and End move a crosshair whose reading is its spoken value; hovering or
+focusing a ledger row fades every other band. Cost states its basis under the tabs (`Priced N of M
+rows`, or **Cost covers every row** / **Cost skips N rows this catalog can't price**). Then **What
+stood out** (up to four sentences from the reader's numbers: a model that arrived or the top
+model's share and its move, cache reads and what they saved, a window under 40 %, the busiest
+hours from the period's rhythm read); **Where the tokens went** (token mix) beside **Your year**
+(activity grid); **Agents → models** (top eight models; a grouped list below 640 px), then records:
+active days in the year, best cache day, models tried, lowest cost per message. Choosing a day in
+the grid opens an inline panel, not a modal, and writes `?day=YYYY-MM-DD`: the day's tokens,
+input/output, messages, cost and basis, incomplete hours, and its models as a ledger from
 `GET /api/v6/account/usage/activity?from=D&to=D&detail=agents` (**No Usage on this day.** when
-empty). Close drops the query and returns focus to the day.
+empty). Close drops the query and returns focus to the day. `/my/usage`, the shipped address,
+redirects to `/my` with its query.
 
-**`/my/models`.** Sentence header about the model mix and its changes; period controls. The
-share river, then **Every model** — the full ledger with cost per message and first used — and an
-aside for the selected model: its river, its agents, and **In your quota**, the estimated share of
-a window it used ("Estimated from this Account's hourly Usage inside the window"), or that it is
-billed per token.
+**`/my/models`.** Sentence header with the model count and either the model that arrived inside
+the period or the two largest shares; period controls. Tokens / API-equivalent cost tabs over the
+share river, then **Every model** — the full ledger with messages and cost per message — and, for
+the selected model (`?model=`, the largest by default), its daily bars (for the eight models the
+series names), tokens, cost, cost per message, cache share, the agents that sent to it, and aside
+**In your quota**: the estimated share it used of the tightest window a day or longer of a
+subscription its agents spend ("Estimated from this Account's hourly Usage inside the window"),
+or a line that no such window is reported.
 
-**`/my/quota`.** Sentence header naming the tightest window and whether everything else lasts;
-**List** / **Table** control; the collection status line. Then the tightest-window gauge with
-**Next resets** beside it, then **Subscriptions**: one row per subscription — mark, provider name,
-masked account, plan tag, up to three windows (title, remaining, meter with even-pace tick, reset,
-**may run out early** when pace says so), and the foot `Studio Mac · 1m ago` or the status word
-and last reading. A 6 px dot in `--quota-warning` (minor) or `--quota-critical` (major or worse)
-beside the provider name carries the official status description in `title`, from
-`GET /api/v2/providers/status`; none for `none` or `unknown`. Empty states span the row and show
-the setup block once.
+**`/my/quota`.** Sentence header naming the tightest window and whether anything else may run out
+before reset; **List** / **Table** control; the collection status line with **Refresh**. Then the
+tightest-window gauge (104 px, with its reset, pace line, and — for a window a day or longer — the
+model that used most of it) with **Next resets** beside it, then **Subscriptions**: one row per
+subscription — mark, provider name, masked account, plan tag, up to three windows (title,
+remaining, meter with even-pace tick, reset, **may run out early** when pace says so), and the foot
+`Studio Mac · 1m ago` or the status word and last reading. Table lists one row per window with its
+pace. A 6 px dot in `--quota-warning` (minor) or `--quota-critical` (major or worse) beside the
+provider name carries the official status description, from `GET /api/v2/providers/status`; none
+for `none` or `unknown`. No Mac shows the setup block.
 
 **`/my/subscriptions/<sel>`.** Eyebrow **Quota / \<provider\>**, sentence `<provider> · <plan>`,
-**← Quota**, meta with the masked account and freshness. **Windows**: remaining, meter, pace
-line, reset and pace copy; a passed refill prints no Resets line. For windows a week or longer,
-**What used this window**: a model split estimated from Usage since the window opened. Aside:
-**Readings** from `sources[]`, newest first, the Device name (or **Device**), its primary remaining
-figure and freshness, the selected one tagged **Reporting**; **Source** and provider status. A
-selector with no match reads **This subscription is no longer reported.** No device id,
-fingerprint, or subscription key is printed.
+**← Quota**, meta with the masked account and freshness; a reading that is not current says so
+in a notice. **Windows**: remaining, meter with the even-pace tick, the pace line drawn from the
+Account's quota history (`GET /api/v6/account/quota-history`, only while the history switch is on
+and only for a global subscription), reset and pace copy; a passed refill prints no Resets line.
+For the tightest window a day or longer, **What used this window**: a model split of its agents'
+Usage since the window opened, labelled an estimate. **Expiring credits** lists a count window's
+expiries in the shared expiry copy. Aside: **Readings** from `sources[]`, newest first, the
+Device name (or **Device**), its primary remaining figure and freshness, the selected one tagged
+**Reporting**; **Source** (read by QuotaBar, last reading, provider status). A selector with no
+match reads **This subscription is no longer reported.** No device id, fingerprint, or
+subscription key is printed.
 
-**`/my/recap`.** Eyebrow **Recap · \<dates\>**, sentence "Your week, in five numbers. Private
-until you copy one." Five posters (volume, model of the week, efficiency, rhythm, headroom), each
-with **Copy as image**, then one line that nothing ranks the reader. Derived from period reads.
+**`/my/recap`.** Eyebrow **Recap · \<dates\>** for the last full week, Monday to Sunday;
+sentence "Your week, in five numbers. Private until you copy one." Posters: volume (and its
+change on the week before), model of the week (with that week's share river), cache efficiency
+(and the best cache day), rhythm (busiest hour, and the longest quiet stretch), headroom now (the
+tightest window and its reset). A poster whose numbers are missing is left out. **Copy as image**
+draws the poster as a 1200×630 canvas and puts the PNG on the clipboard; nothing leaves the
+browser. Then one line that nothing ranks the reader.
 
 **`/my/devices`.** Sentence with how many devices report and the one that stopped. One table at
 every width (scrolls sideways when narrow), newest contact first: name, **Active** / **Idle** /
@@ -208,7 +231,7 @@ Homebrew command, codes).
 - **960 px:** paired sections, asides, the tightest-window block, sign-in columns, and settings
   groups become one column; insights one column; record grids two columns.
 - **768 px:** gutter 16 px; the brand name hides beside the mark; header controls wrap under the
-  sentence; hero 34 px; ledger hides vs previous, from cache, and agent columns; pills 40 px.
+  sentence; hero 34 px; ledger hides vs previous, from cache, provider, and agent columns; pills 40 px.
 - From 320 px up: no clipped action and no horizontal page scroll. Wide content (charts, tables,
   nav, band, activity grid) scrolls inside itself.
 

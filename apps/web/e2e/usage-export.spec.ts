@@ -48,6 +48,7 @@ async function mockV6(page: Page): Promise<void> {
         body: JSON.stringify(
           accountUsagePeriod(from, to, timezone, {
             breakdown: asked.searchParams.get("breakdown") === "1",
+            series: asked.searchParams.get("series") === "model",
             summary: accountSummary,
           }),
         ),
@@ -81,15 +82,14 @@ test("downloads a CSV for a custom range with a header and formula-safe cells", 
   page,
 }) => {
   await mockV6(page);
-  await page.goto("/my/usage?period=custom&from=2026-08-10&to=2026-08-12");
-  await expect(page.locator("#dashboard-title")).toBeVisible();
-  await expect(page.locator("#token-total")).not.toHaveText("—");
+  await page.goto("/my?period=custom&from=2026-08-10&to=2026-08-12");
+  await expect(page.getByRole("table", { name: "Models in this period" })).toBeVisible();
 
   expect(csvCell("=1+1")).toBe("'=1+1");
 
-  await page.locator("#usage-export").click();
+  await page.getByRole("button", { name: /Custom range/ }).click();
   const downloadPromise = page.waitForEvent("download");
-  await page.getByRole("menuitem", { name: "CSV" }).click();
+  await page.getByRole("menuitem", { name: /Export CSV/ }).click();
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toBe("quota-usage-2026-08-10-2026-08-12.csv");
   const path = await download.path();
