@@ -53,25 +53,35 @@ struct DashboardView: View {
     }
   }
 
+  /// The tightest window and the next resets lead the page, above the subscriptions.
+  private var lead: some View {
+    QuotaLeadView(subscriptions: subscriptions, now: now, resetStyle: resetCopyStyle.style)
+      .padding(.horizontal, QuotaDesign.Layout.contentGutter)
+      .padding(.top, QuotaDesign.Layout.pageVerticalPadding)
+  }
+
   private var wideLayout: some View {
-    HStack(spacing: 0) {
-      subscriptionList
-        .frame(width: QuotaDesign.Layout.quotaListWidth)
-        .frame(maxHeight: .infinity)
-      Rectangle()
-        .fill(QuotaPalette.hairline)
-        .frame(width: QuotaDesign.Layout.columnHairlineWidth)
-        .frame(maxHeight: .infinity)
-      detailScroll
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    VStack(spacing: QuotaDesign.Spacing.md) {
+      lead
+      HStack(spacing: 0) {
+        subscriptionList
+          .frame(width: QuotaDesign.Layout.quotaListWidth)
+          .frame(maxHeight: .infinity)
+        Rectangle()
+          .fill(QuotaPalette.hairline)
+          .frame(width: QuotaDesign.Layout.columnHairlineWidth)
+          .frame(maxHeight: .infinity)
+        detailScroll
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+      }
     }
   }
 
   private var compactLayout: some View {
     VStack(alignment: .leading, spacing: QuotaDesign.Spacing.md) {
+      lead
       subscriptionPicker
         .padding(.horizontal, QuotaDesign.Layout.contentGutter)
-        .padding(.top, QuotaDesign.Layout.pageVerticalPadding)
       detailScroll
     }
   }
@@ -482,8 +492,12 @@ private struct DashboardQuotaWindowCard: View {
         .accessibilityLabel(remainingLabel)
 
       if window.showsPercentMeter {
-        QuotaRemainingMeter(value: window.remainingPercent, fill: meterColor)
-          .accessibilityHidden(true)
+        QuotaRemainingMeter(
+          value: window.remainingPercent,
+          fill: meterColor,
+          evenPace: window.evenPaceTick(now: now, isStale: isStale)
+        )
+        .accessibilityHidden(true)
       }
 
       if let resetsAt = window.resetsAt,

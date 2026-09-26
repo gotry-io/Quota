@@ -29,6 +29,14 @@ picture is a 22pt sparkline under the meter. Settings → Menu Bar → **Show pa
 sparkline and the Today windows line off together, on by default. Settings → Menu Bar → **Reset
 time** is the only surface that switches reset copy between relative and absolute.
 
+The panel is a glance and the Quota page leads with quota; the main window's Usage page is an
+analysis surface that leads with the reader's model usage
+([ADR 0064](../../docs/decisions/0064-analysis-surfaces-lead-with-model-usage.md)). Every
+window meter in the panel and on the Quota page carries the even-pace tick
+([`docs/design.md`](../../docs/design.md#components)) while its pace line prints and the reading is
+current: a 1.5pt ink tick, 4pt taller than the meter, from `EvenPacePosition`. No river in the
+panel.
+
 ## Window and layout tokens
 
 | Token | Value | Purpose |
@@ -163,6 +171,17 @@ instant still ahead and the unlisted remainder (**2 · Expire Oct 22, 16:00**, *
 provider page's reading lists the same lines. Remaining is the strongest text. Empty: **No quota
 windows yet.**
 
+The page opens with one card above the list and the detail: the **Tightest window** — the Quota
+mark's ring at 72pt with the remaining percent inside, in the band colour, chosen by
+`TightestWindow` (the rule the menu bar's Automatic item uses) — with the provider and window
+title, its reset line, and its pace headline; beside it **Next resets**, `7 days · local time`: a
+**Now** mark, a hairline per local midnight labelled with its weekday, and one lane per current
+subscription (provider, and the account when there is one) with a 10pt ring per reset instant
+from `NextResets` in the band colour of the lowest window it refills, labelled with the window
+titles where the label clears the one before it. VoiceOver reads the lanes as each window's reset
+line. When the column is too narrow the two stack. A stale subscription has no lane and never
+claims the ring.
+
 Then **Remaining history** labelled **This Mac**. With the history switch on and an Account series
 cached for the subscription, the label is **From your devices** and the chart draws that series.
 The merged points stop at the last change, so the current reading is appended at now before the
@@ -199,6 +218,13 @@ Empty page: while the cache is rebuilding and this Mac has no subscriptions yet,
 
 ### Usage
 
+The page opens with the sentence header: the eyebrow **Usage · Account** (or **This Mac**), one
+sentence in the 17pt `sentence` role written from the period's numbers — **You ran 1.7M tokens
+through 5 models in the last 7 days. claude-sonnet-4 carried 36% of it.** — numbers and the model
+name in ink, the rest in body, and one meta line: API-equivalent cost, cache share, active days,
+and the change of tokens on the previous period once that read answered. While Usage is being
+prepared or the period is empty the sentence says so. The period controls follow it.
+
 Usage defaults to Account when an account summary is available and Usage sync is enabled; otherwise
 it uses This Mac. The source menu is the Usage toolbar; omit it when Account data is unavailable
 or Usage sync is disabled. Changing source preserves the selected period. The panel footer **Today · $x** line, and a stored `main.page` of `today`, open Usage with
@@ -218,9 +244,11 @@ and **Next period** is disabled on the current unit. The period names, the range
 budget copy are in
 [Shared product vocabulary](../../docs/design.md#shared-product-vocabulary).
 
-Today, 7D, 30D, and All come out of the service's precomputed snapshot, so opening Usage and
-changing either selector starts no collection or network work and shows no loading state when a
-snapshot already exists. Every other period is one `usage_period` request. On This Mac it folds
+Today, 7D, 30D, and All come out of the service's precomputed snapshot — on Account, 7D and 30D
+carry the days and `model_series` of a conditional period read the refresh makes — so opening
+Usage and changing either selector starts no collection and shows no loading state when a
+snapshot already exists. Every other period is one `usage_period` request, and so is the
+previous period the ledger compares with, which never shows a loading state. On This Mac it folds
 the hours already stored; on Account it reads Relay's local-date period in this Mac's IANA zone
 ([ADR 0055](../../docs/decisions/0055-an-account-period-is-a-local-date-range.md)). While it is in
 flight the page says **Preparing Usage…**, and a state change discards those folds and asks again
@@ -235,73 +263,71 @@ Preparing and empty Usage remain section states below the period tabs because th
 still useful. Cached account refresh failures and partial Usage warnings are inline notices and do
 not replace available content.
 
-When the selected period is **Today**, Usage also includes the per-window table that used to be its
-own page. One `quotaCardSurface()` card, one row per provider × window that had samples today, 36pt
-tall. The header row is tertiary caps. Columns: window (catalog provider name · window title), used
-percent at the start of the local day → now (`12% → 47%`, the same whole percents
-`QuotaHistoryCopy.peak` prints, with the arrow in tertiary), cost today when today's Usage can
-attribute it to that provider, and the reset time — the same reset copy the Quota header uses, or
-the local clock time when that reset has already passed. The panel's
-`Today: 3 windows · 82% / 40% / 12%` sentence stays on Overview; Usage lays those facts in columns
-for the Today period. A provider or window with no sample today is omitted. The Rhythm card is the
-hourly strip for the same period.
+Under the controls, in order:
 
-When this Mac has a monthly budget, a **Monthly budget** card sits above the summary with a
-progress bar, one line of `spent / budget · percent`, and a basis line: **Account spend this month**
-when signed in, **This Mac** when signed out. Signed in, the bar measures the Account calendar
-month (`usage_period` with `source: account`); signed out, this Mac's hours. The amount is set in
-Notifications settings and follows the Account when signed in
-([ADR 0061](../../docs/decisions/0061-alert-policy-and-the-budget-follow-the-account.md)).
-
-The default page contains:
-
-- Summary: three stat tiles in a row — Tokens, Cost, and Cache hit — each a card with a 28pt
-  semibold rounded numeral, a small label, and `saved $X.XX` as the Cache hit caption when the
-  period's cache reads could be priced (nothing under it when they could not)
-  ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)). The six token and message
-  metrics follow in their own Summary card as a three-column grid. Headline values use the
-  primary text tone; grid labels stay muted while their values use the secondary tone. Values use
-  `UsageValueFormatter`.
-- Daily, for This Mac and for any period but All, in its own card: one Swift Charts `BarMark` per
-  local day of cost, using the ADR 0036 `days[]` fold as received — the view does not fold again.
-  Empty and unpriced days follow **An empty day is a tick, not a bar** in
-  [Shared product vocabulary](../../docs/design.md#shared-product-vocabulary).
-  The last seven of those days follow as `date` / `tokens · cost` rows. Omit the section when the
-  period reported nothing. All has no Daily section: its per-day shape is the Account's activity
-  chart.
-- Models, in its own card: grouped by the vendor whose model it is — the service resolves that from
-  the model's name — independent of the collecting client and of who billed the request. A **Top
-  models** list of the three largest leads the section when there is more than one, each as
-  `share · tokens`. Each provider heading is followed by a 4pt share bar and its whole-percent
-  share of the period. Every model remains a static single row ending in `tokens · cost · share`
-  when priced, or `tokens · share` when unpriced.
-- Rhythm, for This Mac and for Account, and for any period but All, in its own card: 24 bars at
-  36pt, one per hour of the local clock, then Morning / Afternoon / Evening / Night, each as a
-  whole-percent share. Omit the section when every hour is empty. Account hours come from
-  `GET /api/v6/account/usage/activity?from&to&detail=hours&tz=` in this Mac's zone
+- **Usage by model**, one card. Its head is the metric switch — **Tokens**, **API-equivalent
+  cost**, **Messages**, each a plain button carrying the period's value under its name, the
+  selected one in ink with a 2pt underline — and, when there is a river, a segmented **Amount /
+  Share**. Then the model river: Swift Charts `AreaMark` bands stacked from the bottom in the
+  series legend's order (largest first), 200pt tall, over every local date of the period, from
+  the period's `model_series` (This Mac folds its own hours the way Relay does; Account reads
+  `series=model`). Fills are `model.<provider>.<shade>` from one `ModelColorAssignment` made over
+  the Account's `all` period when this Mac reads the Account, otherwise over this Mac's `all`,
+  and `model.other` for the folded rest. The current day's span is hatched as in progress. An empty
+  day stays on the axis: in Amount the stack meets the baseline and a 2pt tick marks it; in Share
+  the areas break over it. In Cost mode a day whose cells could not be priced is a dashed tick,
+  never $0. Messages are counted per day but not per model, so **Messages** draws one ink stream
+  from `days[]`. Two or three value ticks, date ticks, and pointer selection showing the day's
+  total and its three largest models. VoiceOver reads it as one series per model in the selected
+  metric. A single-day period (Today) and `all` have no river. Then the model ledger: header
+  **MODEL · TOKENS · SHARE · CHANGE · FROM CACHE · COST** in tertiary caps, one row per model
+  merged across agents (`ModelLedger`) — a 10pt swatch, the model, the agents that sent it as a
+  meta line, then tokens, share, change of share against the previous period (**↑ 4 pts**,
+  **New**, **—**), cache hit, and compact cost — each row tinted by a bar of its value in the
+  selected metric at 16% of the model colour. Six rows, then **N more models · 1.2M tokens**,
+  which opens the rest in place. At accessibility sizes a row's cells wrap to one line under the
+  name. The previous period is the unit before a day, week, or month, the same number of days
+  before any other range, and nothing before `all`; it is one more `usage_period` read, and a
+  failed one leaves the column at **—**.
+- **Token mix**, one card: a 10pt bar of cache read (`chart.cache`), cache write
+  (`chart.cache_write`, omitted when nothing wrote), fresh input (`chart.input`), and output
+  (`label` at reduced opacity), then each part's percent, reasoning named inside output, and
+  **Cache saved $X** when the period's cache reads could be priced
   ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)).
+- When the selected period is **Today**, the per-window table that used to be its own page. One
+  `quotaCardSurface()` card, one row per provider × window that had samples today, 36pt tall. The
+  header row is tertiary caps. Columns: window (catalog provider name · window title), used
+  percent at the start of the local day → now (`12% → 47%`, the same whole percents
+  `QuotaHistoryCopy.peak` prints, with the arrow in tertiary), cost today when today's Usage can
+  attribute it to that provider, and the reset time — the same reset copy the Quota header uses, or
+  the local clock time when that reset has already passed. The panel's
+  `Today: 3 windows · 82% / 40% / 12%` sentence stays on Overview. A provider or window with no
+  sample today is omitted.
+- When this Mac has a monthly budget, a **Monthly budget** card with a progress bar, one line of
+  `spent / budget · percent`, and a basis line: **Account spend this month** when signed in,
+  **This Mac** when signed out. Signed in, the bar measures the Account calendar month
+  (`usage_period` with `source: account`); signed out, this Mac's hours. The amount is set in
+  Notifications settings and follows the Account when signed in
+  ([ADR 0061](../../docs/decisions/0061-alert-policy-and-the-budget-follow-the-account.md)).
 - Projects, in its own card: This Mac only, and only while **Group Usage by project** is on (an
   Account period carries no `projects` key at all — attribution never leaves the Mac that made it).
   A table of at most 50 repository basenames for the selected period, columns Project / Tokens /
   Cost, with the top model as a meta line under the name. Unattributed work and the overflow past
   50 share the row **Other**. Account Usage has no such section.
+- Rhythm, for This Mac and for Account, and for any period but All, in its own card: 24 bars at
+  36pt, one per hour of the local clock, then Morning / Afternoon / Evening / Night, each as a
+  whole-percent share. Omit the section when every hour is empty. Account hours come from
+  `GET /api/v6/account/usage/activity?from&to&detail=hours&tz=` in this Mac's zone
+  ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)).
 - Sessions, in its own card: This Mac's session files, independent of the Account / This Mac
   summary source. The section header trails `2 active · 14 today`. Each row is the agent mark, a
   basename project label, a relative age (`just now`, `3m ago`), and `tokens · cost` using the same
-  compact cost copy as Models. A session written in the last five minutes wears a 6pt accent dot on
-  the mark. At most 20 rows, newest write first. An empty list says **No sessions in the last 90
-  days.**
+  compact cost copy as the ledger. A session written in the last five minutes wears a 6pt accent
+  dot on the mark. At most 20 rows, newest write first. An empty list says **No sessions in the
+  last 90 days.**
 
-Provider headings use the brand mark of the structured provider the service sent; the client never
-reads model text to pick one. Model rows have no repeated icon and align under the provider label. When no owned brand asset
-exists, use an honest semantic system symbol rather than another provider's logo. Approved
-monochrome brand assets come from the Lobe Icons source recorded in the bundled third-party notice.
-Every provider, regardless of model count, uses the same separate noninteractive heading with a 14pt
-provider icon. The Models surface has 8pt vertical insets, provider groups have 8pt between them, and
-each heading has 4pt before its compact static model rows; model rows also have 4pt between them.
-Model rows have no icons or disclosure controls and use regular secondary text. Each provider shows
-at most the first five models in the existing cost/tokens order. If the same provider/model pair
-appears through more than one client, append the client name only to disambiguate those rows.
+Models are never ranked across providers for colour, never mint, and carry no repeated brand
+mark: the swatch is the model's identity on this page.
 
 Dates, cost metadata, and how the prices were sourced are not separate default sections. Complete
 data shows no diagnostic copy. Partial collection produces one compact warning. An unavailable
@@ -309,8 +335,7 @@ summary cost uses `— unpriced`, while model rows omit unavailable cost entirel
 another alert. Technical detail remains available through Support.
 
 Usage counts use locale-aware decimal formatting below 1,000 and compact SI-style `k`, `M`, and `B`
-suffixes for larger values. Usage groups use priced-cost-first ordering, then fall back to tokens and
-name for stability.
+suffixes for larger values. Ledger rows are ordered by tokens, then model name.
 
 Compact cost copy is exact:
 
@@ -356,7 +381,7 @@ every OS. Views never branch on availability for chrome. Tahoe-only modifiers li
 | --- | --- | --- |
 | Main-window sidebar | System floating glass (`List` `.sidebar`) | Standard sidebar |
 | Toolbar groups | Glass capsules (`ToolbarSpacer`) | Same items, no spacers |
-| Quota / Usage cards, Usage stat tiles, Agents list groups | `quotaCardSurface()` opaque `surface.content`, 20pt continuous | Same |
+| Quota / Usage cards, Agents list groups | `quotaCardSurface()` opaque `surface.content`, 20pt continuous | Same |
 | Transient menus (Overview overflow, `QuotaChoiceMenu`, `QuotaSelectionPopup`, `QuotaConfirmationPopup`) | `quotaFloatingSurface()` glass, 14pt continuous | `quotaFloatingMenuSurface()` |
 | Panel background | Menu extra's system material | Same |
 | Settings Form pages | Grouped Form; no opaque page wash | Same |
@@ -374,8 +399,8 @@ keep at least 4.5:1 on both appearances against the card and floating surfaces. 
 darken or lighten that tone. Do not add a second palette.
 
 Quota and Usage are one column, max width 1040pt, centred, with 24pt gutters and 16pt
-between cards. Usage totals are three stat tiles (Tokens, Cost, Cache hit): a 28pt semibold
-rounded numeral and a small label. Dense tables stay dense and sit inside the card.
+between cards. Usage opens with the sentence header, not stat tiles. Dense tables stay dense and
+sit inside the card.
 
 ## Typography
 
@@ -395,7 +420,8 @@ names map onto them:
 | `meta` | 10pt regular | Age, state, and tertiary metadata |
 | `mono` / `monoMeta` | 11pt / 10pt | Commands and technical values |
 | `remainingValue` | 12pt medium | Remaining quota |
-| `statValue` | 28pt semibold rounded | Remaining % and Usage stat numerals on main-window cards |
+| `statValue` | 28pt semibold rounded | Remaining % on main-window Quota cards |
+| `sentence` | 17pt regular | The Usage page's sentence header |
 
 Dynamic Type scales semantic text roles. Utility symbols keep their optical sizes, while their hit
 targets stay at least 28pt. Technical strings and chevrons never receive primary-text emphasis.
@@ -546,8 +572,8 @@ Overview
 └── Provider (read-only quota)
 
 Main window
-├── Quota      (30-day window curves, pace phrase, reset, peak)
-├── Usage      (Account / This Mac; Day · Week · Month · 7D · 30D · All; Today period includes the per-window table)
+├── Quota      (tightest window + next resets; subscriptions; 30-day window curves, pace phrase, reset, peak)
+├── Usage      (sentence header; Account / This Mac; Day · Week · Month · 7D · 30D · All; model river, ledger, token mix; Today period includes the per-window table)
 └── Settings
     ├── Account (Devices on the same page)
     ├── Agents

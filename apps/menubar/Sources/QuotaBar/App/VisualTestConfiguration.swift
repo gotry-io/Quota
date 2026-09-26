@@ -254,17 +254,24 @@
 
     @MainActor
     private func seedAccountCustomPeriod(on model: MenuBarViewModel) {
-      guard let today = model.usage.usageDetail(source: .account, period: .today) else { return }
-      let days = today.usage.days?.filter { $0.date >= "2026-08-01" && $0.date <= "2026-08-03" }
+      guard let week = model.usage.usageDetail(source: .account, period: .last7Days) else {
+        return
+      }
+      let inRange = { (date: String) in date >= "2026-08-01" && date <= "2026-08-03" }
+      let days = week.usage.days?.filter { inRange($0.date) }
+      let series = week.usage.modelSeries.map {
+        UsageModelSeries(models: $0.models, days: $0.days.filter { inRange($0.date) })
+      }
       let detail = LocalServiceUsageDetail(
         range: UsageDateRange(from: "2026-08-01", to: "2026-08-03"),
         usage: LocalUsagePeriodSummary(
-          totals: today.usage.totals,
-          cost: today.usage.cost,
-          cacheSaved: today.usage.cacheSaved,
-          agents: today.usage.agents,
+          totals: week.usage.totals,
+          cost: week.usage.cost,
+          cacheSaved: week.usage.cacheSaved,
+          agents: week.usage.agents,
           days: days,
-          modelsTruncated: today.usage.modelsTruncated
+          modelSeries: series,
+          modelsTruncated: week.usage.modelsTruncated
         ),
         incomplete: false,
         detailsTruncated: false,
@@ -787,47 +794,22 @@
   }
 
   /// A managed period states totals and cost at the period and at the model leaf; the panel
-  /// folds what it shows in between.
+  /// folds what it shows in between. Five models from three providers, so the river and the
+  /// ledger show model colours in two shades of one family.
   private func visualAccountUsage() -> AccountUsage {
-    let totals = UsageSummaryTotals(
-      totalTokens: 1_704_620,
-      inputTokens: 1_420_500,
-      outputTokens: 284_120,
-      cacheReadInputTokens: 480_000,
-      cacheWriteInputTokens: 20_000,
-      reasoningTokens: 92_400,
-      messages: 164
-    )
-    let cost = UsageCostOutcome(
-      mode: .calculate,
-      basis: .calculated,
-      status: .partial,
-      amountMicrousd: "1489234",
-      catalogRevision: "pricing_2026_08_01",
-      calculatedRows: 2,
-      reportedRows: 0,
-      unpricedRows: 1,
-      assumptions: [.modelAlias],
-      unpriced: [
-        UsageUnpricedItem(
-          billingChannel: .anthropicDirect,
-          model: "claude-opus-4",
-          reason: .unknownModel,
-          rows: 1
-        )
-      ]
-    )
-    let model = { (name: String, provider: InferenceProvider, amount: String) in
-      UsageModelUsage(
+    let leaf = { (name: String, tokens: Int, amount: String) in
+      let input = tokens * 5 / 6
+      let output = tokens - input
+      return UsageModelUsage(
         model: name,
         totals: UsageSummaryTotals(
-          totalTokens: 852_310,
-          inputTokens: 710_250,
-          outputTokens: 142_060,
-          cacheReadInputTokens: 240_000,
-          cacheWriteInputTokens: 10_000,
-          reasoningTokens: 46_200,
-          messages: 82
+          totalTokens: tokens,
+          inputTokens: input,
+          outputTokens: output,
+          cacheReadInputTokens: input * 2 / 5,
+          cacheWriteInputTokens: input / 60,
+          reasoningTokens: output / 3,
+          messages: max(tokens / 10_400, 1)
         ),
         cost: UsageCostOutcome(
           mode: .calculate,
@@ -843,6 +825,65 @@
         )
       )
     }
+    let agents = [
+      UsageAgentUsage(
+        agent: .claudeCode,
+        providers: [
+          UsageProviderUsage(
+            provider: .anthropic,
+            models: [
+              leaf("claude-sonnet-4", 620_000, "812000"),
+              leaf("claude-opus-4", 240_000, "1210000"),
+            ]
+          )
+        ]
+      ),
+      UsageAgentUsage(
+        agent: .codex,
+        providers: [
+          UsageProviderUsage(
+            provider: .openai,
+            models: [leaf("gpt-5", 520_000, "640000"), leaf("gpt-5-mini", 180_000, "90000")]
+          )
+        ]
+      ),
+      UsageAgentUsage(
+        agent: .gemini,
+        providers: [
+          UsageProviderUsage(provider: .google, models: [leaf("gemini-2.5-pro", 144_620, "150000")])
+        ]
+      ),
+    ]
+    let leaves = agents.flatMap { $0.providers.flatMap(\.models) }
+    let sum = { (value: (UsageSummaryTotals) -> Int) in leaves.reduce(0) { $0 + value($1.totals) } }
+    let totals = UsageSummaryTotals(
+      totalTokens: sum(\.totalTokens),
+      inputTokens: sum(\.inputTokens),
+      outputTokens: sum(\.outputTokens),
+      cacheReadInputTokens: sum(\.cacheReadInputTokens),
+      cacheWriteInputTokens: sum(\.cacheWriteInputTokens),
+      reasoningTokens: sum(\.reasoningTokens),
+      messages: sum(\.messages)
+    )
+    let cost = UsageCostOutcome(
+      mode: .calculate,
+      basis: .calculated,
+      status: .partial,
+      amountMicrousd: "2902000",
+      catalogRevision: "pricing_2026_08_01",
+      calculatedRows: 5,
+      reportedRows: 0,
+      unpricedRows: 1,
+      assumptions: [.modelAlias],
+      unpriced: [
+        UsageUnpricedItem(
+          billingChannel: .anthropicDirect,
+          model: "claude-opus-4",
+          reason: .unknownModel,
+          rows: 1
+        )
+      ]
+    )
     let period = QuotaWire.UsagePeriod(
       totals: totals,
       cost: cost,
@@ -852,23 +893,7 @@
         unpricedRows: 0
       ),
       partial: true,
-      agents: [
-        UsageAgentUsage(
-          agent: .codex,
-          providers: [
-            UsageProviderUsage(provider: .openai, models: [model("gpt-5", .openai, "1200000")])
-          ]
-        ),
-        UsageAgentUsage(
-          agent: .claudeCode,
-          providers: [
-            UsageProviderUsage(
-              provider: .anthropic,
-              models: [model("claude-sonnet-4", .anthropic, "289234")]
-            )
-          ]
-        ),
-      ]
+      agents: agents
     )
     return AccountUsage(
       today: period,

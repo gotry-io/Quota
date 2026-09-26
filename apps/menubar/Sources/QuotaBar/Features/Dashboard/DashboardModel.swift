@@ -240,7 +240,8 @@ final class DashboardModel {
     let source = presentedUsageSource
     let selection = usage.usagePeriod
     let detail = usage.usageDetail(source: source, selection: selection)
-    let presented = detail.map { presentedUsage(from: $0, source: source) }
+    let previous = usage.previousUsageDetail(source: source, selection: selection)
+    let presented = detail.map { presentedUsage(from: $0, previous: previous, source: source) }
     return DashboardUsagePresentation(
       source: source,
       refreshWarning: model.errorMessage,
@@ -250,11 +251,24 @@ final class DashboardModel {
       sessions: usage.localUsage?.sessions,
       isPreparing: usage.isPreparingUsage(source: source) || usage.customUsageLoading,
       title: usage.usagePeriodTitle(now: now),
+      periodPhrase: UsageSentence.periodPhrase(for: selection, title: usage.usagePeriodTitle(now: now)),
+      today: UsageDateText.date(now),
+      colors: modelColors,
       available: usage.usagePeriodIsAvailable(source: source, selection: selection),
       budget: usage.budgetProgress,
       budgetBasis: usage.budget.isSet ? usage.budgetMeasuringBasis : nil,
       showsProjects: showsUsageProjects
     )
+  }
+
+  /// The one model-colour assignment the Usage page makes (ADR 0064): ranked over the Account's
+  /// `all` period when this Mac reads the Account, otherwise over this Mac's own.
+  var modelColors: ModelColorAssignment {
+    let all =
+      (model.accountFlow.accountSummary != nil
+        ? usage.usageDetail(source: .account, period: .all) : nil)
+      ?? usage.usageDetail(source: .local, period: .all)
+    return all.map { ModelColorAssignment(all: $0.usage.agents.modelLeaves) } ?? .empty
   }
 
   func refresh() {
@@ -523,24 +537,24 @@ final class DashboardModel {
 
   private func presentedUsage(
     from detail: LocalServiceUsageDetail,
+    previous: LocalServiceUsageDetail?,
     source: UsageSource
   ) -> DashboardPresentedUsage {
     let usage = detail.usage
-    let models = usage.agents.flatMap { agent in
-      agent.providers.flatMap { provider in
-        provider.models.map {
-          DashboardPresentedUsageModel($0, provider: provider.provider, agent: agent.agent)
-        }
-      }
-    }
     return DashboardPresentedUsage(
-      totals: DashboardPresentedUsageTotals(usage.totals),
+      range: detail.range,
+      totals: usage.totals,
       cost: usage.cost,
       cacheSaved: usage.cacheSaved,
       cacheHitBasisPoints: usage.cacheHitBasisPoints,
       days: usage.days,
       hoursOfDay: usage.hoursOfDay,
-      models: models,
+      modelSeries: usage.modelSeries,
+      ledger: ModelLedger.rows(
+        usage.agents.modelLeaves,
+        previous: previous?.usage.agents.modelLeaves
+      ),
+      previousTotals: previous?.usage.totals,
       projects: source == .local && model.groupUsageByProject ? usage.projects : nil
     )
   }
@@ -588,6 +602,11 @@ struct DashboardUsagePresentation: Equatable {
   let sessions: LocalUsageSessions?
   let isPreparing: Bool
   let title: String
+  /// How the sentence header names the period: `in the last 30 days`, `this week`.
+  let periodPhrase: String
+  /// The reader's local date, which the model river draws as in progress.
+  let today: String
+  let colors: ModelColorAssignment
   let available: Bool
   let budget: UsageBudgetProgress?
   let budgetBasis: String?
@@ -595,63 +614,17 @@ struct DashboardUsagePresentation: Equatable {
 }
 
 struct DashboardPresentedUsage: Equatable {
-  let totals: DashboardPresentedUsageTotals
+  let range: UsageDateRange
+  let totals: UsageSummaryTotals
   let cost: UsageCostOutcome
   let cacheSaved: UsageCacheSaved
   let cacheHitBasisPoints: Int?
   let days: [LocalUsageDay]?
   let hoursOfDay: [LocalUsageHourOfDay]?
-  let models: [DashboardPresentedUsageModel]
+  let modelSeries: UsageModelSeries?
+  /// One row per model, merged across agents, with its change against the previous period.
+  let ledger: [ModelLedgerRow<BillingAgent>]
+  /// The previous period's totals once that read answered.
+  let previousTotals: UsageSummaryTotals?
   let projects: [LocalUsageProjectSummary]?
-}
-
-struct DashboardPresentedUsageTotals: Equatable {
-  let totalTokens: Int
-  let inputTokens: Int
-  let outputTokens: Int
-  let cacheReadInputTokens: Int
-  let cacheWriteInputTokens: Int
-  let reasoningTokens: Int
-  let messages: Int
-
-  init(_ totals: UsageSummaryTotals) {
-    totalTokens = totals.totalTokens
-    inputTokens = totals.inputTokens
-    outputTokens = totals.outputTokens
-    cacheReadInputTokens = totals.cacheReadInputTokens
-    cacheWriteInputTokens = totals.cacheWriteInputTokens
-    reasoningTokens = totals.reasoningTokens
-    messages = totals.messages
-  }
-}
-
-struct DashboardPresentedUsageModel: Equatable {
-  let provider: InferenceProvider?
-  let agent: BillingAgent?
-  let model: String
-  let totals: DashboardPresentedUsageTotals
-  let cost: UsageCostOutcome
-
-  var id: String {
-    "\(agent?.rawValue ?? "account"):\(provider?.rawValue ?? "unknown"):\(model)"
-  }
-
-  init(
-    _ model: LocalUsageModelSummary,
-    provider: InferenceProvider,
-    agent: BillingAgent
-  ) {
-    self.provider = provider
-    self.agent = agent
-    self.model = model.model
-    totals = DashboardPresentedUsageTotals(model.totals)
-    cost = model.cost
-  }
-}
-
-struct DashboardPresentedUsageProvider: Identifiable {
-  let provider: InferenceProvider?
-  let models: [DashboardPresentedUsageModel]
-
-  var id: String { provider?.rawValue ?? "unknown" }
 }

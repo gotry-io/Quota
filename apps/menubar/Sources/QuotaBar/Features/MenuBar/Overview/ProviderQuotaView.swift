@@ -245,9 +245,13 @@ struct QuotaWindowRow: View {
       }
 
       if window.showsPercentMeter {
-        QuotaRemainingMeter(value: window.remainingPercent, fill: meterColor)
-          .accessibilityLabel("Remaining quota")
-          .accessibilityValue(QuotaWindow.formattedPercent(window.remainingPercent))
+        QuotaRemainingMeter(
+          value: window.remainingPercent,
+          fill: meterColor,
+          evenPace: window.evenPaceTick(now: now, isStale: isStale)
+        )
+        .accessibilityLabel("Remaining quota")
+        .accessibilityValue(QuotaWindow.formattedPercent(window.remainingPercent))
       }
 
       if showsPaceLines, let history = window.history, !history.points.isEmpty {

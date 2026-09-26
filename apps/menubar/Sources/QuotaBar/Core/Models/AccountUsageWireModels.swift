@@ -321,7 +321,9 @@ struct LocalUsageHourOfDay: Codable, Equatable, Sendable {
 /// `days` and `hoursOfDay` describe a period bounded by two local midnights, so the three
 /// trailing periods carry them and `all` — every retained day — does not. `projects` is this
 /// Mac's attribution and stays on this Mac (ADR 0039): a period the Account read answers has no
-/// such key, which is different from a period this Mac attributed to no project.
+/// such key, which is different from a period this Mac attributed to no project. `modelSeries`
+/// is the period by local date and model — the Account period read's `model_series`, or the
+/// same fold of this Mac's hours — for a period bounded by two local midnights.
 struct LocalUsagePeriodSummary: Codable, Equatable, Sendable {
   let totals: UsageSummaryTotals
   let cost: UsageCostOutcome
@@ -330,6 +332,7 @@ struct LocalUsagePeriodSummary: Codable, Equatable, Sendable {
   let projects: [LocalUsageProjectSummary]?
   let days: [LocalUsageDay]?
   let hoursOfDay: [LocalUsageHourOfDay]?
+  let modelSeries: UsageModelSeries?
   let modelsTruncated: Bool?
 
   private enum CodingKeys: String, CodingKey {
@@ -340,6 +343,7 @@ struct LocalUsagePeriodSummary: Codable, Equatable, Sendable {
     case projects
     case days
     case hoursOfDay
+    case modelSeries
     case modelsTruncated
   }
 
@@ -372,6 +376,7 @@ struct LocalUsagePeriodSummary: Codable, Equatable, Sendable {
     projects: [LocalUsageProjectSummary]? = nil,
     days: [LocalUsageDay]? = nil,
     hoursOfDay: [LocalUsageHourOfDay]? = nil,
+    modelSeries: UsageModelSeries? = nil,
     modelsTruncated: Bool? = nil
   ) {
     self.totals = totals
@@ -381,13 +386,14 @@ struct LocalUsagePeriodSummary: Codable, Equatable, Sendable {
     self.projects = projects
     self.days = days
     self.hoursOfDay = hoursOfDay
+    self.modelSeries = modelSeries
     self.modelsTruncated = modelsTruncated
   }
 
   init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
       "totals", "cost", "cacheSaved", "agents", "projects", "days", "hoursOfDay",
-      "modelsTruncated",
+      "modelSeries", "modelsTruncated",
     ])
     let container = try decoder.container(keyedBy: CodingKeys.self)
     totals = try container.decode(UsageSummaryTotals.self, forKey: .totals)
@@ -397,6 +403,7 @@ struct LocalUsagePeriodSummary: Codable, Equatable, Sendable {
     projects = try container.decodeIfPresent([LocalUsageProjectSummary].self, forKey: .projects)
     days = try container.decodeIfPresent([LocalUsageDay].self, forKey: .days)
     hoursOfDay = try container.decodeIfPresent([LocalUsageHourOfDay].self, forKey: .hoursOfDay)
+    modelSeries = try container.decodeIfPresent(UsageModelSeries.self, forKey: .modelSeries)
     modelsTruncated = try decodeTrueMarker(.modelsTruncated, from: container)
     guard isValid else {
       throw DecodingError.dataCorruptedError(
