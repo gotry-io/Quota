@@ -137,9 +137,20 @@ Header:
 - Title is **Quota** in every phase. Account identity lives in Settings; the body does not
   repeat it. The navigation title stays large.
 - `.navigationSubtitle` under it is the canonical freshness line: **Updating…** while a refresh
-  runs — **Updating… 2 of 3** once one of several reads has answered — and otherwise the shared
-  **Updated** age of the readings on screen (`QuotaFormat.updated`). Nothing is said before
-  anything has been read.
+  runs — **Updating… 2 of 3** once one of several reads has answered — then **Asking your Mac…**
+  (**Asking your Macs…** when the old readings came from more than one Mac) while the phone waits
+  on a collection request, and otherwise the shared **Updated** age of the readings on screen
+  (`QuotaFormat.updated`). Nothing is said before anything has been read.
+- Collection request ([ADR 0063](../../docs/decisions/0063-collection-follows-demand-and-activity.md)):
+  on a cold launch, a return to the foreground, or a pull to refresh / the refresh button, a
+  signed-in phone whose summary shows a subscription with its newest Mac reading older than two
+  minutes or its provider's catalog floor (`collection.min_interval_seconds`, generated into
+  `ProviderID.minCollectionInterval`), whichever is longer, sends one `POST /api/v6/account/collection-request`. It then re-reads the summary
+  (conditional GET) every 20 seconds for up to three minutes, and stops as soon as every
+  subscription it asked about has a Mac reading at or after the `requested_at` Relay answered,
+  when the app goes to the background, or on sign-out. One wait at a time. Only a Mac's reading
+  is judged — never this phone's own or another iPhone's. A 404 (a Relay without the route), a
+  429, and a timeout all end silently: the subtitle goes back to **Updated**, with no banner.
 - A trailing toolbar button, `arrow.clockwise` (**Refresh**, `overview.refresh`), runs the same
   refresh as pull to refresh. While a refresh runs it shows a small `ProgressView` in its place
   and is disabled.
@@ -734,6 +745,7 @@ Rules:
 | Launch | The 108-point Quota mark on `LaunchBackground`: faint track, ring fills, slight scale-up and fade into the tabs; at most 0.8 s, never waiting on the network |
 | First refresh, no cache | Overview placeholder cards (one per provider session, or two for the Account alone), subtitle **Updating…**, refresh button busy |
 | Refresh running, content on screen | Last-good content; subtitle **Updating…** (**Updating… 2 of 3**); refresh button busy; a card still waiting shows a mini spinner in its chevron's place |
+| Waiting on the Macs | Last-good content; subtitle **Asking your Mac…** / **Asking your Macs…**; refresh button available. No error on timeout |
 | Empty quota, with an account | **See quota on this iPhone** with **Set up QuotaBar on a Mac to start reporting, or connect a provider to read it on this iPhone.** and a full-width `.borderedProminent` **Connect a provider** |
 | Empty Today | The compact Today row with **No usage today.** |
 | Empty Usage period | `ContentUnavailableView` **No usage** / **No usage was reported for this period.** |
@@ -920,6 +932,7 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 --visual-fixture loading
 --visual-fixture launch
 --visual-fixture updating
+--visual-fixture asking-mac
 --visual-fixture content
 --visual-fixture cached-error
 --visual-fixture empty
@@ -947,6 +960,7 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 | `loading` | No account, two provider sessions, nothing read yet, first refresh running: two placeholder cards, **Updating…**, refresh button busy |
 | `launch` | The `content` Overview under the launch overlay, its mark held still; `--launch-progress <0…1>` picks how far the fill has come (default 0.5; 0 is the faint track alone, 1 is filled) |
 | `updating` | The `content` account with a refresh running: **Updating… 2 of 3**, refresh button busy, Claude's card waiting with a mini spinner |
+| `asking-mac` | The `content` account read 20 s ago with its old Mac readings asked for: subtitle **Asking your Mac…**, refresh button available |
 | `content` | Signed-in Overview with synthetic Codex / Claude / Grok windows and Today values. Claude has a last-good `minor` status-page reading (**Partial System Outage**), so the row shows the 8pt incident dot. Codex reports from two devices so subscription detail can show per-device readings, and its Reset Credits window lists two of its three credits expiring in 27 days; Usage has four periods with increasing totals, one provider group of more than five models, and an in-memory Activity heatmap of the last 365 UTC days |
 | `cached-error` | Same content plus **Showing saved data. Couldn't refresh.** |
 | `empty` | Signed-in Overview with empty quota and **No usage today.** Devices remain so Mac setup does not occupy this screen. Usage of every period is **No usage** / **No usage was reported for this period.** Activity is **No activity in the last year.** |

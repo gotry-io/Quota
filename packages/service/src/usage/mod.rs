@@ -34,6 +34,7 @@ pub use project::{
     cwd_from_value, project_key_from_cwd, project_key_from_encoded_dir,
     project_key_from_source_path,
 };
+pub(crate) use scan::roots_for;
 pub use scan::{
     DEFAULT_PARSER_REVISION, UsageScanOptions, discover_usage_files, scan_local_usage,
     session_project_key,

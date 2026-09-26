@@ -671,15 +671,21 @@ otherwise.
 **General** is a Settings-group page: **Launch at Login**, **Open window at launch** (toggle,
 default off; hint **Show the QuotaBar window when you open the app**), **Show in Dock** (toggle,
 default off; hint **Keep QuotaBar in the Dock when its window is closed**; off is menu-bar-only
-except while the main window is open), **Refresh Interval** (Picker, 1, 2, 5, 10,
-or 15 minutes, default 5, applies immediately), **Upload Usage to Account** (the existing
+except while the main window is open), **Refresh Interval** (Picker: **Automatic**, then 1, 2, 5,
+10, or 15 minutes; default Automatic; applies immediately. Under Automatic a caption names what it
+is doing now, from the helper's `quota_refresh_tier`: **Automatic · every 1 min while Codex is
+active**, **Automatic · every 1 min while Claude Code is running low**, **Automatic · every 5 min**,
+or **Automatic · every 10 min while idle**; no caption until the helper has judged its providers),
+**Upload Usage to Account** (the existing
 `usageUploadEnabled` switch), **Group Usage by project**, **Share quota history across your
 devices** (off until the Account document says otherwise; disabled until signed in; footnote
 *Uploads this device's readings from the last 30 days, and new ones, to your Account. Turning it
 off deletes them from the Account.* Under it, the helper's `history_sync` line: **Last uploaded
 3m ago**, or the last error), and **Reset Local Data**. Refresh Interval
-is how often this Mac collects provider quota; Account summary still polls every minute, and a
-window reset can collect quota once before the next interval. Reset Local Data always confirms first
+is how often this Mac collects provider quota, per provider under Automatic and never faster than
+each provider's floor ([Cadence](../../docs/provider-collection.md#cadence)); Account summary still
+polls every minute, a window reset can collect quota once before the next interval, and a
+collection another device asks for runs at once. Reset Local Data always confirms first
 and says plainly that collected quota and Usage history are deleted and rebuilt and that the person
 stays signed in. That confirmation is a system dialog on the main window.
 

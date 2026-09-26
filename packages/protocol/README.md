@@ -33,6 +33,12 @@ shape of a released contract still moves its version.
   other unit; a reader takes the items it can read without judging them against the window.
   Relay validates uploads strictly, so a Relay that knows `expiries` ships before a client that
   sends it.
+- `CollectionRequest` / `CollectionRequestResponse` are `POST /api/v6/account/collection-request`:
+  a body of `protocol_version` alone, answered with `requested_at` and `accepted`. The summary's
+  `collection_requested_at` (RFC3339 or `null`) is the Account's newest accepted request; a reader
+  takes it as optional because a Relay that predates it does not send it
+  ([ADR 0063](../../docs/decisions/0063-collection-follows-demand-and-activity.md)). Both are
+  cases in `fixtures/wire-conformance.json`.
 - Pricing schemas and pure calculation code do not contain a canonical price catalog. The managed
   Relay supplies the validated catalog used by clients.
 - `fixtures/pricing-conformance.json` is the language-neutral pricing validation, resolution, and

@@ -8,7 +8,7 @@ use rusqlite::{Connection, params};
 
 use crate::state::StateError;
 
-const CURRENT_SCHEMA: i64 = 8;
+const CURRENT_SCHEMA: i64 = 9;
 
 /// Applies the schema, starting the change counter at `revision_floor`.
 ///
@@ -41,6 +41,7 @@ pub fn apply(conn: &mut Connection, revision_floor: u64) -> Result<(), StateErro
             6 => migration_v6(&tx)?,
             7 => migration_v7(&tx)?,
             8 => migration_v8(&tx)?,
+            9 => migration_v9(&tx)?,
             _ => return Err(StateError::InvalidState),
         }
         tx.execute(
@@ -499,6 +500,62 @@ fn migration_v8(tx: &rusqlite::Transaction<'_>) -> Result<(), StateError> {
     Ok(())
 }
 
+/// A collection another client asked for is a trigger of its own, and a provider's 429 is a code
+/// of its own (ADR 0063). SQLite cannot widen a CHECK in place either, so the table is rebuilt with
+/// every row it holds.
+fn migration_v9(tx: &rusqlite::Transaction<'_>) -> Result<(), StateError> {
+    tx.execute_batch(
+        "ALTER TABLE diagnostic_attempts RENAME TO diagnostic_attempts_v7;
+         CREATE TABLE diagnostic_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            parent_refresh_id INTEGER REFERENCES diagnostic_attempts(id) ON DELETE SET NULL,
+            kind TEXT NOT NULL CHECK (kind IN (
+                'refresh', 'quota_collection', 'usage_scan', 'usage_upload',
+                'quota_upload', 'account_sync', 'pricing_refresh'
+            )),
+            trigger TEXT NOT NULL CHECK (trigger IN (
+                'manual', 'scheduled', 'startup', 'recheck', 'settings_change', 'account_change',
+                'demand'
+            )),
+            subject TEXT CHECK (subject IS NULL OR (
+                length(subject) BETWEEN 7 AND 96
+                AND (subject LIKE 'provider:%' OR subject LIKE 'agent:%')
+                AND subject NOT GLOB '*[^a-z0-9_:]*'
+            )),
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            duration_ms INTEGER CHECK (duration_ms IS NULL OR duration_ms BETWEEN 0 AND 86400000),
+            outcome TEXT CHECK (outcome IS NULL OR outcome IN (
+                'success', 'partial', 'no_work', 'failed', 'interrupted', 'cancelled'
+            )),
+            code TEXT CHECK (code IS NULL OR code IN (
+                'process_interrupted', 'cancelled', 'no_work', 'authentication_required',
+                'network_error', 'unavailable', 'invalid_response', 'invalid_state',
+                'provider_error', 'access_denied', 'client_upgrade_required',
+                'partial_source', 'malformed_data',
+                'truncated_active_source',
+                'device_deleted', 'rate_limited'
+            ))
+         );
+         INSERT INTO diagnostic_attempts(
+            id, parent_refresh_id, kind, trigger, subject, started_at, completed_at,
+            duration_ms, outcome, code
+         )
+         SELECT id, parent_refresh_id, kind, trigger, subject, started_at, completed_at,
+                duration_ms, outcome, code
+         FROM diagnostic_attempts_v7
+         ORDER BY id;
+         DROP TABLE diagnostic_attempts_v7;
+         CREATE INDEX diagnostic_attempts_recent_idx
+            ON diagnostic_attempts(started_at DESC, id DESC);
+         CREATE INDEX diagnostic_attempts_parent_idx
+            ON diagnostic_attempts(parent_refresh_id, id);
+         CREATE INDEX diagnostic_attempts_kind_idx
+            ON diagnostic_attempts(kind, subject, id DESC);",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -794,6 +851,35 @@ mod tests {
             columns.first().map(String::as_str),
             Some("subscription_key")
         );
+    }
+
+    /// A v8 journal keeps its rows and gains the demand trigger and the rate-limited code.
+    #[test]
+    fn a_cache_below_v9_keeps_its_journal_and_accepts_demand_and_rate_limited() {
+        let mut conn = Connection::open_in_memory().expect("memory");
+        apply(&mut conn, 0).expect("schema");
+        conn.execute_batch(
+            "DELETE FROM schema_migrations WHERE version = 9;
+             INSERT INTO diagnostic_attempts(kind, trigger, started_at, outcome)
+             VALUES ('refresh', 'scheduled', '2026-09-25T00:00:00Z', 'success');",
+        )
+        .expect("v8 image");
+        apply(&mut conn, 0).expect("upgrade");
+        conn.execute(
+            "INSERT INTO diagnostic_attempts(kind, trigger, subject, started_at, outcome, code)
+             VALUES ('quota_collection', 'demand', 'provider:claude', '2026-09-26T00:00:00Z',
+                     'failed', 'rate_limited')",
+            [],
+        )
+        .expect("demand and rate_limited fit the journal");
+        let triggers: Vec<String> = conn
+            .prepare("SELECT trigger FROM diagnostic_attempts ORDER BY id")
+            .expect("select")
+            .query_map([], |row| row.get(0))
+            .expect("rows")
+            .collect::<Result<_, _>>()
+            .expect("triggers");
+        assert_eq!(triggers, ["scheduled", "demand"]);
     }
 
     #[test]

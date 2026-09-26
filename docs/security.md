@@ -107,6 +107,15 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
 - QuotaBar keeps no second report cache. Component state may carry masked provider labels,
   normalized quota, Usage totals, display metadata, and cost coverage, but no secret or raw source
   metadata, and account tokens never cross IPC.
+- Collection cadence ([ADR 0063](decisions/0063-collection-follows-demand-and-activity.md)) reads
+  local agent logs only for their modification times, never their contents, and keeps per provider
+  in `cache.sqlite` metadata only when it last asked, a 429 backoff's end, the end of the day-long
+  raised floor that 429 earned, and the irreversible account fingerprint both were earned on. From Claude Code's global config
+  (`~/.claude.json`, or `$CLAUDE_CONFIG_DIR/.claude.json`) the Claude collector decodes the single
+  key `cachedUsageUtilization` — usage percentages, reset instants, a fetch time, and Claude Code's
+  account UUID — and nothing else; it is used for one reading and never stored. The Claude profile
+  (email, organization, account UUID) is held in process memory for at most 24 hours against a
+  SHA-256 digest of the access token it was read with, and never persisted.
 - QuotaBar's notification dedup file (`Application Support/QuotaBar/notification-state.json`) holds
   only subscription selectors and remaining percents, never credentials.
 
@@ -267,6 +276,22 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   `history.sync` (default false). Omitted from a PUT means unchanged. `true → false` deletes every
   `quota_history` row of the Account in the same transaction
   ([ADR 0062](decisions/0062-quota-history-may-follow-the-account.md)).
+
+## Collection requests
+
+- `POST /api/v6/account/collection-request` lets any session that may read the summary
+  (`account:read`: a Device session, the iOS read-only session, or the browser cookie) ask this
+  Account's Macs to collect now
+  ([ADR 0063](decisions/0063-collection-follows-demand-and-activity.md)). A browser also presents
+  the exact same-origin `Origin` and same-origin Fetch Metadata when present, so a cross-site form
+  cannot spend the Account's provider requests. The body is `protocol_version` alone and is
+  refused with any other key, so a caller cannot name a provider, device, or reason.
+- Relay stores one instant, `accounts.collection_requested_at`, and calls no provider. A request
+  within 60 seconds of the stored one is folded into it, and each session may make 30 requests per
+  10 minutes (rate limit keyed on the session id, hashed like every other limit key). The Macs
+  bound what a request can cost a provider: each provider's floor, backoff, and the ten-minute
+  expiry of a request apply to a demand collection exactly as to a timed one. The column is
+  deleted with the Account row.
 
 ## Upload, Usage, and deletion safety
 

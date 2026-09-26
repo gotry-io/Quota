@@ -41,7 +41,8 @@ worker. Install Chromium with
 (overview), `/my/usage`, `/my/devices`, and `/my/settings`. When the session is on `/my`, the site
 header carries that nav (Overview / Usage / Devices / Settings) and an account menu with a
 first-letter mark, login, Settings, and Sign out. Each `/my` page has one `h1` (the page name).
-Overview's status line is `Latest quota updated <age> · <n> devices reporting`; Usage shows the
+Overview's status line is `Latest quota updated <age> · <n> devices reporting`, or **Asking your
+Mac…** / **Asking your Macs…** while it waits on a collection request (below); Usage shows the
 selected period and partial state; Devices uses the Devices summary. Unsigned visits to any of
 them — and to `/my/subscriptions/<sel>` — are a server redirect home. Every page requires a session;
 Quota Web publishes no account data anonymously. `/app` shipped in 0.0.4, so it and anything under
@@ -69,6 +70,17 @@ paint. Usage calls `ensureActivity()` when that route is entered; the activity r
 at access time and the cache key changes at the UTC day boundary. Each tab reads that store: a
 second visit within 60 s is a cache hit (stale-while-revalidate, in-flight dedup), not a new
 request. Switching the Usage period recomputes from the summary and does not refetch.
+
+Overview asks the Account's Macs for a fresh reading
+([ADR 0063](../../docs/decisions/0063-collection-follows-demand-and-activity.md)): when it opens, and
+when its tab becomes visible again (after re-reading the summary), a subscription whose newest Mac
+reading is older than two minutes or its provider's catalog floor
+(`collection.min_interval_seconds`), whichever is longer, sends one `POST /api/v6/account/collection-request`
+(`{"protocol_version":6}`, the cookie session and the browser's same-origin `Origin`). The summary is
+then re-read (conditional GET) every 30 seconds for up to three minutes, stopping once every
+subscription asked about has a Mac reading at or after the `requested_at` Relay answered, when the
+tab is hidden, or when Overview is left. One wait at a time; a 404, a 429, or a timeout is silent.
+The rule and the follow-up live in `src/lib/collection-demand.ts`.
 
 It then renders what Relay resolved: `subscriptions[]` as one card per subscription, whichever of
 Today, the last 7 days, the last 30 days, or all time is selected, and a year of daily totals from

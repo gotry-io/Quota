@@ -39,6 +39,7 @@ use crate::providers::common::{
 use crate::providers::grok;
 use crate::providers::{self, CollectionContext};
 use crate::relay::{AccountManager, RelayClient};
+use crate::service::cadence::{self, CadenceRecords, GateInput};
 use crate::service::{BackendError, LocalBackend, LoginOutcome, RefreshOutcome, RefreshSink};
 use crate::state::{
     DiagnosticAttemptCompletion, DiagnosticAttemptHandle, QuotaSamplesBySubscription, StateStore,
@@ -187,6 +188,7 @@ fn diagnostic_attempt_code_wire(value: DiagnosticAttemptCode) -> &'static str {
         DiagnosticAttemptCode::MalformedData => "malformed_data",
         DiagnosticAttemptCode::TruncatedActiveSource => "truncated_active_source",
         DiagnosticAttemptCode::DeviceDeleted => "device_deleted",
+        DiagnosticAttemptCode::RateLimited => "rate_limited",
     }
 }
 
@@ -280,6 +282,8 @@ pub struct NativeBackend {
     environment: HashMap<String, String>,
     client_name: String,
     client_version: String,
+    /// The Claude collector's memory across refreshes; see [`CollectionContext::claude_memo`].
+    claude_memo: Arc<std::sync::Mutex<claude::Memo>>,
     /// Held closed by a test in front of provider collection, so a refresh can be observed
     /// while collection is provably still running.
     #[cfg(test)]
@@ -379,6 +383,7 @@ impl NativeBackend {
             environment: std::env::vars().collect(),
             client_name: client_name.to_owned(),
             client_version: client_version.to_owned(),
+            claude_memo: Default::default(),
             #[cfg(test)]
             collection_gate: None,
             #[cfg(test)]
@@ -433,12 +438,119 @@ impl NativeBackend {
         }
     }
 
-    /// Collect provider quota without Usage, pricing, account synchronization, or uploads.
+    /// One collection pass over `candidates`, folded into the readings this Mac already holds.
     ///
-    /// This is the local-only path used by diagnostic/status callers.  Full refresh remains the
-    /// only path that performs account synchronization and outbox work.
-    pub fn collect_quota(&self, cancel: Arc<AtomicBool>) -> Result<Value, BackendError> {
-        self.collect_quota_for(ProviderId::ALL, cancel, false)
+    /// The cadence gate decides which candidates are actually asked: the provider's floor, a 429
+    /// it is waiting out, and another Mac's fresh reading of the same account each say no, and a
+    /// manual refresh waits out only a minute (ADR 0063). A provider that was not asked, or that
+    /// answered 429, keeps the reading it had.
+    fn collect_quota_pass(
+        &self,
+        candidates: &[ProviderId],
+        manual: bool,
+        cancel: Arc<AtomicBool>,
+        bypass_renewal_floor: bool,
+    ) -> Result<QuotaPass, BackendError> {
+        let previous = self
+            .state
+            .component(crate::protocol::ComponentName::Quota)
+            .ok()
+            .flatten()
+            .and_then(|component| component.value);
+        let account = self
+            .state
+            .component(crate::protocol::ComponentName::Account)
+            .ok()
+            .flatten()
+            .and_then(|component| component.value);
+        let summary = account
+            .as_ref()
+            .and_then(|account| account.get("account_summary"));
+        let device_id = account
+            .as_ref()
+            .and_then(|account| account.get("device_id"))
+            .and_then(Value::as_str);
+        let now = Utc::now();
+        let mut records: CadenceRecords = self
+            .state
+            .provider_cadence()
+            .ok()
+            .flatten()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default();
+        let collect = cadence::gate(candidates, manual, now, |provider| {
+            let accounts = cadence::accounts(previous.as_ref(), provider);
+            GateInput {
+                record: records.get(provider.as_str()),
+                account: cadence::backoff_account(&accounts),
+                read_elsewhere: cadence::read_elsewhere(
+                    summary, provider, &accounts, device_id, now,
+                ),
+            }
+        });
+        let fresh = if collect.is_empty() {
+            None
+        } else {
+            Some(self.collect_quota_for(&collect, cancel, bypass_renewal_floor)?)
+        };
+        for result in fresh
+            .as_ref()
+            .and_then(|fresh| fresh.get("results"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let Some(provider) = result
+                .get("provider")
+                .and_then(Value::as_str)
+                .and_then(ProviderId::parse)
+            else {
+                continue;
+            };
+            let asked = result
+                .get("sources")
+                .and_then(Value::as_array)
+                .is_some_and(|sources| !sources.is_empty());
+            let record = records.entry(provider.as_str().to_owned()).or_default();
+            if asked {
+                record.last_attempt_at = Some(now);
+            }
+            if let Some(limited) = result.get(RATE_LIMITED_MARKER) {
+                let account =
+                    cadence::backoff_account(&cadence::accounts(previous.as_ref(), provider));
+                record.backoff = Some(cadence::backoff_after_429(
+                    record.backoff.as_ref(),
+                    &account,
+                    limited.get("retry_after_seconds").and_then(Value::as_u64),
+                    now,
+                ));
+                record.raised_floor = Some(cadence::raised_floor_after_429(&account, now));
+            } else if result.get("outcome").and_then(Value::as_str) == Some("success") {
+                record.backoff = None;
+            }
+        }
+        if fresh.is_some()
+            && let Ok(encoded) = serde_json::to_string(&records)
+        {
+            let _ = self.state.write_provider_cadence(&encoded);
+        }
+        let merged = merge_quota_reports(previous.as_ref(), fresh.as_ref());
+        Ok(QuotaPass {
+            merged,
+            fresh: fresh.map(|mut fresh| {
+                for result in fresh
+                    .get_mut("results")
+                    .and_then(Value::as_array_mut)
+                    .into_iter()
+                    .flatten()
+                {
+                    if let Some(object) = result.as_object_mut() {
+                        object.remove(RATE_LIMITED_MARKER);
+                    }
+                }
+                fresh
+            }),
+        })
     }
 
     /// Discover providers through the same provider-owned credential paths used for collection.
@@ -1402,6 +1514,10 @@ impl NativeBackend {
                 let access_denied =
                     result.get("access_denied").and_then(Value::as_bool) == Some(true);
                 match result_outcome {
+                    _ if result.get(RATE_LIMITED_MARKER).is_some() => (
+                        DiagnosticAttemptOutcome::Failed,
+                        Some(DiagnosticAttemptCode::RateLimited),
+                    ),
                     // A refusal reads as unavailable to every other device, and names itself
                     // here, because only this Mac can act on it.
                     _ if access_denied => (
@@ -1639,6 +1755,7 @@ impl NativeBackend {
                 .flatten()
                 .and_then(|raw| serde_json::from_str(&raw).ok())
                 .unwrap_or_default(),
+            claude_memo: self.claude_memo.clone(),
         })
     }
 
@@ -2914,6 +3031,59 @@ fn prune_overview_pins(items: &[QuotaOverviewItem], pins: &mut HashMap<String, S
     });
 }
 
+/// The key a rate-limited result carries inside one collection pass, and never beyond it.
+const RATE_LIMITED_MARKER: &str = "rate_limited";
+
+/// One collection pass: every reading this Mac holds, and what the pass itself collected.
+struct QuotaPass {
+    /// The previous report with this pass's results folded in; what the Quota component holds.
+    merged: Value,
+    /// What this pass asked for and got, if it asked anything.
+    fresh: Option<Value>,
+}
+
+/// The previous report with `fresh` folded in, in catalog order.
+///
+/// A provider this pass did not ask keeps its result. One that answered 429 keeps its last
+/// reading too, so a backoff shows that reading with its age rather than an error.
+fn merge_quota_reports(previous: Option<&Value>, fresh: Option<&Value>) -> Value {
+    fn result_for(report: Option<&Value>, provider: ProviderId) -> Option<&Value> {
+        report
+            .and_then(|report| report.get("results"))
+            .and_then(Value::as_array)
+            .and_then(|results| {
+                results.iter().find(|result| {
+                    result.get("provider").and_then(Value::as_str) == Some(provider.as_str())
+                })
+            })
+    }
+    let results = ProviderId::ALL
+        .iter()
+        .filter_map(|provider| match result_for(fresh, *provider) {
+            Some(result) if result.get(RATE_LIMITED_MARKER).is_some() => {
+                result_for(previous, *provider)
+                    .filter(|previous| array_len(Some(previous), "snapshots") > 0)
+                    .cloned()
+                    .or_else(|| {
+                        let mut result = result.clone();
+                        if let Some(object) = result.as_object_mut() {
+                            object.remove(RATE_LIMITED_MARKER);
+                        }
+                        Some(result)
+                    })
+            }
+            Some(result) => Some(result.clone()),
+            None => result_for(previous, *provider).cloned(),
+        })
+        .collect::<Vec<_>>();
+    let captured_at = fresh
+        .or(previous)
+        .and_then(|report| report.get("captured_at"))
+        .cloned()
+        .unwrap_or_else(|| Value::String(now_rfc3339()));
+    json!({"captured_at": captured_at, "results": results})
+}
+
 fn collect_discovered_jobs(
     discovered: &[(ProviderId, Vec<ProviderSession>)],
     configured: &HashSet<String>,
@@ -3261,6 +3431,12 @@ fn collect_discovered_provider(
             result["access_denied"] = json!(true);
             result["message"] = json!(access_denied_message(provider));
         }
+        // Consumed by the collection pass, which keeps the previous reading and backs off; it
+        // never leaves the pass.
+        if failure.category == ErrorCategory::RateLimited {
+            result[RATE_LIMITED_MARKER] =
+                json!({"retry_after_seconds": failure.retry_after_seconds});
+        }
         result
     } else {
         json!({
@@ -3438,7 +3614,7 @@ impl LocalBackend for NativeBackend {
                     ErrorCode::AuthenticationRequired,
                     RecoveryAction::ConfigureProvider,
                 ),
-                ErrorCategory::Unavailable => {
+                ErrorCategory::Unavailable | ErrorCategory::RateLimited => {
                     IpcError::new(ErrorCode::NetworkError, RecoveryAction::Retry)
                 }
                 // A browser session is pasted in, never read from a credential store, so
@@ -3483,13 +3659,22 @@ impl LocalBackend for NativeBackend {
         let (quota, usage, read_account, quota_put, quota_accepted, quota_signed_out) =
             thread::scope(|scope| {
                 let quota_job = scope.spawn(|| {
-                    self.collect_quota_for(ProviderId::ALL, quota_cancel, bypass_renewal_floor)
+                    self.collect_quota_pass(
+                        ProviderId::ALL,
+                        bypass_renewal_floor,
+                        quota_cancel,
+                        bypass_renewal_floor,
+                    )
                 });
                 let usage_job = scope.spawn(|| self.collect_usage(usage_cancel));
                 let account_job = scope.spawn(|| self.read_account(cancel.as_ref(), updates));
-                let quota_result = quota_job
+                let (quota_result, fresh_quota) = match quota_job
                     .join()
-                    .unwrap_or_else(|_| Err(BackendError::unavailable()));
+                    .unwrap_or_else(|_| Err(BackendError::unavailable()))
+                {
+                    Ok(pass) => (Ok(pass.merged), pass.fresh),
+                    Err(error) => (Err(error), None),
+                };
                 updates.quota(match &quota_result {
                     Ok(value) => Ok(value.clone()),
                     Err(error) => Err(error.clone()),
@@ -3509,7 +3694,7 @@ impl LocalBackend for NativeBackend {
                     .join()
                     .unwrap_or_else(|_| Err(BackendError::unavailable()));
                 (
-                    quota_result,
+                    (quota_result, fresh_quota),
                     usage_result,
                     account_result,
                     quota_put,
@@ -3517,6 +3702,7 @@ impl LocalBackend for NativeBackend {
                     quota_signed_out,
                 )
             });
+        let (quota, fresh_quota) = quota;
         let cached_catalog = self
             .state
             .component(crate::protocol::ComponentName::Pricing)
@@ -3724,7 +3910,9 @@ impl LocalBackend for NativeBackend {
             )))
         });
         if let Ok(ref quota_payload) = quota_value {
-            self.record_quota_samples(quota_payload, Utc::now());
+            if let Some(fresh) = &fresh_quota {
+                self.record_quota_samples(fresh, Utc::now());
+            }
             if !cancel.load(Ordering::Acquire) {
                 self.account
                     .sync_quota_history_after_collection(cancel.as_ref());
@@ -3739,6 +3927,26 @@ impl LocalBackend for NativeBackend {
             pricing,
             overview,
         }
+    }
+
+    fn newest_agent_writes(
+        &self,
+        providers: &[ProviderId],
+        enough: DateTime<Utc>,
+    ) -> BTreeMap<ProviderId, DateTime<Utc>> {
+        providers
+            .iter()
+            .filter_map(|provider| {
+                let agent = cadence::activity_agent(*provider)?;
+                let newest = crate::service::activity::newest_write(
+                    agent,
+                    &self.home,
+                    &self.environment,
+                    enough,
+                )?;
+                Some((*provider, newest))
+            })
+            .collect()
     }
 
     fn refresh_account(
@@ -3762,6 +3970,7 @@ impl LocalBackend for NativeBackend {
         cancel: Arc<AtomicBool>,
         updates: &dyn RefreshSink,
         trigger: DiagnosticAttemptTrigger,
+        providers: &[ProviderId],
     ) -> RefreshOutcome {
         let _guard = enter_lane_attempt_trigger(trigger);
         let previous_quota = self
@@ -3770,10 +3979,20 @@ impl LocalBackend for NativeBackend {
             .ok()
             .flatten()
             .and_then(|component| component.value);
-        let quota = self.collect_quota(cancel.clone());
-        if let Ok(payload) = &quota {
-            self.record_quota_samples(payload, Utc::now());
-        }
+        let quota = match self.collect_quota_pass(
+            providers,
+            cadence::is_manual(trigger),
+            cancel.clone(),
+            false,
+        ) {
+            Ok(pass) => {
+                if let Some(fresh) = &pass.fresh {
+                    self.record_quota_samples(fresh, Utc::now());
+                }
+                Ok(pass.merged)
+            }
+            Err(error) => Err(error),
+        };
         updates.quota(match &quota {
             Ok(value) => Ok(value.clone()),
             Err(error) => Err(error.clone()),
@@ -6702,6 +6921,96 @@ mod tests {
         fs::remove_dir_all(root).expect("cleanup");
     }
 
+    /// A 429 keeps the reading before it, and the wait it earns — here the provider's own
+    /// `Retry-After` — and the day of a raised floor outlive the process that earned them.
+    #[test]
+    fn a_rate_limited_provider_keeps_its_reading_and_its_backoff_survives_a_restart() {
+        use std::io::{Read as _, Write as _};
+        let root = std::env::temp_dir().join(format!("quota-backoff-{}", uuid::Uuid::new_v4()));
+        let home = root.join("home");
+        fs::create_dir_all(&home).expect("home");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listener");
+        let address = listener.local_addr().expect("address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("request");
+            let _ = stream.read(&mut [0_u8; 4_096]);
+            stream
+                .write_all(
+                    b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 120\r\n\
+                      Content-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .expect("answer");
+        });
+        let previous = json!({
+            "captured_at": "2026-09-26T09:55:00Z",
+            "results": [{
+                "provider": "litellm",
+                "outcome": "success",
+                "snapshots": [{
+                    "provider": "litellm",
+                    "account": {"fingerprint": "fp-litellm", "fingerprint_scope": "source"},
+                    "windows": [],
+                    "status": "available",
+                    "observed_at": "2026-09-26T09:55:00Z"
+                }],
+                "sources": [{
+                    "source_id": crate::providers::litellm::SOURCE,
+                    "outcome": "success",
+                    "category": "success"
+                }]
+            }]
+        });
+        {
+            let state = Arc::new(StateStore::open(&root).expect("state"));
+            state
+                .set_component(
+                    crate::protocol::ComponentName::Quota,
+                    crate::protocol::ComponentStatus::Ready,
+                    Some(previous.clone()),
+                    None,
+                    None,
+                    false,
+                )
+                .expect("previous reading");
+            let relay = Arc::new(RelayClient::new().expect("relay"));
+            let mut backend = NativeBackend::new(state, relay, "QuotaTest", "test");
+            backend.home = home;
+            backend.environment = HashMap::from([
+                ("LITELLM_API_KEY".to_owned(), "sk-litellm-test".to_owned()),
+                ("LITELLM_BASE_URL".to_owned(), format!("http://{address}")),
+            ]);
+            let pass = backend
+                .collect_quota_pass(
+                    &[ProviderId::LiteLlm],
+                    false,
+                    Arc::new(AtomicBool::new(false)),
+                    false,
+                )
+                .expect("pass");
+            assert_eq!(pass.merged["results"], previous["results"]);
+        }
+        server.join().expect("server");
+        let reopened = StateStore::open(&root).expect("reopened");
+        let records: CadenceRecords =
+            serde_json::from_str(&reopened.provider_cadence().expect("read").expect("stored"))
+                .expect("records");
+        let record = &records["litellm"];
+        let backoff = record.backoff.as_ref().expect("backoff");
+        assert_eq!(backoff.account, "fp-litellm");
+        assert_eq!(
+            (backoff.until - record.last_attempt_at.expect("asked")).num_seconds(),
+            120
+        );
+        let raised = record.raised_floor.as_ref().expect("raised floor");
+        assert_eq!(raised.account, "fp-litellm");
+        assert_eq!(
+            (raised.until - record.last_attempt_at.expect("asked")).num_hours(),
+            24
+        );
+        drop(reopened);
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
     /// The journal is evidence about collection, not a permit to collect.
     #[test]
     fn a_journal_that_cannot_be_written_does_not_stop_a_refresh() {
@@ -6718,7 +7027,7 @@ mod tests {
         backend.environment.clear();
 
         let quota = backend
-            .collect_quota(Arc::new(AtomicBool::new(false)))
+            .collect_quota_for(ProviderId::ALL, Arc::new(AtomicBool::new(false)), false)
             .expect("quota still collects");
         assert_eq!(
             quota.get("results").and_then(Value::as_array).map(Vec::len),
@@ -7306,6 +7615,7 @@ mod tests {
             keychain: Default::default(),
             cli_versions: Default::default(),
             proven_credentials: Default::default(),
+            claude_memo: Default::default(),
         };
         let sessions = providers::discover(ProviderId::LiteLlm, &context);
         assert_eq!(sessions.len(), 1);
@@ -7341,6 +7651,7 @@ mod tests {
             keychain: Default::default(),
             cli_versions: Default::default(),
             proven_credentials: Default::default(),
+            claude_memo: Default::default(),
         };
         let rejected = collect_discovered_provider(
             ProviderId::Claude,
@@ -7493,6 +7804,7 @@ mod tests {
             keychain: Default::default(),
             cli_versions: Default::default(),
             proven_credentials: Default::default(),
+            claude_memo: Default::default(),
         };
         let sessions = providers::discover(ProviderId::LiteLlm, &unavailable_context);
         assert_eq!(sessions.len(), 1);
@@ -7523,6 +7835,7 @@ mod tests {
             keychain: Default::default(),
             cli_versions: Default::default(),
             proven_credentials: Default::default(),
+            claude_memo: Default::default(),
         };
         let official = vec![ProviderSession {
             provider: ProviderId::OpenRouter,

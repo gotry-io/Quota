@@ -114,6 +114,27 @@ public enum ProviderID: RawRepresentable, Codable, CaseIterable, Hashable, Ident
     }
   }
 
+  /// The shortest time one Mac waits between two collections of this provider (catalog
+  /// `collection.min_interval_seconds`, ADR 0063). A viewer judges a Mac reading stale against
+  /// it. A provider this build does not know names no floor.
+  public var minCollectionInterval: TimeInterval {
+    switch self {
+    case .`codex`: 60
+    case .`claude`: 180
+    case .`grok`: 120
+    case .`openrouter`: 60
+    case .`deepseek`: 60
+    case .`kimi`: 120
+    case .`litellm`: 120
+    case .`cursor`: 120
+    case .`gemini`: 120
+    case .`copilot`: 120
+    case .`antigravity`: 120
+    case .`opencode_go`: 120
+    case .unknown: 0
+    }
+  }
+
   /// The web session this provider's sign-in leaves in a browser, when it has one. Both Apple
   /// products read the same catalog entry: QuotaBar to collect the cookie from a Mac's browsers,
   /// Quota iOS to sign in inside the app and read quota with what that leaves behind.

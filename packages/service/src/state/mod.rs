@@ -34,8 +34,8 @@ use crate::protocol::{
     DiagnosticAttemptCode, DiagnosticAttemptKind, DiagnosticAttemptOutcome,
     DiagnosticAttemptTrigger, DiagnosticReport, ErrorCode, HistorySyncState, IPC_VERSION, IpcError,
     MAXIMUM_DIAGNOSTIC_RECENT, ProviderBrowserSessionView, ProviderConfigView,
-    QUOTA_REFRESH_INTERVALS_SECONDS, QuotaOverviewItem, RecoveryAction, StateSnapshot, UsagePeriod,
-    UsagePeriodCache, UsageSource,
+    QUOTA_REFRESH_INTERVALS_SECONDS, QuotaOverviewItem, QuotaRefreshMode, RecoveryAction,
+    StateSnapshot, UsagePeriod, UsagePeriodCache, UsageSource,
 };
 use crate::usage::{
     DatedUsageRow, LocalHourlyFact, NormalizedUsageEvent, USAGE_SESSION_RETENTION_DAYS, UsageAgent,
@@ -61,6 +61,7 @@ const CLI_VERSION_KEY: &str = "provider_cli_versions";
 /// The last time this device asked each provider's own CLI to renew the sign-in it owns.
 const RENEWAL_ATTEMPT_KEY: &str = "provider_refresh_attempts";
 const PROVEN_CREDENTIAL_KEY: &str = "provider_proven_credentials";
+const PROVIDER_CADENCE_KEY: &str = "provider_cadence";
 const MAX_DIAGNOSTIC_ATTEMPTS: i64 = 5_000;
 const DIAGNOSTIC_ATTEMPT_RETENTION_DAYS: i64 = 7;
 const ATTEMPT_PRUNE_INTERVAL_SECONDS: u64 = 3_600;
@@ -633,6 +634,7 @@ impl StateStore {
     ) -> Result<StateSnapshot, StateError> {
         let usage_upload_enabled = self.usage_upload_enabled()?;
         let group_usage_by_project = self.group_usage_by_project()?;
+        let quota_refresh_mode = self.quota_refresh_mode()?;
         let quota_refresh_interval_seconds = self.quota_refresh_interval_seconds()?;
         let provider_browser_sessions = self.with_identity(read_provider_browser_session_views)?;
         let browser_scan_enabled = self.browser_scan_enabled_providers()?;
@@ -714,7 +716,9 @@ impl StateStore {
                 revision,
                 usage_upload_enabled,
                 group_usage_by_project,
+                quota_refresh_mode,
                 quota_refresh_interval_seconds,
+                quota_refresh_tier: None,
                 usage_periods,
                 quota: quota
                     .unwrap_or_else(|| ComponentRecord::empty(ComponentStatus::Unavailable))
@@ -1534,6 +1538,12 @@ impl StateStore {
         Ok(revision)
     }
 
+    /// Moves the change counter for something the service holds in memory and the state carries,
+    /// such as Automatic's tier hint.
+    pub fn touch_revision(&self) -> Result<u64, StateError> {
+        self.bump_revision()
+    }
+
     #[cfg(test)]
     pub(crate) fn mark_cache_rebuilding_for_test(&self, value: bool) -> Result<(), StateError> {
         self.with_cache_mut(|conn| write_metadata_flag(conn, REBUILDING_KEY, value))
@@ -1784,15 +1794,37 @@ impl StateStore {
         })
     }
 
-    pub fn set_quota_refresh_interval_seconds(&self, seconds: u64) -> Result<u64, StateError> {
-        if !QUOTA_REFRESH_INTERVALS_SECONDS.contains(&seconds) {
+    pub fn quota_refresh_mode(&self) -> Result<QuotaRefreshMode, StateError> {
+        self.with_identity(|conn| {
+            Ok(match preference(conn, "quota_refresh_mode")?.as_deref() {
+                Some("fixed") => QuotaRefreshMode::Fixed,
+                _ => QuotaRefreshMode::Automatic,
+            })
+        })
+    }
+
+    /// Automatic keeps the fixed interval it had, so choosing a fixed cadence again later starts
+    /// from the one that was last picked.
+    pub fn set_quota_refresh(
+        &self,
+        mode: QuotaRefreshMode,
+        seconds: Option<u64>,
+    ) -> Result<u64, StateError> {
+        if seconds.is_some_and(|seconds| !QUOTA_REFRESH_INTERVALS_SECONDS.contains(&seconds)) {
             return Err(StateError::InvalidState);
         }
-        if self.quota_refresh_interval_seconds()? == seconds {
+        if self.quota_refresh_mode()? == mode
+            && seconds
+                .is_none_or(|seconds| self.quota_refresh_interval_seconds().ok() == Some(seconds))
+        {
             return self.current_revision();
         }
         self.with_identity_mut(|conn| {
-            write_preference(conn, "quota_refresh_interval_seconds", &seconds.to_string())
+            write_preference(conn, "quota_refresh_mode", mode.as_str())?;
+            if let Some(seconds) = seconds {
+                write_preference(conn, "quota_refresh_interval_seconds", &seconds.to_string())?;
+            }
+            Ok(())
         })?;
         self.bump_revision()
     }
@@ -2247,6 +2279,16 @@ impl StateStore {
     /// an access token whose expiry it cannot decode — from one that has never worked; without
     /// it, an undatable token bought a provider CLI spawn every hour forever.  Disposable:
     /// losing it to a cache reset costs one extra renewal attempt per provider.
+    /// When each provider was last asked and whether it is waiting out a 429 (ADR 0063).
+    /// Disposable: a cache reset forgets a backoff, and the next 429 earns it again.
+    pub fn provider_cadence(&self) -> Result<Option<String>, StateError> {
+        self.with_cache(|conn| metadata_value(conn, PROVIDER_CADENCE_KEY))
+    }
+
+    pub fn write_provider_cadence(&self, encoded: &str) -> Result<(), StateError> {
+        self.write_cache_metadata(PROVIDER_CADENCE_KEY, encoded)
+    }
+
     pub fn proven_provider_credentials(&self) -> Result<Option<String>, StateError> {
         self.with_cache(|conn| metadata_value(conn, PROVEN_CREDENTIAL_KEY))
     }
@@ -4924,6 +4966,7 @@ fn diagnostic_attempt_trigger_key(value: DiagnosticAttemptTrigger) -> &'static s
         DiagnosticAttemptTrigger::Recheck => "recheck",
         DiagnosticAttemptTrigger::SettingsChange => "settings_change",
         DiagnosticAttemptTrigger::AccountChange => "account_change",
+        DiagnosticAttemptTrigger::Demand => "demand",
     }
 }
 
@@ -4937,6 +4980,7 @@ fn parse_diagnostic_attempt_trigger(
         "recheck" => Ok(DiagnosticAttemptTrigger::Recheck),
         "settings_change" => Ok(DiagnosticAttemptTrigger::SettingsChange),
         "account_change" => Ok(DiagnosticAttemptTrigger::AccountChange),
+        "demand" => Ok(DiagnosticAttemptTrigger::Demand),
         _ => Err(invalid_diagnostic_column(1, value)),
     }
 }
@@ -4984,6 +5028,7 @@ fn diagnostic_attempt_code_key(value: DiagnosticAttemptCode) -> &'static str {
         DiagnosticAttemptCode::MalformedData => "malformed_data",
         DiagnosticAttemptCode::TruncatedActiveSource => "truncated_active_source",
         DiagnosticAttemptCode::DeviceDeleted => "device_deleted",
+        DiagnosticAttemptCode::RateLimited => "rate_limited",
     }
 }
 
@@ -5004,6 +5049,7 @@ fn parse_diagnostic_attempt_code(value: &str) -> Result<DiagnosticAttemptCode, r
         "malformed_data" => Ok(DiagnosticAttemptCode::MalformedData),
         "truncated_active_source" => Ok(DiagnosticAttemptCode::TruncatedActiveSource),
         "device_deleted" => Ok(DiagnosticAttemptCode::DeviceDeleted),
+        "rate_limited" => Ok(DiagnosticAttemptCode::RateLimited),
         _ => Err(invalid_diagnostic_column(9, value)),
     }
 }

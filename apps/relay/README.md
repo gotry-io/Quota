@@ -17,7 +17,7 @@ fields and enum members its build cannot name, at any depth. Adding either to a 
 therefore not a breaking change. See
 [ADR 0023](../../docs/decisions/0023-strict-writes-tolerant-reads.md).
 
-The v6 data contract is seven routes
+The v6 data contract is eight routes
 ([ADR 0024](../../docs/decisions/0024-hour-versioned-usage-and-daily-rollups.md),
 [ADR 0055](../../docs/decisions/0055-an-account-period-is-a-local-date-range.md)):
 
@@ -35,7 +35,16 @@ The v6 data contract is seven routes
   where the three trailing periods start and end. `all` is the last 730 UTC days, not every day
   ever stored: an answer that grows with an account's whole history eventually cannot be given.
   The rollup is read newest day first, so an account with more retained rows than one response can
-  carry gets a shorter `all` rather than no summary at all.
+  carry gets a shorter `all` rather than no summary at all. `collection_requested_at` is the
+  Account's newest accepted collection request, or `null`; it is in the version stamp, so a new
+  request moves the ETag.
+- `POST /api/v6/account/collection-request` with `{"protocol_version": 6}` asks this Account's
+  Macs to collect now ([ADR 0063](../../docs/decisions/0063-collection-follows-demand-and-activity.md)).
+  Any session that may read the summary may ask (`account:read`: Device, read-only, and browser
+  cookie, which also presents a same-origin Origin). It stores one instant on the Account
+  (`accounts.collection_requested_at`, migration 0035) and answers `{requested_at, accepted}`; a
+  request within 60 seconds of the stored one answers the stored instant with `accepted: false`.
+  30 requests per 10 minutes per session (`429 rate_limited`). Relay calls no provider.
 - `GET /api/v6/account/usage/activity?from&to` answers up to 400 daily totals, on UTC dates. A
   day's `totals` carries `input_tokens`, `output_tokens`, `cache_read_input_tokens`,
   `cache_write_input_tokens`, `reasoning_tokens`, and `messages` beside `total_tokens`, and its

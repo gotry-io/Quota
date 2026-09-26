@@ -21,6 +21,8 @@ import {
   type AppleNativeSignInRequest,
   AppleNativeSignInRequestSchema,
   BrowserLoginExchangeRequestSchema,
+  CollectionRequestResponseSchema,
+  CollectionRequestSchema,
   DeleteDeviceResponseSchema,
   DeviceProfileUpdateRequestSchema,
   DeviceProfileUpdateResponseSchema,
@@ -212,7 +214,11 @@ const rateLimits = {
   destructiveMutation: { limit: 10, windowSeconds: 60 * 60 },
   profileMutation: { limit: 30, windowSeconds: 10 * 60 },
   publicRead: { limit: 120, windowSeconds: 60 },
+  collectionRequest: { limit: 30, windowSeconds: 10 * 60 },
 } as const;
+
+/** A collection request inside this window of the stored one folds into it (ADR 0063). */
+const collectionRequestCoalesceMilliseconds = 60 * 1000;
 
 interface StrictSchema<Output> {
   safeParse(value: unknown): { success: true; data: Output } | { success: false };
@@ -344,6 +350,7 @@ export function createRelayApp(options: RelayAppOptions): Hono {
     "/api/v2/device/profile",
     "/api/v2/account/profile",
     "/api/v2/account/settings",
+    "/api/v6/account/collection-request",
   ]) {
     app.use(path, bodyLimit({ maxSize: maximumCredentialBodyBytes, onError: requestBodyTooLarge }));
   }
@@ -950,6 +957,54 @@ export function createRelayApp(options: RelayAppOptions): Hono {
         usage,
         pricing_revision: catalog.revision,
         model_catalog_revision: modelCatalog.revision,
+        collection_requested_at: stamp.collection_requested_at,
+      }),
+    );
+  });
+
+  /**
+   * Ask this Account's Macs to collect now
+   * ([ADR 0063](../../docs/decisions/0063-collection-follows-demand-and-activity.md)).
+   *
+   * Whoever may read the summary may ask: the Mac, the phone's read-only session, and a browser,
+   * which presents the same-origin check every other cookie write does. Relay only stores the
+   * instant — no provider is called here — and a request within a minute of the stored one is
+   * answered with that one, so a burst of callers cost the Macs one collection. The limit is per
+   * session, so one runaway client cannot spend another's.
+   */
+  app.post("/api/v6/account/collection-request", async (context) => {
+    const checkedAt = now();
+    const principal = await accountReader(context, options, checkedAt);
+    if (principal instanceof Response) return principal;
+    if (principal.client_kind === "web") {
+      const unsafe = requireWebOrigin(context, principal);
+      if (unsafe) return unsafe;
+    }
+    const limited = await enforceRateLimit(
+      context,
+      options.state,
+      options.hasher,
+      "collection-request",
+      principal.session_id,
+      rateLimits.collectionRequest,
+      checkedAt,
+    );
+    if (limited) return limited;
+    const body = await parseJSON(context, CollectionRequestSchema);
+    if (body instanceof Response) return body;
+    const result = await options.state.requestCollection({
+      account_id: principal.account_id,
+      requested_at: canonicalRfc3339Utc(checkedAt),
+      coalesce_after: canonicalRfc3339Utc(
+        checkedAt.getTime() - collectionRequestCoalesceMilliseconds,
+      ),
+    });
+    if (!result) return unauthorized(context);
+    return context.json(
+      CollectionRequestResponseSchema.parse({
+        protocol_version: MANAGED_DATA_PROTOCOL_VERSION,
+        requested_at: result.requested_at,
+        accepted: result.accepted,
       }),
     );
   });

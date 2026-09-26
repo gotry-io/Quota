@@ -162,6 +162,11 @@ impl HttpClient {
             .send()
             .map_err(|_| ProviderError::new(ErrorCategory::Unavailable, source))?;
         let status = response.status().as_u16();
+        let retry_after = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| retry_after_seconds(value, chrono::Utc::now()));
         if (300..400).contains(&status) {
             return Err(ProviderError::new(redirect_category, source));
         }
@@ -185,17 +190,35 @@ impl HttpClient {
             return Err(ProviderError::new(ErrorCategory::Error, source));
         }
         if !(200..300).contains(&status) {
-            return Err(ProviderError::new(http_category(status), source));
+            return Err(match http_category(status) {
+                ErrorCategory::RateLimited => ProviderError::rate_limited(source, retry_after),
+                category => ProviderError::new(category, source),
+            });
         }
         Ok((status, body))
     }
+}
+
+/// A `Retry-After` worth honouring: delay-seconds or an HTTP date, and only when it is in the
+/// future. `0` is what Anthropic sends when it means nothing by it, so it is no answer at all.
+pub(crate) fn retry_after_seconds(value: &str, now: chrono::DateTime<chrono::Utc>) -> Option<u64> {
+    let value = value.trim();
+    let seconds = match value.parse::<u64>() {
+        Ok(seconds) => seconds,
+        Err(_) => {
+            let at = chrono::DateTime::parse_from_rfc2822(value).ok()?;
+            u64::try_from(at.signed_duration_since(now).num_seconds()).ok()?
+        }
+    };
+    (seconds > 0).then_some(seconds)
 }
 
 fn http_category(status: u16) -> ErrorCategory {
     match status {
         401 | 403 => ErrorCategory::AuthRequired,
         404 | 501 => ErrorCategory::Unsupported,
-        408 | 429 | 500..=599 => ErrorCategory::Unavailable,
+        429 => ErrorCategory::RateLimited,
+        408 | 500..=599 => ErrorCategory::Unavailable,
         _ => ErrorCategory::Error,
     }
 }
@@ -253,11 +276,30 @@ mod tests {
         assert_eq!(http_category(401), ErrorCategory::AuthRequired);
         assert_eq!(http_category(403), ErrorCategory::AuthRequired);
         assert_eq!(http_category(404), ErrorCategory::Unsupported);
-        assert_eq!(http_category(429), ErrorCategory::Unavailable);
+        assert_eq!(http_category(429), ErrorCategory::RateLimited);
         assert_eq!(http_category(500), ErrorCategory::Unavailable);
         assert_eq!(http_category(400), ErrorCategory::Error);
         let error = ProviderError::new(ErrorCategory::AuthRequired, "fixture");
         assert!(!error.to_string().contains("opaque-secret"));
+    }
+
+    /// Anthropic sends `retry-after: 0` with a 429 and means nothing by it; a positive delay
+    /// or a future date is an answer.
+    #[test]
+    fn a_zero_retry_after_is_no_answer_and_a_date_counts_from_now() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-09-26T10:00:00Z")
+            .expect("now")
+            .to_utc();
+        assert_eq!(retry_after_seconds("0", now), None);
+        assert_eq!(retry_after_seconds("3600", now), Some(3_600));
+        assert_eq!(
+            retry_after_seconds("Sat, 26 Sep 2026 10:02:00 GMT", now),
+            Some(120)
+        );
+        assert_eq!(
+            retry_after_seconds("Sat, 26 Sep 2026 09:59:00 GMT", now),
+            None
+        );
     }
 
     #[test]

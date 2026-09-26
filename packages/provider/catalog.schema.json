@@ -31,6 +31,7 @@
         "browser_session",
         "default_base_url",
         "base_url_environment_key",
+        "collection",
         "capabilities"
       ],
       "properties": {
@@ -84,6 +85,7 @@
         "status_page": {
           "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/status_page" }]
         },
+        "collection": { "$ref": "#/$defs/collection" },
         "capabilities": { "$ref": "#/$defs/capabilities" }
       }
     },
@@ -170,6 +172,20 @@
           "maxLength": 2048,
           "pattern": "^https://",
           "description": "HTTPS Statuspage v2 status.json when kind is statuspage_v2. A human status page, or null, when kind is none."
+        }
+      }
+    },
+    "collection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min_interval_seconds"],
+      "description": "How often this build may ask the provider. See docs/provider-collection.md (Cadence).",
+      "properties": {
+        "min_interval_seconds": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 3600,
+          "description": "The shortest time between two collections of this provider on one Mac. Every trigger except a manual refresh respects it; a manual refresh still waits 60 seconds."
         }
       }
     },

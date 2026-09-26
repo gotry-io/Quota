@@ -3,7 +3,8 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+/// Ordered as the catalog is, so a set of providers iterates in catalog order.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum ProviderId {
     #[serde(rename = "codex")]
     Codex,
@@ -75,6 +76,8 @@ pub struct ProviderCatalogEntry {
     pub default_base_url: Option<&'static str>,
     pub base_url_environment_key: Option<&'static str>,
     pub status_page: Option<StatusPageConfig>,
+    /// The shortest time between two collections of this provider on one Mac.
+    pub min_interval_seconds: u64,
 }
 
 pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
@@ -112,6 +115,7 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
             kind: StatusPageKind::StatuspageV2,
             url: Some("https://status.openai.com/api/v2/status.json"),
         }),
+        min_interval_seconds: 60,
     },
     ProviderCatalogEntry {
         id: ProviderId::Claude,
@@ -138,6 +142,7 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
             kind: StatusPageKind::StatuspageV2,
             url: Some("https://status.claude.com/api/v2/status.json"),
         }),
+        min_interval_seconds: 180,
     },
     ProviderCatalogEntry {
         id: ProviderId::Grok,
@@ -164,6 +169,7 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
             kind: StatusPageKind::None,
             url: Some("https://status.x.ai/"),
         }),
+        min_interval_seconds: 120,
     },
     ProviderCatalogEntry {
         id: ProviderId::OpenRouter,
@@ -187,6 +193,7 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
             kind: StatusPageKind::None,
             url: Some("https://status.openrouter.ai/"),
         }),
+        min_interval_seconds: 60,
     },
     ProviderCatalogEntry {
         id: ProviderId::DeepSeek,
@@ -210,6 +217,7 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
             kind: StatusPageKind::None,
             url: Some("https://status.deepseek.com/"),
         }),
+        min_interval_seconds: 60,
     },
     ProviderCatalogEntry {
         id: ProviderId::Kimi,
@@ -241,6 +249,7 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
             kind: StatusPageKind::StatuspageV2,
             url: Some("https://status.moonshot.cn/api/v2/status.json"),
         }),
+        min_interval_seconds: 120,
     },
     ProviderCatalogEntry {
         id: ProviderId::LiteLlm,
@@ -264,6 +273,7 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
             kind: StatusPageKind::None,
             url: None,
         }),
+        min_interval_seconds: 120,
     },
     ProviderCatalogEntry {
         id: ProviderId::Cursor,
@@ -299,6 +309,7 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
             kind: StatusPageKind::StatuspageV2,
             url: Some("https://status.cursor.com/api/v2/status.json"),
         }),
+        min_interval_seconds: 120,
     },
     ProviderCatalogEntry {
         id: ProviderId::Gemini,
@@ -314,6 +325,7 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         default_base_url: None,
         base_url_environment_key: None,
         status_page: None,
+        min_interval_seconds: 120,
     },
     ProviderCatalogEntry {
         id: ProviderId::Copilot,
@@ -329,6 +341,7 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
         default_base_url: None,
         base_url_environment_key: None,
         status_page: None,
+        min_interval_seconds: 120,
     },
     ProviderCatalogEntry {
         id: ProviderId::Antigravity,
@@ -347,6 +360,7 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
             kind: StatusPageKind::None,
             url: Some("https://www.google.com/appsstatus/dashboard/"),
         }),
+        min_interval_seconds: 120,
     },
     ProviderCatalogEntry {
         id: ProviderId::OpencodeGo,
@@ -370,6 +384,7 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
             kind: StatusPageKind::None,
             url: None,
         }),
+        min_interval_seconds: 120,
     },
 ];
 

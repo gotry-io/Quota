@@ -1,4 +1,8 @@
-import type { IdentityProvider } from "@gotry-io/quota-protocol";
+import {
+  CollectionRequestResponseReadSchema,
+  type IdentityProvider,
+  MANAGED_DATA_PROTOCOL_VERSION,
+} from "@gotry-io/quota-protocol";
 import { type AccountError, classifyAccountError } from "./account-errors.ts";
 import {
   ACTIVITY_DAYS,
@@ -178,6 +182,32 @@ export async function fetchAccountSummary(): Promise<AccountSummaryResult> {
     return { status: "ok", summary };
   } catch {
     return classifyAccountError(null);
+  }
+}
+
+export const COLLECTION_REQUEST_PATH = "/api/v6/account/collection-request";
+
+/**
+ * Ask the Account's Macs for a fresh reading (ADR 0063), and answer the instant Relay stored.
+ *
+ * A browser session may ask the same as a Device; the cookie POST carries the same-origin
+ * `Origin` a browser sends on its own. Every refusal — a Relay that predates the route (404), a
+ * busy session (429), anything else — is `null`, because nothing about it is shown.
+ */
+export async function requestCollection(): Promise<number | null> {
+  try {
+    const response = await fetch(COLLECTION_REQUEST_PATH, {
+      method: "POST",
+      credentials: "same-origin",
+      redirect: "error",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ protocol_version: MANAGED_DATA_PROTOCOL_VERSION }),
+    });
+    if (!response.ok) return null;
+    const parsed = CollectionRequestResponseReadSchema.safeParse(await response.json());
+    return parsed.success ? Date.parse(parsed.data.requested_at) : null;
+  } catch {
+    return null;
   }
 }
 

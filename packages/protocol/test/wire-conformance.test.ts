@@ -5,6 +5,8 @@ import {
   AccountSummaryReadSchema,
   AccountSummarySchema,
   AccountUsageActivityResponseReadSchema,
+  CollectionRequestResponseReadSchema,
+  CollectionRequestSchema,
   QuotaSnapshotEnvelopeSchema,
   UsageUploadSchema,
 } from "../src/index.ts";
@@ -34,6 +36,8 @@ const schemas = {
   account_summary: AccountSummaryReadSchema,
   account_usage_activity: AccountUsageActivityResponseReadSchema,
   usage_submission: UsageUploadSchema,
+  collection_request: CollectionRequestSchema,
+  collection_request_response: CollectionRequestResponseReadSchema,
 };
 
 describe("wire conformance", () => {

@@ -1,21 +1,25 @@
 //! Request handling, refresh scheduling, and parent-lifetime shutdown.
 
+pub mod activity;
 pub mod backend;
+pub mod cadence;
 pub mod schedule;
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::catalog::ProviderId;
 use crate::protocol::*;
 use crate::provider_status;
 use crate::state::{
     DiagnosticAttemptCompletion, DiagnosticAttemptHandle, StateError, StateStore, now_rfc3339,
     session_is_usable,
 };
-use chrono::Utc;
+use chrono::{DateTime, Utc};
+use rand::Rng;
 use serde_json::Value;
 
 pub trait EventSink: Send + Sync {
@@ -231,15 +235,27 @@ pub trait LocalBackend: Send + Sync {
         let _ = (cancel, updates, trigger);
         Err(BackendError::unavailable())
     }
-    /// Quota collection, upload, and Overview, without Usage. Defaults do not run a full refresh.
+    /// Quota collection of `providers`, upload, and Overview, without Usage. Providers not
+    /// named keep the reading they had. Defaults do not run a full refresh.
     fn refresh_quota(
         &self,
         cancel: Arc<AtomicBool>,
         updates: &dyn RefreshSink,
         trigger: DiagnosticAttemptTrigger,
+        providers: &[ProviderId],
     ) -> RefreshOutcome {
-        let _ = (cancel, updates, trigger);
+        let _ = (cancel, updates, trigger, providers);
         unavailable_refresh_outcome()
+    }
+    /// The newest write under each provider's local agent logs, for Automatic. A probe stops
+    /// early once it finds a write at or after `enough`. Test backends read no files.
+    fn newest_agent_writes(
+        &self,
+        providers: &[ProviderId],
+        enough: DateTime<Utc>,
+    ) -> BTreeMap<ProviderId, DateTime<Utc>> {
+        let _ = (providers, enough);
+        BTreeMap::new()
     }
     /// Usage scan, report, and outbox, without provider collection.
     fn refresh_usage(
@@ -427,14 +443,68 @@ struct RefreshState {
     usage: Option<ActiveRefresh>,
     account: Option<ActiveRefresh>,
     pending_quota: bool,
+    /// The providers and trigger a blocked quota pass still owes. Folded, never dropped.
+    pending_quota_providers: BTreeSet<ProviderId>,
+    pending_quota_trigger: Option<DiagnosticAttemptTrigger>,
     pending_usage: bool,
     pending_account: bool,
 }
 
 struct SchedulerPlan {
-    next_quota: Option<Instant>,
+    next_due: BTreeMap<ProviderId, Instant>,
     reset_at: Option<chrono::DateTime<chrono::Utc>>,
+    reset_providers: BTreeSet<ProviderId>,
     attempted_resets: HashSet<i64>,
+}
+
+/// What Automatic and collection requests keep between passes (ADR 0063).
+#[derive(Default)]
+struct CadenceState {
+    hint: Option<QuotaRefreshTierHint>,
+    /// The request instant this Mac last answered.
+    answered_demand: Option<DateTime<Utc>>,
+    /// When this Mac last answered one, which keeps a provider out of idle.
+    last_demand: Option<DateTime<Utc>>,
+    /// When the last pass that asked every provider started.
+    last_complete_collection: Option<DateTime<Utc>>,
+}
+
+/// What the scheduler plans for one provider.
+#[derive(Clone, Copy)]
+struct ProviderPlan {
+    interval: Duration,
+    /// Nothing but a manual refresh asks it before this ([`cadence::not_before`]).
+    not_before: Option<DateTime<Utc>>,
+}
+
+fn earliest_asks(
+    plans: &BTreeMap<ProviderId, ProviderPlan>,
+    now_utc: DateTime<Utc>,
+    now: Instant,
+) -> BTreeMap<ProviderId, Instant> {
+    plans
+        .iter()
+        .filter_map(|(provider, plan)| {
+            let at = schedule::instant_from_utc(plan.not_before?, now_utc, now)?;
+            Some((*provider, at))
+        })
+        .collect()
+}
+
+/// One provider's periodic clock: the pass that last included it, and the jitter its next tick
+/// carries.
+struct ProviderClock {
+    last: Instant,
+    jitter: f64,
+}
+
+impl ProviderClock {
+    fn restart(now: Instant) -> Self {
+        Self {
+            last: now,
+            jitter: rand::thread_rng().gen_range(-1.0..=1.0),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -475,7 +545,9 @@ fn coalesce_refresh_trigger(
     incoming: DiagnosticAttemptTrigger,
 ) -> DiagnosticAttemptTrigger {
     let priority = |trigger| match trigger {
-        DiagnosticAttemptTrigger::Scheduled | DiagnosticAttemptTrigger::Startup => 0,
+        DiagnosticAttemptTrigger::Scheduled
+        | DiagnosticAttemptTrigger::Startup
+        | DiagnosticAttemptTrigger::Demand => 0,
         DiagnosticAttemptTrigger::SettingsChange | DiagnosticAttemptTrigger::AccountChange => 1,
         DiagnosticAttemptTrigger::Manual | DiagnosticAttemptTrigger::Recheck => 2,
     };
@@ -530,7 +602,8 @@ struct ServiceInner {
     login: Mutex<LoginState>,
     scheduler: Mutex<SchedulerPlan>,
     scheduler_wakeup: Condvar,
-    scheduler_signal: Mutex<schedule::SchedulerSignal>,
+    scheduler_signal: Mutex<schedule::SchedulerSignals>,
+    cadence: Mutex<CadenceState>,
     provider_status_inflight: AtomicBool,
     #[cfg(test)]
     fail_next_refresh_spawn: AtomicBool,
@@ -563,17 +636,21 @@ impl LocalService {
                     usage: None,
                     account: None,
                     pending_quota: false,
+                    pending_quota_providers: BTreeSet::new(),
+                    pending_quota_trigger: None,
                     pending_usage: false,
                     pending_account: false,
                 }),
                 login: Mutex::new(LoginState { active: None }),
                 scheduler: Mutex::new(SchedulerPlan {
-                    next_quota: None,
+                    next_due: BTreeMap::new(),
                     reset_at: None,
+                    reset_providers: BTreeSet::new(),
                     attempted_resets: HashSet::new(),
                 }),
                 scheduler_wakeup: Condvar::new(),
-                scheduler_signal: Mutex::new(schedule::SchedulerSignal::Idle),
+                scheduler_signal: Mutex::new(schedule::SchedulerSignals::default()),
+                cadence: Mutex::new(CadenceState::default()),
                 provider_status_inflight: AtomicBool::new(false),
                 #[cfg(test)]
                 fail_next_refresh_spawn: AtomicBool::new(false),
@@ -591,91 +668,260 @@ impl LocalService {
         service.request_provider_status();
         thread::Builder::new()
             .name("quota-refresh-scheduler".to_owned())
-            .spawn(move || {
-                let mut next_account = Instant::now() + schedule::account_sync_interval();
-                let mut next_quota = Instant::now() + service.quota_refresh_interval();
-                let mut next_status = Instant::now() + schedule::provider_status_interval();
-                service.store_next_quota(next_quota);
-                loop {
-                    if service.is_shutdown() {
-                        break;
-                    }
-                    let reset_at = service.reset_deadline_instant();
-                    let (kind, wake_at) =
-                        schedule::next_wake(next_account, next_quota, reset_at, next_status);
-                    let wait = wake_at.saturating_duration_since(Instant::now());
-                    let signal = service.inner.scheduler_signal.lock();
-                    let Ok(signal) = signal else { break };
-                    let Ok((mut signal, timeout)) = service
-                        .inner
-                        .scheduler_wakeup
-                        .wait_timeout_while(signal, wait, |value| {
-                            matches!(value, schedule::SchedulerSignal::Idle)
-                        })
-                    else {
-                        break;
-                    };
-                    if service.is_shutdown() {
-                        break;
-                    }
-                    let posted = *signal;
-                    *signal = schedule::SchedulerSignal::Idle;
-                    drop(signal);
-                    if posted != schedule::SchedulerSignal::Idle {
-                        let now = Instant::now();
-                        next_quota = schedule::next_quota_after_signal(
-                            posted,
-                            now,
-                            service.quota_refresh_interval(),
-                            next_quota,
-                        );
-                        service.store_next_quota(next_quota);
-                        continue;
-                    }
-                    if !timeout.timed_out() {
-                        continue;
-                    }
-                    let now = Instant::now();
-                    match kind {
-                        schedule::SchedulerWake::Account => {
-                            next_account = now + schedule::account_sync_interval();
-                            service.request_account_sync();
-                        }
-                        schedule::SchedulerWake::Quota => {
-                            next_quota = now + service.quota_refresh_interval();
-                            next_account = now + schedule::account_sync_interval();
-                            service.store_next_quota(next_quota);
-                            service.request_scheduled_lanes();
-                        }
-                        schedule::SchedulerWake::ResetBoundary => {
-                            service.mark_reset_attempted();
-                            service.request_lane(
-                                RefreshLane::Quota,
-                                DiagnosticAttemptTrigger::Scheduled,
-                            );
-                        }
-                        schedule::SchedulerWake::ProviderStatus => {
-                            next_status = now + schedule::provider_status_interval();
-                            service.request_provider_status();
-                        }
-                    }
-                }
-            })
+            .spawn(move || service.run_scheduler())
             .ok();
     }
 
-    fn quota_refresh_interval(&self) -> Duration {
-        self.inner
+    fn run_scheduler(&self) {
+        let start = Instant::now();
+        let mut next_account = start + schedule::account_sync_interval();
+        let mut next_status = start + schedule::provider_status_interval();
+        // The startup refresh just asked every provider.
+        let mut clocks: BTreeMap<ProviderId, ProviderClock> = ProviderId::ALL
+            .iter()
+            .map(|provider| (*provider, ProviderClock::restart(start)))
+            .collect();
+        let mut last_usage = start;
+        let mut writes: BTreeMap<ProviderId, DateTime<Utc>> = BTreeMap::new();
+        let mut next_probe = start;
+        loop {
+            if self.is_shutdown() {
+                break;
+            }
+            let now = Instant::now();
+            let now_utc = Utc::now();
+            let (mode, fixed) = self.quota_refresh_settings();
+            let automatic = mode == QuotaRefreshMode::Automatic;
+            if automatic && now >= next_probe {
+                let enough = now_utc
+                    - chrono::Duration::from_std(cadence::ACTIVE_WINDOW).unwrap_or_default();
+                for (provider, at) in self
+                    .inner
+                    .backend
+                    .newest_agent_writes(ProviderId::ALL, enough)
+                {
+                    let newest = writes.entry(provider).or_insert(at);
+                    *newest = (*newest).max(at);
+                }
+                next_probe = now + schedule::account_sync_interval();
+            }
+            let plans = self.plan_intervals(mode, fixed, &writes, now_utc);
+            let earliest = earliest_asks(&plans, now_utc, now);
+            let next_due: BTreeMap<ProviderId, Instant> = clocks
+                .iter()
+                .map(|(provider, clock)| {
+                    let interval = plans
+                        .get(provider)
+                        .map_or(cadence::NORMAL_INTERVAL, |plan| plan.interval);
+                    let due = clock.last + cadence::jittered(interval, clock.jitter);
+                    (
+                        *provider,
+                        earliest.get(provider).map_or(due, |at| due.max(*at)),
+                    )
+                })
+                .collect();
+            let next_quota = next_due.values().min().copied().unwrap_or(now + fixed);
+            self.store_next_due(&next_due);
+            let reset_at = self.reset_deadline_instant();
+            let (kind, wake_at) =
+                schedule::next_wake(next_account, next_quota, reset_at, next_status);
+            let probing = automatic && next_probe < wake_at;
+            let wait = if probing { next_probe } else { wake_at }
+                .saturating_duration_since(Instant::now());
+            let signal = self.inner.scheduler_signal.lock();
+            let Ok(signal) = signal else { break };
+            let Ok((mut signal, timeout)) =
+                self.inner
+                    .scheduler_wakeup
+                    .wait_timeout_while(signal, wait, |value| value.is_idle())
+            else {
+                break;
+            };
+            if self.is_shutdown() {
+                break;
+            }
+            let posted = std::mem::take(&mut *signal);
+            drop(signal);
+            if !posted.is_idle() {
+                let now = Instant::now();
+                if posted.cadence_changed {
+                    for clock in clocks.values_mut() {
+                        *clock = ProviderClock::restart(now);
+                    }
+                }
+                if posted.demand {
+                    // Everything is asked now, so every clock starts again from now.
+                    for clock in clocks.values_mut() {
+                        *clock = ProviderClock::restart(now);
+                    }
+                    next_account = now + schedule::account_sync_interval();
+                    let _ = self.request_quota_pass(
+                        ProviderId::ALL.to_vec(),
+                        DiagnosticAttemptTrigger::Demand,
+                    );
+                }
+                continue;
+            }
+            if !timeout.timed_out() || probing {
+                continue;
+            }
+            let now = Instant::now();
+            match kind {
+                schedule::SchedulerWake::Account => {
+                    next_account = now + schedule::account_sync_interval();
+                    self.request_account_sync();
+                }
+                schedule::SchedulerWake::Quota => {
+                    let mut due = schedule::due_providers(&next_due, now);
+                    // A provider a shared pass would take early, inside its floor, waits for its
+                    // own tick. Read again now: a pass that finished while this thread slept moved
+                    // its provider's last ask.
+                    let now_utc = Utc::now();
+                    let earliest = earliest_asks(
+                        &self.plan_intervals(mode, fixed, &writes, now_utc),
+                        now_utc,
+                        now,
+                    );
+                    due.retain(|provider| earliest.get(provider).is_none_or(|at| *at <= now));
+                    for provider in &due {
+                        clocks.insert(*provider, ProviderClock::restart(now));
+                    }
+                    if !due.is_empty() {
+                        next_account = now + schedule::account_sync_interval();
+                    }
+                    let usage_interval = match mode {
+                        QuotaRefreshMode::Fixed => fixed,
+                        QuotaRefreshMode::Automatic => cadence::NORMAL_INTERVAL,
+                    };
+                    let usage = now + schedule::DUE_SLACK >= last_usage + usage_interval;
+                    if usage {
+                        last_usage = now;
+                    }
+                    self.request_scheduled_lanes(due, usage);
+                }
+                schedule::SchedulerWake::ResetBoundary => {
+                    let providers = self.mark_reset_attempted();
+                    let _ = self.request_quota_pass(
+                        providers.into_iter().collect(),
+                        DiagnosticAttemptTrigger::Scheduled,
+                    );
+                }
+                schedule::SchedulerWake::ProviderStatus => {
+                    next_status = now + schedule::provider_status_interval();
+                    self.request_provider_status();
+                }
+            }
+        }
+    }
+
+    fn quota_refresh_settings(&self) -> (QuotaRefreshMode, Duration) {
+        let mode = self
+            .inner
+            .state
+            .quota_refresh_mode()
+            .unwrap_or(QuotaRefreshMode::Automatic);
+        let fixed = self
+            .inner
             .state
             .quota_refresh_interval_seconds()
             .ok()
             .and_then(schedule::quota_refresh_interval)
-            .unwrap_or_else(schedule::default_quota_refresh_interval)
+            .unwrap_or_else(schedule::default_quota_refresh_interval);
+        (mode, fixed)
     }
 
-    fn store_next_quota(&self, next_quota: Instant) {
+    /// Each provider's interval now, and the Settings hint it adds up to. A hint that changed is
+    /// announced as a Quota change, which is what makes QuotaBar read the state again.
+    fn plan_intervals(
+        &self,
+        mode: QuotaRefreshMode,
+        fixed: Duration,
+        writes: &BTreeMap<ProviderId, DateTime<Utc>>,
+        now: DateTime<Utc>,
+    ) -> BTreeMap<ProviderId, ProviderPlan> {
+        let quota = self
+            .inner
+            .state
+            .component(ComponentName::Quota)
+            .ok()
+            .flatten()
+            .and_then(|record| record.value);
+        let last_demand = self
+            .inner
+            .cadence
+            .lock()
+            .ok()
+            .and_then(|cadence| cadence.last_demand);
+        let records: cadence::CadenceRecords = self
+            .inner
+            .state
+            .provider_cadence()
+            .ok()
+            .flatten()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default();
+        let mut hint: Option<(Duration, QuotaRefreshTierHint)> = None;
+        let intervals = ProviderId::ALL
+            .iter()
+            .map(|provider| {
+                let activity = cadence::Activity {
+                    last_write: writes.get(provider).copied(),
+                    low_remaining: cadence::low_remaining(quota.as_ref(), *provider),
+                    last_demand,
+                };
+                let (tier, reason) = cadence::tier(*provider, &activity, now);
+                let record = records.get(provider.as_str());
+                let account =
+                    cadence::backoff_account(&cadence::accounts(quota.as_ref(), *provider));
+                let floor = cadence::floor(*provider, record, &account, now);
+                let interval = cadence::interval(floor, mode, fixed, tier);
+                let not_before = cadence::not_before(*provider, record, &account, now);
+                let rank = |tier| match tier {
+                    QuotaRefreshTier::Active => 0,
+                    QuotaRefreshTier::Normal => 1,
+                    QuotaRefreshTier::Idle => 2,
+                };
+                if cadence::in_use(quota.as_ref(), *provider)
+                    && hint.as_ref().is_none_or(|(best, current)| {
+                        (interval, rank(tier)) < (*best, rank(current.tier))
+                    })
+                {
+                    hint = Some((
+                        interval,
+                        QuotaRefreshTierHint {
+                            tier,
+                            interval_seconds: interval.as_secs(),
+                            provider: provider.as_str().to_owned(),
+                            reason,
+                        },
+                    ));
+                }
+                (
+                    *provider,
+                    ProviderPlan {
+                        interval,
+                        not_before,
+                    },
+                )
+            })
+            .collect();
+        let hint = (mode == QuotaRefreshMode::Automatic)
+            .then_some(hint.map(|(_, hint)| hint))
+            .flatten();
+        let changed = self.inner.cadence.lock().ok().is_some_and(|mut cadence| {
+            let changed = cadence.hint != hint;
+            cadence.hint = hint;
+            changed
+        });
+        if changed && self.inner.state.touch_revision().is_ok() {
+            self.emit(vec![ComponentName::Quota]);
+        }
+        intervals
+    }
+
+    fn store_next_due(&self, next_due: &BTreeMap<ProviderId, Instant>) {
         if let Ok(mut plan) = self.inner.scheduler.lock() {
-            plan.next_quota = Some(next_quota);
+            plan.next_due.clone_from(next_due);
         }
     }
 
@@ -685,33 +931,66 @@ impl LocalService {
         schedule::instant_from_utc(reset_at, chrono::Utc::now(), now)
     }
 
-    fn mark_reset_attempted(&self) {
-        if let Ok(mut plan) = self.inner.scheduler.lock() {
-            if let Some(at) = plan.reset_at.take() {
-                plan.attempted_resets.insert(at.timestamp());
-            }
-            if plan.attempted_resets.len() > 64
-                && let Some(oldest) = plan.attempted_resets.iter().copied().min()
-            {
-                plan.attempted_resets.remove(&oldest);
-            }
+    /// Marks the pending reset as tried and hands back the providers it was for.
+    fn mark_reset_attempted(&self) -> BTreeSet<ProviderId> {
+        let Ok(mut plan) = self.inner.scheduler.lock() else {
+            return BTreeSet::new();
+        };
+        if let Some(at) = plan.reset_at.take() {
+            plan.attempted_resets.insert(at.timestamp());
+        }
+        if plan.attempted_resets.len() > 64
+            && let Some(oldest) = plan.attempted_resets.iter().copied().min()
+        {
+            plan.attempted_resets.remove(&oldest);
+        }
+        std::mem::take(&mut plan.reset_providers)
+    }
+
+    fn wake_scheduler(&self, apply: impl FnOnce(&mut schedule::SchedulerSignals)) {
+        if let Ok(mut slot) = self.inner.scheduler_signal.lock() {
+            apply(&mut slot);
+            self.inner.scheduler_wakeup.notify_all();
         }
     }
 
-    fn wake_scheduler(&self, signal: schedule::SchedulerSignal) {
-        if matches!(signal, schedule::SchedulerSignal::Idle) {
-            return;
-        }
-        if let Ok(mut slot) = self.inner.scheduler_signal.lock() {
-            if matches!(*slot, schedule::SchedulerSignal::CadenceChanged)
-                && matches!(signal, schedule::SchedulerSignal::Recalculate)
-            {
-                // A cadence change already restarts the collection clock; a reset wake must
-                // not downgrade it.
-            } else {
-                *slot = signal;
+    /// Answers another client's collection request, once, when the Account shows one this Mac
+    /// has not collected since (ADR 0063).
+    fn note_collection_request(&self, account: &Value) {
+        let requested = crate::observation::instant(
+            account
+                .get("account_summary")
+                .and_then(|summary| summary.get("collection_requested_at")),
+        );
+        let now = Utc::now();
+        let answer = {
+            let Ok(mut cadence) = self.inner.cadence.lock() else {
+                return;
+            };
+            let answer = cadence::demand_to_answer(
+                requested,
+                cadence.last_complete_collection,
+                cadence.answered_demand,
+                now,
+            );
+            if answer.is_some() {
+                cadence.answered_demand = answer;
+                cadence.last_demand = Some(now);
             }
-            self.inner.scheduler_wakeup.notify_all();
+            answer
+        };
+        if answer.is_some() {
+            self.wake_scheduler(|signals| signals.demand = true);
+        }
+    }
+
+    fn note_complete_collection(&self, started: DateTime<Utc>) {
+        if let Ok(mut cadence) = self.inner.cadence.lock() {
+            cadence.last_complete_collection = Some(
+                cadence
+                    .last_complete_collection
+                    .map_or(started, |previous| previous.max(started)),
+            );
         }
     }
 
@@ -800,10 +1079,7 @@ impl LocalService {
         {
             cancel.store(true, Ordering::Release);
         }
-        if let Ok(mut signal) = self.inner.scheduler_signal.lock() {
-            *signal = schedule::SchedulerSignal::Recalculate;
-            self.inner.scheduler_wakeup.notify_all();
-        }
+        self.wake_scheduler(|signals| signals.recalculate = true);
     }
 
     /// Takes no lock and touches no state, so the stdin thread can answer it while a long
@@ -841,7 +1117,16 @@ impl LocalService {
 
     fn get_state(&self, request: &IpcRequest) -> Result<StateSnapshot, IpcError> {
         request.decode_payload::<EmptyPayload>()?;
-        self.inner.state.snapshot().map_err(state_error)
+        let mut snapshot = self.inner.state.snapshot().map_err(state_error)?;
+        if snapshot.quota_refresh_mode == QuotaRefreshMode::Automatic {
+            snapshot.quota_refresh_tier = self
+                .inner
+                .cadence
+                .lock()
+                .ok()
+                .and_then(|cadence| cadence.hint.clone());
+        }
+        Ok(snapshot)
     }
 
     fn refresh(&self, request: &IpcRequest) -> Result<RefreshResult, IpcError> {
@@ -1187,7 +1472,14 @@ impl LocalService {
         request: &IpcRequest,
     ) -> Result<QuotaRefreshIntervalSetting, IpcError> {
         let payload: SetQuotaRefreshIntervalPayload = request.decode_payload()?;
-        if schedule::quota_refresh_interval(payload.interval_seconds).is_none() {
+        let valid = match payload.mode {
+            QuotaRefreshMode::Automatic => payload.interval_seconds.is_none(),
+            QuotaRefreshMode::Fixed => payload
+                .interval_seconds
+                .and_then(schedule::quota_refresh_interval)
+                .is_some(),
+        };
+        if !valid {
             return Err(IpcError::new(
                 ErrorCode::InvalidRequest,
                 RecoveryAction::None,
@@ -1195,11 +1487,16 @@ impl LocalService {
         }
         self.inner
             .state
-            .set_quota_refresh_interval_seconds(payload.interval_seconds)
+            .set_quota_refresh(payload.mode, payload.interval_seconds)
             .map_err(state_error)?;
-        self.wake_scheduler(schedule::SchedulerSignal::CadenceChanged);
+        self.wake_scheduler(|signals| signals.cadence_changed = true);
         Ok(QuotaRefreshIntervalSetting {
-            interval_seconds: payload.interval_seconds,
+            mode: payload.mode,
+            interval_seconds: self
+                .inner
+                .state
+                .quota_refresh_interval_seconds()
+                .map_err(state_error)?,
         })
     }
 
@@ -1483,24 +1780,37 @@ impl LocalService {
     }
 
     fn request_refresh_with_trigger(&self, trigger: DiagnosticAttemptTrigger) -> RefreshResult {
-        match trigger {
-            DiagnosticAttemptTrigger::Scheduled => self.request_scheduled_lanes(),
-            _ => self.request_full(trigger),
+        self.request_full(trigger)
+    }
+
+    /// One periodic pass: the providers due, and Usage when its own interval has passed.
+    fn request_scheduled_lanes(&self, due: Vec<ProviderId>, usage: bool) {
+        if !due.is_empty() {
+            let _ = self.request_quota_pass(due, DiagnosticAttemptTrigger::Scheduled);
+        }
+        if usage {
+            let _ = self.request_lane(
+                RefreshLane::Usage,
+                DiagnosticAttemptTrigger::Scheduled,
+                Vec::new(),
+            );
         }
     }
 
-    fn request_scheduled_lanes(&self) -> RefreshResult {
-        let quota = self.request_lane(RefreshLane::Quota, DiagnosticAttemptTrigger::Scheduled);
-        let usage = self.request_lane(RefreshLane::Usage, DiagnosticAttemptTrigger::Scheduled);
-        RefreshResult {
-            accepted: quota.accepted || usage.accepted,
-            pending: quota.pending || usage.pending,
-            revision: self.inner.state.current_revision().unwrap_or(0),
-        }
+    fn request_quota_pass(
+        &self,
+        providers: Vec<ProviderId>,
+        trigger: DiagnosticAttemptTrigger,
+    ) -> RefreshResult {
+        self.request_lane(RefreshLane::Quota, trigger, providers)
     }
 
     fn request_account_sync(&self) {
-        let _ = self.request_lane(RefreshLane::Account, DiagnosticAttemptTrigger::Scheduled);
+        let _ = self.request_lane(
+            RefreshLane::Account,
+            DiagnosticAttemptTrigger::Scheduled,
+            Vec::new(),
+        );
     }
 
     fn request_provider_status(&self) {
@@ -1569,7 +1879,13 @@ impl LocalService {
         }
     }
 
-    fn request_lane(&self, lane: RefreshLane, trigger: DiagnosticAttemptTrigger) -> RefreshResult {
+    /// `providers` names what a Quota lane collects; the other lanes ignore it.
+    fn request_lane(
+        &self,
+        lane: RefreshLane,
+        trigger: DiagnosticAttemptTrigger,
+        providers: Vec<ProviderId>,
+    ) -> RefreshResult {
         let mut refresh = match self.inner.refresh.lock() {
             Ok(refresh) => refresh,
             Err(_) => {
@@ -1582,7 +1898,14 @@ impl LocalService {
         };
         if lane.blocked(&refresh) {
             match lane {
-                RefreshLane::Quota => refresh.pending_quota = true,
+                RefreshLane::Quota => {
+                    refresh.pending_quota = true;
+                    refresh.pending_quota_providers.extend(providers);
+                    refresh.pending_quota_trigger = Some(match refresh.pending_quota_trigger {
+                        Some(DiagnosticAttemptTrigger::Demand) => DiagnosticAttemptTrigger::Demand,
+                        _ => trigger,
+                    });
+                }
                 RefreshLane::Usage => refresh.pending_usage = true,
                 RefreshLane::Account => refresh.pending_account = true,
             }
@@ -1628,7 +1951,7 @@ impl LocalService {
                 }
                 .to_owned(),
             )
-            .spawn(move || service.run_lane(lane, cancel, trigger))
+            .spawn(move || service.run_lane(lane, cancel, trigger, providers))
             .is_ok();
         if !spawned {
             self.clear_lane(lane);
@@ -1804,6 +2127,7 @@ impl LocalService {
             account: Mutex::new(None),
             quota: Mutex::new(None),
         };
+        let started = Utc::now();
         let outcome = if cancel.load(Ordering::Acquire) || self.is_shutdown() {
             let cancelled = || Err(BackendError::cancelled());
             RefreshOutcome {
@@ -1831,6 +2155,9 @@ impl LocalService {
             .flatten()
             .is_some_and(|value| value.get("status").and_then(Value::as_str) == Some("active"));
         let completion = refresh_attempt_completion(&outcome, session_required, cancel.as_ref());
+        if outcome.quota.is_ok() {
+            self.note_complete_collection(started);
+        }
         if !updates.already_applied_quota(&outcome.quota) {
             self.apply_component_result(ComponentName::Quota, outcome.quota.clone());
         }
@@ -1877,17 +2204,33 @@ impl LocalService {
         }
         let start_account = refresh.pending_account && !RefreshLane::Account.blocked(&refresh);
         let lanes_idle = refresh.quota.is_none() && refresh.usage.is_none();
-        let quota = lanes_idle && refresh.pending_quota;
+        let quota = (lanes_idle && refresh.pending_quota).then(|| {
+            (
+                std::mem::take(&mut refresh.pending_quota_providers),
+                refresh
+                    .pending_quota_trigger
+                    .take()
+                    .unwrap_or(DiagnosticAttemptTrigger::Scheduled),
+            )
+        });
         let usage = lanes_idle && refresh.pending_usage;
         drop(refresh);
-        if quota {
-            let _ = self.request_lane(RefreshLane::Quota, DiagnosticAttemptTrigger::Scheduled);
+        if let Some((providers, trigger)) = quota {
+            let _ = self.request_quota_pass(providers.into_iter().collect(), trigger);
         }
         if usage {
-            let _ = self.request_lane(RefreshLane::Usage, DiagnosticAttemptTrigger::Scheduled);
+            let _ = self.request_lane(
+                RefreshLane::Usage,
+                DiagnosticAttemptTrigger::Scheduled,
+                Vec::new(),
+            );
         }
         if start_account {
-            let _ = self.request_lane(RefreshLane::Account, DiagnosticAttemptTrigger::Scheduled);
+            let _ = self.request_lane(
+                RefreshLane::Account,
+                DiagnosticAttemptTrigger::Scheduled,
+                Vec::new(),
+            );
         }
     }
 
@@ -1896,10 +2239,11 @@ impl LocalService {
         lane: RefreshLane,
         cancel: Arc<AtomicBool>,
         trigger: DiagnosticAttemptTrigger,
+        providers: Vec<ProviderId>,
     ) {
         match lane {
             RefreshLane::Account => self.run_account_lane(cancel, trigger),
-            RefreshLane::Quota => self.run_quota_lane(cancel, trigger),
+            RefreshLane::Quota => self.run_quota_lane(cancel, trigger, &providers),
             RefreshLane::Usage => self.run_usage_lane(cancel, trigger),
         }
         self.clear_lane(lane);
@@ -1944,17 +2288,28 @@ impl LocalService {
         }
     }
 
-    fn run_quota_lane(&self, cancel: Arc<AtomicBool>, trigger: DiagnosticAttemptTrigger) {
+    fn run_quota_lane(
+        &self,
+        cancel: Arc<AtomicBool>,
+        trigger: DiagnosticAttemptTrigger,
+        providers: &[ProviderId],
+    ) {
         let updates = RefreshUpdates {
             service: self.clone(),
             account: Mutex::new(None),
             quota: Mutex::new(None),
         };
+        let started = Utc::now();
         let outcome = if cancel.load(Ordering::Acquire) || self.is_shutdown() {
             return;
         } else {
-            self.inner.backend.refresh_quota(cancel, &updates, trigger)
+            self.inner
+                .backend
+                .refresh_quota(cancel, &updates, trigger, providers)
         };
+        if outcome.quota.is_ok() && ProviderId::ALL.iter().all(|all| providers.contains(all)) {
+            self.note_complete_collection(started);
+        }
         if !updates.already_applied_quota(&outcome.quota) {
             self.apply_component_result(ComponentName::Quota, outcome.quota.clone());
         }
@@ -1997,25 +2352,26 @@ impl LocalService {
     fn note_reset_boundary(&self, quota: &Value) {
         let now_utc = chrono::Utc::now();
         let now = Instant::now();
-        let (next_quota_at, attempted) = {
+        let (next_due, attempted) = {
             let Ok(plan) = self.inner.scheduler.lock() else {
                 return;
             };
-            let next_quota_at = plan
-                .next_quota
-                .and_then(|at| schedule::utc_from_instant(at, now, now_utc))
-                .unwrap_or_else(|| {
-                    now_utc
-                        + chrono::Duration::from_std(self.quota_refresh_interval())
-                            .unwrap_or(chrono::Duration::minutes(5))
-                });
-            (next_quota_at, plan.attempted_resets.clone())
+            (plan.next_due.clone(), plan.attempted_resets.clone())
         };
-        let wake = schedule::next_reset_boundary(quota, now_utc, next_quota_at, &attempted);
+        let (_, fixed) = self.quota_refresh_settings();
+        let next_due_at = |provider: ProviderId| {
+            next_due
+                .get(&provider)
+                .and_then(|at| schedule::utc_from_instant(*at, now, now_utc))
+                .unwrap_or_else(|| now_utc + chrono::Duration::from_std(fixed).unwrap_or_default())
+        };
+        let wake = schedule::next_reset_boundary(quota, now_utc, next_due_at, &attempted);
         if let Ok(mut plan) = self.inner.scheduler.lock() {
-            plan.reset_at = wake;
+            let (at, providers) = wake.unzip();
+            plan.reset_at = at;
+            plan.reset_providers = providers.unwrap_or_default();
         }
-        self.wake_scheduler(schedule::SchedulerSignal::Recalculate);
+        self.wake_scheduler(|signals| signals.recalculate = true);
     }
 
     /// A session being signed out never has its Account overwritten by a read taken before it.
@@ -2055,6 +2411,9 @@ impl LocalService {
                     })
                 {
                     return;
+                }
+                if component == ComponentName::Account {
+                    self.note_collection_request(&value);
                 }
                 let _ = self.update_component(
                     component,
@@ -3959,62 +4318,57 @@ mod tests {
     }
 
     #[test]
-    fn setting_quota_refresh_interval_is_durable_and_rejects_unknown_values() {
+    fn setting_quota_refresh_is_durable_and_rejects_a_mode_without_its_interval() {
         let root = std::env::temp_dir().join(format!("quota-refresh-interval-{}", Uuid::new_v4()));
         fs::create_dir_all(&root).expect("root");
         let state = Arc::new(StateStore::open(&root).expect("state"));
         let sink = Arc::new(RecordingSink::default());
         let service = LocalService::new(state.clone(), sink, Arc::new(UnavailableBackend));
+        let set = |payload: Value| {
+            service.handle(
+                serde_json::from_value(serde_json::json!({
+                    "type": "request",
+                    "request_id": "cadence",
+                    "operation": "set_quota_refresh_interval",
+                    "payload": payload
+                }))
+                .expect("request"),
+            )
+        };
+        let stored = || {
+            let snapshot = state.snapshot().expect("state");
+            (
+                snapshot.quota_refresh_mode,
+                snapshot.quota_refresh_interval_seconds,
+            )
+        };
+        assert_eq!(stored(), (QuotaRefreshMode::Automatic, 300));
+        let response = set(serde_json::json!({"mode": "fixed", "interval_seconds": 60}));
         assert_eq!(
-            state
-                .snapshot()
-                .expect("initial state")
-                .quota_refresh_interval_seconds,
-            300
+            response.result,
+            Some(serde_json::json!({"mode": "fixed", "interval_seconds": 60}))
         );
-        let request: IpcRequest = serde_json::from_value(serde_json::json!({
-            "type": "request",
-            "request_id": "cadence",
-            "operation": "set_quota_refresh_interval",
-            "payload": {"interval_seconds": 60}
-        }))
-        .expect("request");
-        let response = service.handle(request);
-        assert!(response.error.is_none());
-        assert_eq!(
-            response
-                .result
-                .as_ref()
-                .and_then(|value| value.get("interval_seconds"))
-                .and_then(Value::as_u64),
-            Some(60)
+        assert_eq!(stored(), (QuotaRefreshMode::Fixed, 60));
+        // Automatic keeps the fixed interval it had, for the next fixed choice.
+        assert!(
+            set(serde_json::json!({"mode": "automatic"}))
+                .error
+                .is_none()
         );
-        assert_eq!(
-            state
-                .snapshot()
-                .expect("updated state")
-                .quota_refresh_interval_seconds,
-            60
-        );
-        let rejected: IpcRequest = serde_json::from_value(serde_json::json!({
-            "type": "request",
-            "request_id": "bad-cadence",
-            "operation": "set_quota_refresh_interval",
-            "payload": {"interval_seconds": 7}
-        }))
-        .expect("request");
-        let response = service.handle(rejected);
-        assert_eq!(
-            response.error.as_ref().map(|error| error.code),
-            Some(ErrorCode::InvalidRequest)
-        );
-        assert_eq!(
-            state
-                .snapshot()
-                .expect("unchanged cadence")
-                .quota_refresh_interval_seconds,
-            60
-        );
+        assert_eq!(stored(), (QuotaRefreshMode::Automatic, 60));
+        for refused in [
+            serde_json::json!({"mode": "fixed", "interval_seconds": 7}),
+            serde_json::json!({"mode": "fixed"}),
+            serde_json::json!({"mode": "automatic", "interval_seconds": 300}),
+            serde_json::json!({"interval_seconds": 300}),
+        ] {
+            assert_eq!(
+                set(refused.clone()).error.as_ref().map(|error| error.code),
+                Some(ErrorCode::InvalidRequest),
+                "{refused}"
+            );
+        }
+        assert_eq!(stored(), (QuotaRefreshMode::Automatic, 60));
         service.shutdown();
         drop(service);
         drop(state);
@@ -5309,6 +5663,7 @@ mod tests {
             _: Arc<AtomicBool>,
             _: &dyn RefreshSink,
             trigger: DiagnosticAttemptTrigger,
+            _: &[ProviderId],
         ) -> RefreshOutcome {
             *self.quota_trigger.lock().expect("quota trigger") = Some(trigger);
             *self.quota_started.0.lock().expect("started") = true;
@@ -5398,7 +5753,7 @@ mod tests {
             backend.clone(),
         );
 
-        assert!(service.request_scheduled_lanes().accepted);
+        service.request_scheduled_lanes(ProviderId::ALL.to_vec(), false);
         backend.wait_quota_started();
         backend.release_quota();
         wait_lanes_idle(&service);
@@ -5435,12 +5790,19 @@ mod tests {
 
         assert!(
             service
-                .request_lane(RefreshLane::Quota, DiagnosticAttemptTrigger::Scheduled)
+                .request_lane(
+                    RefreshLane::Quota,
+                    DiagnosticAttemptTrigger::Scheduled,
+                    ProviderId::ALL.to_vec()
+                )
                 .accepted
         );
         backend.wait_quota_started();
-        let blocked =
-            service.request_lane(RefreshLane::Account, DiagnosticAttemptTrigger::Scheduled);
+        let blocked = service.request_lane(
+            RefreshLane::Account,
+            DiagnosticAttemptTrigger::Scheduled,
+            Vec::new(),
+        );
         assert!(!blocked.accepted);
         assert!(blocked.pending);
         {

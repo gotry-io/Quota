@@ -984,6 +984,13 @@ fn validate_account_summary(value: &Value) -> Result<(), RelayError> {
         validate_quota_subscription(subscription)?;
     }
     validate_account_usage(object.get("usage").ok_or(RelayError::InvalidResponse)?)?;
+    // A Relay that predates collection requests does not state the field (ADR 0063).
+    if object
+        .get("collection_requested_at")
+        .is_some_and(|value| !value.is_null() && !value.as_str().is_some_and(valid_rfc3339))
+    {
+        return Err(RelayError::InvalidResponse);
+    }
     Ok(())
 }
 
@@ -3868,8 +3875,14 @@ mod tests {
         // This service fetches GET /api/v6/account/usage/activity only for `detail=hours` so
         // Account Usage can draw a rhythm, and never fetches GET /api/v2/account. It has no
         // trust-boundary restatement of either read (ADR 0019). TypeScript answers both, and
-        // Swift answers the activity one.
-        const SKIPPED_CONTRACTS: &[&str] = &["account_usage_activity", "account_response"];
+        // Swift answers the activity one. A Mac answers a collection request through the
+        // summary and never makes one, so it states neither side of that route (ADR 0063).
+        const SKIPPED_CONTRACTS: &[&str] = &[
+            "account_usage_activity",
+            "account_response",
+            "collection_request",
+            "collection_request_response",
+        ];
         let registered = validators.map(|(contract, _)| contract);
         for skipped in SKIPPED_CONTRACTS {
             assert!(

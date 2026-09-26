@@ -68,7 +68,8 @@ protocol LocalServiceServing: UsageTransport, BrowserConnectionTransport, Accoun
   func refresh() async throws -> LocalServiceRefreshResult
   func setUsageUpload(enabled: Bool) async throws -> LocalServiceUsageUploadSetting
   func setGroupUsageByProject(enabled: Bool) async throws -> LocalServiceGroupUsageByProjectSetting
-  func setQuotaRefreshInterval(seconds: Int) async throws -> LocalServiceQuotaRefreshIntervalSetting
+  func setQuotaRefresh(_ choice: QuotaRefreshChoice) async throws
+    -> LocalServiceQuotaRefreshIntervalSetting
   func setOverviewSourcePin(
     provider: ProviderID,
     fingerprint: String,
@@ -285,10 +286,12 @@ actor LocalServiceClient: LocalServiceServing {
       payload: SetUsageUploadPayload(enabled: enabled)
     )
   }
-  func setQuotaRefreshInterval(seconds: Int) async throws -> LocalServiceQuotaRefreshIntervalSetting {
+  func setQuotaRefresh(_ choice: QuotaRefreshChoice) async throws
+    -> LocalServiceQuotaRefreshIntervalSetting
+  {
     try await request(
       operation: "set_quota_refresh_interval",
-      payload: SetQuotaRefreshIntervalPayload(intervalSeconds: seconds)
+      payload: SetQuotaRefreshIntervalPayload(choice)
     )
   }
 
@@ -948,7 +951,33 @@ private struct QuotaHistoryPayload: Encodable {
     case since
   }
 }
-private struct SetQuotaRefreshIntervalPayload: Encodable { let intervalSeconds: Int }
+/// `{"mode": "automatic"}` or `{"mode": "fixed", "interval_seconds": 300}`.
+private struct SetQuotaRefreshIntervalPayload: Encodable {
+  let mode: String
+  let intervalSeconds: Int?
+
+  init(_ choice: QuotaRefreshChoice) {
+    switch choice {
+    case .automatic:
+      mode = "automatic"
+      intervalSeconds = nil
+    case .fixed(let interval):
+      mode = "fixed"
+      intervalSeconds = interval.rawValue
+    }
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case mode
+    case intervalSeconds
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(mode, forKey: .mode)
+    try container.encodeIfPresent(intervalSeconds, forKey: .intervalSeconds)
+  }
+}
 private struct SetOverviewSourcePinPayload: Encodable {
   let provider: String
   let fingerprint: String

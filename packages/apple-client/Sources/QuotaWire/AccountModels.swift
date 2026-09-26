@@ -209,6 +209,10 @@ public struct AccountSummary: Codable, Equatable, Sendable {
   public let usage: AccountUsage
   public let pricingRevision: String
   public let modelCatalogRevision: String
+  /// When a client of this Account last asked its Macs to collect now. Nil when none has, or
+  /// when the Relay predates collection requests and does not state the field
+  /// ([ADR 0063](../../../../docs/decisions/0063-collection-follows-demand-and-activity.md)).
+  public let collectionRequestedAt: Date?
 
   public init(
     account: QuotaUserAccount,
@@ -216,7 +220,8 @@ public struct AccountSummary: Codable, Equatable, Sendable {
     subscriptions: [QuotaSubscription],
     usage: AccountUsage,
     pricingRevision: String,
-    modelCatalogRevision: String
+    modelCatalogRevision: String,
+    collectionRequestedAt: Date? = nil
   ) {
     protocolVersion = WireCodec.managedDataProtocolVersion
     self.account = account
@@ -225,6 +230,7 @@ public struct AccountSummary: Codable, Equatable, Sendable {
     self.usage = usage
     self.pricingRevision = pricingRevision
     self.modelCatalogRevision = modelCatalogRevision
+    self.collectionRequestedAt = collectionRequestedAt
   }
 
   public init(from decoder: Decoder) throws {
@@ -236,6 +242,7 @@ public struct AccountSummary: Codable, Equatable, Sendable {
     usage = try container.decode(AccountUsage.self, forKey: .usage)
     pricingRevision = try container.decode(String.self, forKey: .pricingRevision)
     modelCatalogRevision = try container.decode(String.self, forKey: .modelCatalogRevision)
+    collectionRequestedAt = try container.decodeIfPresent(Date.self, forKey: .collectionRequestedAt)
     guard protocolVersion == WireCodec.managedDataProtocolVersion,
       account.isValid,
       devices.count <= 256,
@@ -262,6 +269,35 @@ public struct AccountSummary: Codable, Equatable, Sendable {
     case usage
     case pricingRevision
     case modelCatalogRevision
+    case collectionRequestedAt
+  }
+}
+
+/// `POST /api/v6/account/collection-request`: someone is looking, so the Account's Macs are asked
+/// for a fresh reading. The body is the protocol version and nothing else; Relay stores one
+/// instant and never calls a provider itself
+/// ([ADR 0063](../../../../docs/decisions/0063-collection-follows-demand-and-activity.md)).
+public struct CollectionRequest: Encodable, Equatable, Sendable {
+  public let protocolVersion = WireCodec.managedDataProtocolVersion
+
+  public init() {}
+}
+
+/// What Relay answered a collection request with: the instant the Account's Macs are asked to beat.
+/// A request inside Relay's merge window answers the stored instant with `accepted: false`, which
+/// is the same wait, so a reader takes the instant either way.
+public struct CollectionRequestResponse: Decodable, Equatable, Sendable {
+  public let requestedAt: Date
+  public let accepted: Bool
+
+  public init(requestedAt: Date, accepted: Bool) {
+    self.requestedAt = requestedAt
+    self.accepted = accepted
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case requestedAt
+    case accepted
   }
 }
 

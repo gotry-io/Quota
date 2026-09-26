@@ -90,7 +90,9 @@ The site has these routes:
    is `aria-current="page"`. Below 620 px that nav scrolls horizontally and does not wrap. Each
    `/my` page has one `h1` (the page name). Overview's status line is `Latest quota updated
    <age> · <n> devices reporting`, from the newest subscription `observed_at` plus how many
-   devices are reporting. Usage's status line is the selected period and whether that period is
+   devices are reporting. While the dashboard waits on a collection request it reads **Asking
+   your Mac…** (**Asking your Macs…** for several) instead, then returns to that line; a refusal or
+   a timeout says nothing. Usage's status line is the selected period and whether that period is
    partial. Devices uses the Devices summary line. Settings has no status line. Each route is
    `noindex, nofollow`.
    - `/my` — overview: remaining quota. Compact subscription groups (each a

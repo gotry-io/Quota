@@ -29,6 +29,7 @@ struct VisualFixtureParserTests {
       ("loading", VisualFixture.loading),
       ("launch", VisualFixture.launch),
       ("updating", VisualFixture.updating),
+      ("asking-mac", VisualFixture.askingMac),
       ("content", VisualFixture.content),
       ("cached-error", VisualFixture.cachedError),
       ("empty", VisualFixture.empty),

@@ -10,7 +10,8 @@ use super::common::{
     LOCAL_FILE_LIMIT, ProviderError, ProviderSession, QuotaAccount, QuotaExpiry, QuotaSnapshot,
     QuotaWindow, ValidatedBrowserSession, account_identity, clamp_percent,
     collect_official_or_browser, discover_official_or_browser, mask_email, number, obj_get,
-    obj_get_any, parse_date, plan_slug, read_bounded_file, run_bounded_command, slug, string,
+    obj_get_any, parse_date, plan_slug, read_bounded_file, run_bounded_command, sha256_hex, slug,
+    string, unix_seconds_to_iso,
 };
 
 pub mod refresh;
@@ -38,6 +39,49 @@ pub(super) const USAGE_QUERY: &str = usage_query!();
 pub const PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
 pub const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 const AUTH_REFRESH_SKEW: i64 = 60;
+/// How long one profile read answers for the credential it was read with (ADR 0063).
+const PROFILE_TTL_SECONDS: i64 = 24 * 60 * 60;
+/// How old Claude Code's own usage snapshot may be and still stand in for a request. It is the
+/// age Claude Code itself reuses the snapshot for.
+const LOCAL_SNAPSHOT_MAX_AGE_MS: i64 = 60_000;
+/// The snapshot carries no limit-reset grants; the ones the last network read found are carried
+/// beside it for at most this long before the network is asked again.
+const NETWORK_READ_EVERY_SECONDS: i64 = 60 * 60;
+/// Claude Code's global config holds every project it has seen, so it outgrows the credential
+/// file limit.
+const GLOBAL_CONFIG_LIMIT: usize = 16 * 1_048_576;
+
+/// What `/api/oauth/profile` said about one credential.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Profile {
+    email: Option<String>,
+    organization_id: Option<String>,
+    account_uuid: Option<String>,
+}
+
+/// What the collector remembers for the credential in use. A different credential starts it
+/// over, so nothing read for one sign-in answers for another.
+#[derive(Debug, Default)]
+pub struct Memo {
+    /// Digest of the access token this memo answers for.
+    credential: Option<String>,
+    /// The profile and when it was read.
+    profile: Option<(Profile, i64)>,
+    /// When usage was last read over the network, and the limit-reset window it carried.
+    network: Option<(i64, Option<QuotaWindow>)>,
+}
+
+impl Memo {
+    fn for_credential(&mut self, digest: &str) -> &mut Self {
+        if self.credential.as_deref() != Some(digest) {
+            *self = Self {
+                credential: Some(digest.to_owned()),
+                ..Self::default()
+            };
+        }
+        self
+    }
+}
 /// What the header claims when this device has no readable Claude Code install to ask.
 const FALLBACK_CLI_VERSION: &str = "2.1.0";
 
@@ -487,6 +531,15 @@ fn collect_at(
     {
         return Err(ProviderError::new(ErrorCategory::AuthRequired, SOURCE));
     }
+    let now = context.observed_unix();
+    let digest = sha256_hex(&credentials.access_token);
+    let plan = claude_plan(
+        credentials.subscription_type.as_deref(),
+        credentials.rate_limit_tier.as_deref(),
+    );
+    if let Some(snapshot) = from_claude_code_snapshot(context, &digest, now, plan.clone()) {
+        return Ok(snapshot);
+    }
     let client = HttpClient::new()?;
     let bearer = format!("Bearer {}", credentials.access_token);
     let user_agent = user_agent(context);
@@ -500,7 +553,7 @@ fn collect_at(
         Ok((_, value)) => value,
         Err(error) => return Err(error),
     };
-    let windows = map_reading(&usage, context.observed_unix());
+    let windows = map_reading(&usage, now);
     // An account that answers for a window this build knows, even to say it has none, has
     // nothing to report and is read successfully.  A response that answers for none of them
     // is one this build cannot read, and only that is a collection failure.  Reporting both
@@ -509,35 +562,149 @@ fn collect_at(
     if windows.is_empty() && !answers_for_a_known_window(&usage) {
         return Err(ProviderError::new(ErrorCategory::Unavailable, SOURCE));
     }
-    let (email, organization_id) = {
-        let profile_headers = [
-            ("Authorization", bearer.as_str()),
-            ("Accept", "application/json"),
-            ("User-Agent", user_agent.as_str()),
-        ];
-        match client.get_json(profile_url, &profile_headers, SOURCE) {
-            Ok((_, value)) => map_profile(&value),
-            Err(_) => (None, None),
+    // The profile names the account and changes about never, so one read answers for this
+    // credential for a day: a collection is one request, not two.
+    let cached = context.claude_memo.lock().ok().and_then(|mut memo| {
+        memo.for_credential(&digest)
+            .profile
+            .clone()
+            .filter(|(_, read_at)| now - read_at < PROFILE_TTL_SECONDS)
+            .map(|(profile, _)| profile)
+    });
+    let profile = match cached {
+        Some(profile) => profile,
+        None => {
+            let profile_headers = [
+                ("Authorization", bearer.as_str()),
+                ("Accept", "application/json"),
+                ("User-Agent", user_agent.as_str()),
+            ];
+            match client.get_json(profile_url, &profile_headers, SOURCE) {
+                Ok((_, value)) => {
+                    let profile = map_profile(&value);
+                    if let Ok(mut memo) = context.claude_memo.lock() {
+                        memo.for_credential(&digest).profile = Some((profile.clone(), now));
+                    }
+                    profile
+                }
+                Err(_) => Profile::default(),
+            }
         }
     };
-    let plan = claude_plan(
-        credentials.subscription_type.as_deref(),
-        credentials.rate_limit_tier.as_deref(),
+    if let Ok(mut memo) = context.claude_memo.lock() {
+        memo.for_credential(&digest).network = Some((
+            now,
+            windows
+                .iter()
+                .find(|window| window.id == "reset_credits")
+                .cloned(),
+        ));
+    }
+    Ok(claude_snapshot(
+        &profile,
+        plan,
+        windows,
+        context.observed_at(),
+    ))
+}
+
+fn claude_snapshot(
+    profile: &Profile,
+    plan: Option<String>,
+    windows: Vec<QuotaWindow>,
+    observed_at: String,
+) -> QuotaSnapshot {
+    let (fingerprint, scope) = account_identity(
+        "claude",
+        "organization_id",
+        profile.organization_id.as_deref(),
     );
-    let (fingerprint, scope) =
-        account_identity("claude", "organization_id", organization_id.as_deref());
-    Ok(QuotaSnapshot {
+    QuotaSnapshot {
         provider: ProviderId::Claude,
         account: QuotaAccount {
             fingerprint,
             fingerprint_scope: scope,
-            label: mask_email(email.as_deref()),
+            label: mask_email(profile.email.as_deref()),
             plan,
         },
         windows,
         status: "available",
-        observed_at: context.observed_at(),
-    })
+        observed_at,
+    }
+}
+
+/// `cachedUsageUtilization` from Claude Code's global config: the usage body Claude Code last
+/// read for itself, when, and for which account. Only that key is decoded; the rest of the file
+/// is skipped unread into anything and nothing of it is kept.
+#[derive(serde::Deserialize)]
+struct GlobalConfig {
+    #[serde(rename = "cachedUsageUtilization")]
+    cached_usage_utilization: Option<ClaudeCodeUsage>,
+}
+
+#[derive(serde::Deserialize)]
+struct ClaudeCodeUsage {
+    #[serde(rename = "fetchedAtMs")]
+    fetched_at_ms: f64,
+    #[serde(rename = "accountUuid")]
+    account_uuid: Option<String>,
+    utilization: Value,
+}
+
+fn read_claude_code_usage(context: &CollectionContext) -> Option<ClaudeCodeUsage> {
+    let path = context
+        .env("CLAUDE_CONFIG_DIR")
+        .filter(|value| !value.trim().is_empty())
+        .map(|dir| PathBuf::from(dir).join(".claude.json"))
+        .unwrap_or_else(|| context.home_directory.join(".claude.json"));
+    let metadata = fs::symlink_metadata(&path).ok()?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return None;
+    }
+    serde_json::from_slice::<GlobalConfig>(&read_bounded_file(&path, GLOBAL_CONFIG_LIMIT)?)
+        .ok()?
+        .cached_usage_utilization
+}
+
+/// A reading from Claude Code's own snapshot, with no request at all (ADR 0063).
+///
+/// It stands in only when it is under a minute old, belongs to the account the profile this
+/// credential was read with names, and the network was read within the hour: the snapshot has
+/// no limit-reset block, so the grants that read found are carried beside it. Anything else
+/// leaves the network to answer.
+fn from_claude_code_snapshot(
+    context: &CollectionContext,
+    digest: &str,
+    now: i64,
+    plan: Option<String>,
+) -> Option<QuotaSnapshot> {
+    let (profile, reset_credits) = {
+        let mut memo = context.claude_memo.lock().ok()?;
+        let memo = memo.for_credential(digest);
+        let (profile, read_at) = memo.profile.clone()?;
+        let (network_at, reset_credits) = memo.network.clone()?;
+        (now - read_at < PROFILE_TTL_SECONDS && now - network_at < NETWORK_READ_EVERY_SECONDS)
+            .then_some((profile, reset_credits))?
+    };
+    let usage = read_claude_code_usage(context)?;
+    let age_ms = now.saturating_mul(1_000) - usage.fetched_at_ms as i64;
+    if !(0..LOCAL_SNAPSHOT_MAX_AGE_MS).contains(&age_ms)
+        || usage.account_uuid.is_none()
+        || usage.account_uuid != profile.account_uuid
+    {
+        return None;
+    }
+    let mut windows = map_usage(&usage.utilization);
+    if windows.is_empty() && !answers_for_a_known_window(&usage.utilization) {
+        return None;
+    }
+    windows.extend(reset_credits);
+    Some(claude_snapshot(
+        &profile,
+        plan,
+        windows,
+        unix_seconds_to_iso(usage.fetched_at_ms as i64 / 1_000),
+    ))
 }
 
 /// Whether the response named a window this build knows and answered `null` for it, which is
@@ -795,11 +962,13 @@ fn claude_plan_slug(raw: Option<&str>) -> Option<String> {
     (!stripped.is_empty()).then(|| stripped.to_owned())
 }
 
-fn map_profile(value: &Value) -> (Option<String>, Option<String>) {
+fn map_profile(value: &Value) -> Profile {
     let account = obj_get(value, "account");
     let organization = obj_get(value, "organization");
-    (
-        obj_get_any(
+    Profile {
+        account_uuid: obj_get(account.unwrap_or(&Value::Null), "uuid")
+            .and_then(|v| string(Some(v))),
+        email: obj_get_any(
             account.unwrap_or(&Value::Null),
             &["emailAddress", "email_address", "email"],
         )
@@ -808,13 +977,13 @@ fn map_profile(value: &Value) -> (Option<String>, Option<String>) {
             obj_get_any(value, &["emailAddress", "email_address", "email"])
                 .and_then(|v| string(Some(v)))
         }),
-        obj_get(organization.unwrap_or(&Value::Null), "uuid")
+        organization_id: obj_get(organization.unwrap_or(&Value::Null), "uuid")
             .and_then(|v| string(Some(v)))
             .or_else(|| {
                 obj_get_any(value, &["organizationUuid", "organization_uuid"])
                     .and_then(|v| string(Some(v)))
             }),
-    )
+    }
 }
 
 fn is_all_models(model_id: Option<&str>, model_name: &str) -> bool {
@@ -952,6 +1121,7 @@ mod tests {
             keychain: Default::default(),
             cli_versions: Default::default(),
             proven_credentials: Default::default(),
+            claude_memo: Default::default(),
         }
     }
 
@@ -1016,6 +1186,123 @@ mod tests {
             }
             assert!(heads[0].contains("anthropic-beta: oauth-2025-04-20"));
         }
+    }
+
+    fn request_path(head: &str) -> &str {
+        head.split_whitespace().nth(1).unwrap_or_default()
+    }
+
+    /// One profile read answers for its credential for a day; a new access token reads it again.
+    #[test]
+    fn the_profile_is_read_once_per_credential_and_not_on_every_collection() {
+        let usage = br#"{"five_hour":{"utilization":12}}"#.to_vec();
+        let profile = br#"{"account":{"uuid":"acct-1","email":"ada@example.com"},"organization":{"uuid":"org-1"}}"#.to_vec();
+        let (address, server) = crate::providers::common::serve_responses(vec![
+            (200, usage.clone()),
+            (200, profile.clone()),
+            (200, usage.clone()),
+            (200, usage),
+            (200, profile),
+        ]);
+        let context = isolated_context();
+        let collect = |token: &str| {
+            let mut credentials = credential(token, None);
+            credentials.scopes = vec!["user:profile".to_owned()];
+            collect_at(
+                &credentials,
+                &context,
+                &format!("http://{address}/usage"),
+                &format!("http://{address}/profile"),
+            )
+            .expect("snapshot")
+        };
+        let first = collect("a");
+        let second = collect("a");
+        assert_eq!(second.account.fingerprint, first.account.fingerprint);
+        assert_eq!(second.account.label, first.account.label);
+        collect("renewed");
+        let paths = server
+            .join()
+            .expect("server")
+            .iter()
+            .map(|head| request_path(head).to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            paths,
+            ["/usage", "/profile", "/usage", "/usage", "/profile"]
+        );
+    }
+
+    /// Claude Code's own snapshot answers only while it is under a minute old and names the
+    /// account the credential's profile names; anything else asks the network.
+    #[test]
+    fn claude_codes_snapshot_stands_in_only_when_fresh_and_for_the_same_account() {
+        let home = std::env::temp_dir().join(format!("quota-claude-d6-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&home).expect("home");
+        let context = CollectionContext {
+            home_directory: home.clone(),
+            now: Some("2026-09-26T10:00:00Z".to_owned()),
+            ..isolated_context()
+        };
+        let now_ms = context.observed_unix() * 1_000;
+        let write_snapshot = |age_ms: i64, account: &str| {
+            fs::write(
+                home.join(".claude.json"),
+                serde_json::to_vec(&serde_json::json!({
+                    "oauthAccount": {"emailAddress": "not-read@example.com"},
+                    "cachedUsageUtilization": {
+                        "fetchedAtMs": now_ms - age_ms,
+                        "accountUuid": account,
+                        "utilization": {
+                            "five_hour": {"utilization": 77, "resets_at": "2026-09-26T12:00:00Z"}
+                        }
+                    }
+                }))
+                .expect("config"),
+            )
+            .expect("write config");
+        };
+        let (address, server) = crate::providers::common::serve_responses(vec![
+            (200, br#"{"five_hour":{"utilization":12}}"#.to_vec()),
+            (
+                200,
+                br#"{"account":{"uuid":"acct-1","email":"ada@example.com"},"organization":{"uuid":"org-1"}}"#
+                    .to_vec(),
+            ),
+            (200, br#"{"five_hour":{"utilization":13}}"#.to_vec()),
+            (200, br#"{"five_hour":{"utilization":14}}"#.to_vec()),
+        ]);
+        let mut credentials = credential("d6", None);
+        credentials.scopes = vec!["user:profile".to_owned()];
+        let collect = || {
+            collect_at(
+                &credentials,
+                &context,
+                &format!("http://{address}/usage"),
+                &format!("http://{address}/profile"),
+            )
+            .expect("snapshot")
+            .windows[0]
+                .used_percent
+        };
+        // A fresh snapshot before any network read: the account it names is not yet known.
+        write_snapshot(10_000, "acct-1");
+        assert_eq!(collect(), 12.0);
+        // Fresh and the same account: no request at all.
+        assert_eq!(collect(), 77.0);
+        // A minute old, then another account: the network answers each time.
+        write_snapshot(60_000, "acct-1");
+        assert_eq!(collect(), 13.0);
+        write_snapshot(10_000, "acct-2");
+        assert_eq!(collect(), 14.0);
+        let paths = server
+            .join()
+            .expect("server")
+            .iter()
+            .map(|head| request_path(head).to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(paths, ["/usage", "/profile", "/usage", "/usage"]);
+        fs::remove_dir_all(&home).expect("cleanup");
     }
 
     /// The stored session is the last rung, and only the last rung.

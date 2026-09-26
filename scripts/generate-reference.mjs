@@ -156,7 +156,8 @@ function renderReference({ catalog, tokens, controlVersion, managedVersion, sche
     const status = entry.status_page?.kind ?? "—";
     const env = (entry.environment_keys ?? []).join(", ") || "—";
     const base = entry.default_base_url ?? "—";
-    return `| ${entry.order} | [\`${entry.id}\`](providers/${entry.id}.md) | ${escapeCell(entry.display_name)} | ${entry.account_sync} | ${entry.default_visible} | ${escapeCell(entry.setup_action)} | ${escapeCell(credential)} | ${browser} | ${escapeCell(status)} | ${escapeCell(env)} | ${escapeCell(base)} |`;
+    const floor = entry.collection.min_interval_seconds;
+    return `| ${entry.order} | [\`${entry.id}\`](providers/${entry.id}.md) | ${escapeCell(entry.display_name)} | ${entry.account_sync} | ${entry.default_visible} | ${escapeCell(entry.setup_action)} | ${escapeCell(credential)} | ${browser} | ${escapeCell(status)} | ${floor} s | ${escapeCell(env)} | ${escapeCell(base)} |`;
   });
   const schemaRows = schemas.map((schema) => {
     const id = schema.id ? ` \`${schema.id}\`` : "";
@@ -193,8 +194,8 @@ From \`packages/provider/catalog.json\`. What Quota can do with each id, and wha
 the generated [provider capability matrix](providers/README.md). Strategy for each catalog id is
 [\`docs/providers/<id>.md\`](provider-collection.md#providers).
 
-| Order | Id | Display name | Account sync | Default visible | Setup | Credential | Browser session | Status page | Environment keys | Default base URL |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Order | Id | Display name | Account sync | Default visible | Setup | Credential | Browser session | Status page | Min interval | Environment keys | Default base URL |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 ${providerRows.join("\n")}
 
 ## Protocol
