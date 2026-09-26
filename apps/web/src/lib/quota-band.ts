@@ -1,9 +1,9 @@
 import {
   formatPercent,
   formatWindowTitle,
-  isBalanceOnly,
   observedSnapshotStatus,
   remainingPercent,
+  showsPercentMeter,
 } from "@gotry-io/quota-model";
 import type { AccountSummaryRead } from "@gotry-io/quota-protocol";
 import { formatQuotaRemaining, observedSnapshotStatusLabel } from "./format.ts";
@@ -14,8 +14,9 @@ type Subscription = AccountSummaryRead["subscriptions"][number];
  * What the quota band says about one subscription.
  *
  * A reading that no longer describes the account says why instead of a number. A subscription
- * that is only wallets prints the balance. Otherwise the tightest window speaks for it: the
- * lowest remaining percent, because that is the one that stops the reader first.
+ * whose windows draw no percent meter (wallets, dollars of a limit) prints its first amount.
+ * Otherwise the tightest metered window speaks for it: the lowest remaining percent, because that
+ * is the one that stops the reader first — the same windows Apple's `TightestWindow` lets compete.
  */
 export type QuotaBandItem =
   | { kind: "status"; word: string }
@@ -31,7 +32,7 @@ export function quotaBandItem(subscription: Subscription, now: Date): QuotaBandI
   }
   let tightest: { remaining: number; title: string } | null = null;
   for (const window of snapshot.windows) {
-    if (isBalanceOnly(window)) continue;
+    if (!showsPercentMeter(window)) continue;
     const remaining = remainingPercent(window.used_percent);
     if (tightest === null || remaining < tightest.remaining) {
       tightest = { remaining, title: formatWindowTitle(window.title, window) };

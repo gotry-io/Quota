@@ -1,9 +1,9 @@
 import {
   formatWindowTitle,
-  isBalanceOnly,
   observedSnapshotStatus,
   quotaPace,
   remainingPercent,
+  showsPercentMeter,
 } from "@gotry-io/quota-model";
 import { type AccountSummaryRead, providerDisplayName } from "@gotry-io/quota-protocol";
 import { meterTone, type MeterTone } from "./account-overview.ts";
@@ -25,9 +25,12 @@ export type TightestWindow = {
   name: string;
 };
 
-/** Windows with a percent that means remaining: not wallets. */
+/**
+ * Windows that draw a percent meter: not wallets, and not dollars of a limit, which state that
+ * amount instead (Apple's `TightestWindow` lets the same windows compete).
+ */
 function percentWindows(subscription: Subscription): QuotaWindow[] {
-  return subscription.snapshot.windows.filter((window) => !isBalanceOnly(window));
+  return subscription.snapshot.windows.filter(showsPercentMeter);
 }
 
 export function isCurrent(subscription: Subscription, now: Date): boolean {

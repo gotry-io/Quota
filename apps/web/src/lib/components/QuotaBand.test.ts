@@ -64,10 +64,24 @@ it("speaks for a subscription with its tightest window, a wallet, or why it is n
       [{ id: "session", title: "5h", used_percent: 10, resets_at: RESET }],
       "auth_required",
     ),
+    subscription("cursor", [
+      { id: "auto", title: "Auto", used_percent: 40, resets_at: RESET },
+      {
+        id: "included",
+        title: "Included Usage",
+        used_percent: 72.75,
+        resets_at: RESET,
+        remaining_value: 5.45,
+        limit_value: 20,
+        value_unit: "usd",
+      },
+    ]),
   ]);
 
   expect(band.codex).toBe("Codex 12% Weekly");
   expect(band.openrouter).toBe("OpenRouter $12.34");
   // A reading that no longer describes the account names why rather than printing its number.
   expect(band.claude).toBe("Claude Code Sign-in needed");
+  // Dollars of a limit state that amount and draw no meter, so they never compete (TightestWindow).
+  expect(band.cursor).toBe("Cursor 60% Auto");
 });
