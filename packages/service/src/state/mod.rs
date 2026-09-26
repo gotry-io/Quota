@@ -581,6 +581,13 @@ impl StateStore {
         result
     }
 
+    /// Hold the cache connection, as a long write does, so a test can see what a reader does
+    /// while it waits.
+    #[cfg(test)]
+    pub(crate) fn hold_cache_for_test(&self) -> std::sync::MutexGuard<'_, Connection> {
+        self.cache.lock().expect("cache")
+    }
+
     fn with_cache<T>(
         &self,
         f: impl FnOnce(&Connection) -> Result<T, StateError>,
