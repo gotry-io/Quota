@@ -131,11 +131,10 @@ for (const appearance of appearances) {
     test(`overview ${appearance} desktop`, async ({ page }) => {
       await mockV6(page);
       await page.goto("/my");
-      await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
+      await expect(page.locator("#page-title")).toBeVisible();
       await expect(page.getByRole("heading", { name: "Subscriptions" })).toBeVisible();
       await expect(page.getByRole("heading", { name: "Today" })).toBeVisible();
       await expect(page.locator(".quota-card")).toHaveCount(3);
-      await expect(page.getByText("octocat").first()).toBeVisible();
       await expect(page.getByText("pe***@example.com").first()).toBeVisible();
       await expect(page.getByText("Studio Mac").first()).toBeVisible();
       await expect(page.getByText("Kitchen Mac").first()).toBeVisible();
@@ -151,7 +150,7 @@ for (const appearance of appearances) {
     test(`usage ${appearance} desktop`, async ({ page }) => {
       await mockV6(page);
       await page.goto("/my/usage");
-      await expect(page.getByRole("heading", { name: "Usage", exact: true })).toBeVisible();
+      await expect(page.locator("#dashboard-title")).toBeVisible();
       await expect(page.locator("#token-total")).toHaveText("11.4M");
       await expect(page.locator("#cost-total")).toHaveText("$8.50");
       await expect(page.locator("#message-total")).toBeVisible();
@@ -176,10 +175,9 @@ for (const appearance of appearances) {
     test(`overview ${appearance} mobile`, async ({ page }) => {
       await mockV6(page);
       await page.goto("/my");
-      await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
+      await expect(page.locator("#page-title")).toBeVisible();
       await expect(page.getByRole("heading", { name: "Subscriptions" })).toBeVisible();
       await expect(page.locator(".quota-card")).toHaveCount(3);
-      await expect(page.getByText("octocat").first()).toBeVisible();
       await expect(page.getByText("pe***@example.com").first()).toBeVisible();
       await expect(page.getByText("Studio Mac").first()).toBeVisible();
       await expect(page.getByText("Kitchen Mac").first()).toBeVisible();

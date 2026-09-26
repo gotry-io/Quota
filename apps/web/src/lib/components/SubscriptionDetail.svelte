@@ -7,11 +7,13 @@ import {
   accountNoticeRetry,
 } from "$lib/account-errors";
 import LoadingBlock from "$lib/components/LoadingBlock.svelte";
+import PageHeader from "$lib/components/PageHeader.svelte";
+import PageSection from "$lib/components/PageSection.svelte";
 import ProviderMark from "$lib/components/ProviderMark.svelte";
 import QuotaWindows from "$lib/components/QuotaWindows.svelte";
 import RetryNotice from "$lib/components/RetryNotice.svelte";
 import { formatQuotaRemaining, observationFreshnessCopy } from "$lib/format";
-import { DASHBOARD_PATH, planDisplayName } from "$lib/routes";
+import { planDisplayName, QUOTA_PATH } from "$lib/routes";
 
 type Subscription = AccountSummaryRead["subscriptions"][number];
 type Source = Subscription["sources"][number];
@@ -76,10 +78,12 @@ function sourceFreshness(snapshot: Snapshot | undefined, observedAt: string): st
   <meta name="robots" content="noindex, nofollow" />
 </svelte:head>
 
-<section class="overview-section subscription-detail" aria-labelledby="subscription-title">
-  <p class="subscription-back">
-    <a href={DASHBOARD_PATH}>← Overview</a>
-  </p>
+{#if !subscription}
+  <PageHeader id="subscription-title">
+    {#snippet eyebrow()}<a href={QUOTA_PATH}>Quota</a>{/snippet}
+    Subscription
+    {#snippet controls()}<a class="pill" href={QUOTA_PATH}>← Quota</a>{/snippet}
+  </PageHeader>
   {#if loadError}
     <RetryNotice
       message={loadError.message}
@@ -88,60 +92,65 @@ function sourceFreshness(snapshot: Snapshot | undefined, observedAt: string): st
     />
   {/if}
   {#if !summary}
-    <h1 id="subscription-title">Subscription</h1>
     {#if !loadError}
       <LoadingBlock lines={4} label="Loading subscription" />
     {/if}
-  {:else if !subscription}
-    <h1 id="subscription-title">Subscription</h1>
-    <p class="empty-state">This subscription is no longer reported.</p>
   {:else}
-    {@const snapshot = subscription.snapshot}
-    {@const quotaStatus = observedSnapshotStatus(snapshot, now)}
-    {@const plan = planDisplayName(snapshot.account.plan)}
-    <article class="quota-card subscription-card">
-      <div class="quota-card-heading">
-        <ProviderMark provider={subscription.provider} />
-        <div class="quota-card-identity">
-          <h1 id="subscription-title" class="quota-card-provider">
-            {providerDisplayName(subscription.provider)}
-          </h1>
-          {#if snapshot.account.label}
-            <p class="quota-card-account">{snapshot.account.label}</p>
-          {/if}
-        </div>
-        {#if plan}
-          <span class="status-pill">{plan}</span>
-        {/if}
-      </div>
-      <p class="subscription-freshness">
-        {observationFreshnessCopy(quotaStatus, snapshot.observed_at, now)}
-      </p>
-      <QuotaWindows
-        windows={snapshot.windows}
-        provider={subscription.provider}
-        now={now}
-        showPaceDetail={true}
-      />
-    </article>
-    <div class="subscription-sources">
-      <h2 id="subscription-sources-title">Devices</h2>
-      {#if sources.length === 0}
-        <p class="empty-state">No devices reported this subscription.</p>
-      {:else}
-        <ul class="subscription-source-list" aria-labelledby="subscription-sources-title">
-          {#each sources as source (`${source.device_id}:${source.observed_at}`)}
-            {@const reading = sourceSnapshot(subscription, source)}
-            {@const remaining = primaryRemaining(reading)}
-            {@const reporting = source.observed_at === snapshot.observed_at}
-            <li>
-              {deviceName(source.device_id)}{#if remaining}
-                {" · "}{remaining}{/if}{" · "}{sourceFreshness(reading, source.observed_at)}{#if reporting}
-                {" · "}<span class="status-pill status-available">Reporting</span>{/if}
-            </li>
-          {/each}
-        </ul>
-      {/if}
-    </div>
+    <p class="empty-state">This subscription is no longer reported.</p>
   {/if}
-</section>
+{:else}
+  {@const snapshot = subscription.snapshot}
+  {@const quotaStatus = observedSnapshotStatus(snapshot, now)}
+  {@const plan = planDisplayName(snapshot.account.plan)}
+  {@const name = providerDisplayName(subscription.provider)}
+  <PageHeader id="subscription-title">
+    {#snippet eyebrow()}<a href={QUOTA_PATH}>Quota</a> <span>/</span> <span>{name}</span>{/snippet}
+    <b>{name}</b>
+    {#snippet controls()}<a class="pill" href={QUOTA_PATH}>← Quota</a>{/snippet}
+    {#snippet meta()}
+      <ProviderMark provider={subscription.provider} />
+      {#if snapshot.account.label}
+        <span>{snapshot.account.label}</span>
+      {/if}
+      {#if plan}
+        <span class="tag">{plan}</span>
+      {/if}
+      <span class="subscription-freshness"
+        >{observationFreshnessCopy(quotaStatus, snapshot.observed_at, now)}</span
+      >
+    {/snippet}
+  </PageHeader>
+  {#if loadError}
+    <RetryNotice
+      message={loadError.message}
+      actionLabel={accountNoticeActionLabel(loadError)}
+      onRetry={accountNoticeRetry(loadError, onRetry)}
+    />
+  {/if}
+  <PageSection id="subscription-windows-title" title="Windows">
+    <QuotaWindows
+      windows={snapshot.windows}
+      provider={subscription.provider}
+      {now}
+      showPaceDetail={true}
+    />
+  </PageSection>
+  <PageSection id="subscription-sources-title" title="Readings">
+    {#if sources.length === 0}
+      <p class="empty-state">No devices reported this subscription.</p>
+    {:else}
+      <ul class="subscription-source-list" aria-labelledby="subscription-sources-title">
+        {#each sources as source (`${source.device_id}:${source.observed_at}`)}
+          {@const reading = sourceSnapshot(subscription, source)}
+          {@const remaining = primaryRemaining(reading)}
+          {@const reporting = source.observed_at === snapshot.observed_at}
+          <li>
+            {deviceName(source.device_id)}{#if remaining}
+              {" · "}{remaining}{/if}{" · "}{sourceFreshness(reading, source.observed_at)}{#if reporting}
+              {" · "}<span class="tag good">Reporting</span>{/if}
+          </li>
+        {/each}
+      </ul>
+    {/if}
+  </PageSection>
+{/if}

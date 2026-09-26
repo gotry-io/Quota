@@ -1,5 +1,3 @@
-# Privacy
-
 Effective date: TBD
 
 This page is a skeleton of what QuotaRelay retains for an Account. It follows the security baseline

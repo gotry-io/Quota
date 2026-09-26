@@ -3,7 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#f2f8f5" />
+    <meta name="theme-color" content="#ffffff" />
+    <!-- Runs before any stylesheet, so the canvas colours are stated here rather than read. -->
     <script nonce="%sveltekit.nonce%">
       (() => {
         const stored = localStorage.getItem("quota-theme");
@@ -13,7 +14,7 @@
         if (explicitTheme) document.documentElement.dataset.theme = explicitTheme;
         document.querySelector('meta[name="theme-color"]')?.setAttribute(
           "content",
-          theme === "dark" ? "#111111" : "#f2f8f5",
+          theme === "dark" ? "#111111" : "#ffffff",
         );
       })();
     </script>

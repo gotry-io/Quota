@@ -1,6 +1,7 @@
 <script lang="ts">
 import privacy from "../../content/privacy.md?raw";
 import MarkdownBody from "$lib/components/MarkdownBody.svelte";
+import PageHeader from "$lib/components/PageHeader.svelte";
 </script>
 
 <svelte:head>
@@ -12,4 +13,9 @@ import MarkdownBody from "$lib/components/MarkdownBody.svelte";
   <link rel="canonical" href="https://quota.gotry.io/privacy" />
 </svelte:head>
 
-<MarkdownBody source={privacy} draft />
+<PageHeader>
+  {#snippet eyebrow()}Privacy <span class="tag">Draft</span>{/snippet}
+  <b>Privacy.</b> What Quota keeps for an Account, and what never leaves your Mac.
+</PageHeader>
+
+<MarkdownBody source={privacy} />

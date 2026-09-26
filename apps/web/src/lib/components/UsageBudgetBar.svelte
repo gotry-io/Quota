@@ -31,6 +31,9 @@ let editing = $state(false);
 let draftAmount = $state<number | undefined>(undefined);
 
 const pending = $derived(pendingBudgetAlerts(budget, progress, month, fired));
+const amountText = $derived(
+  budget.amountUSD === null ? "No budget" : `$${budget.amountUSD.toFixed(2)}`,
+);
 
 function startEditing(): void {
   draftAmount = budget.amountUSD ?? undefined;
@@ -47,20 +50,14 @@ function save(event: SubmitEvent): void {
 }
 </script>
 
-<section class="usage-budget" aria-labelledby="usage-budget-title">
-  <div class="usage-budget-heading">
-    <h2 id="usage-budget-title">Monthly budget</h2>
-    <button class="button-secondary" type="button" onclick={startEditing}>
-      {budget.amountUSD === null ? "Set budget" : "Edit"}
-    </button>
-  </div>
-  <p class="usage-budget-note">This budget follows your Account.</p>
-
+<div class="split-row">
   {#if editing}
-    <form class="usage-budget-form" onsubmit={save}>
-      <label>
-        <span>Amount in USD</span>
+    <form class="budget-form" onsubmit={save}>
+      <label class="visually-hidden" for="budget-amount">Amount in USD</label>
+      <span class="field">
+        <span aria-hidden="true">$</span>
         <input
+          id="budget-amount"
           type="number"
           inputmode="decimal"
           min="0"
@@ -69,50 +66,108 @@ function save(event: SubmitEvent): void {
           placeholder="No budget"
           bind:value={draftAmount}
         />
-      </label>
-      <label class="usage-budget-toggle">
-        <input
-          type="checkbox"
-          checked={budget.alerts}
-          onchange={(event) =>
-            onChangeBudget({
-              amountUSD: budget.amountUSD,
-              alerts: event.currentTarget.checked,
-            })}
-        />
-        <span>Tell me at 80% and 100%</span>
-      </label>
-      <button class="button-primary" type="submit">Save</button>
-      <button class="button-secondary" type="button" onclick={() => (editing = false)}>
-        Cancel
-      </button>
+      </span>
+      <button class="pill primary" type="submit">Save</button>
+      <button class="pill" type="button" onclick={() => (editing = false)}>Cancel</button>
     </form>
-  {:else if progress}
+  {:else}
+    <div>
+      <div class="split-row-title">Amount</div>
+      <div class="split-row-detail">{amountText}</div>
+    </div>
+    <button class="pill" type="button" onclick={startEditing}>
+      {budget.amountUSD === null ? "Set budget" : "Edit"}
+    </button>
+  {/if}
+</div>
+<label class="split-row">
+  <span class="split-row-title">Tell me at 80% and 100%</span>
+  <input
+    class="switch"
+    type="checkbox"
+    role="switch"
+    checked={budget.alerts}
+    onchange={(event) =>
+      onChangeBudget({
+        amountUSD: budget.amountUSD,
+        alerts: event.currentTarget.checked,
+      })}
+  />
+</label>
+<div class="split-row">
+  <div>
+    <div class="split-row-title">This month</div>
+    {#if progress}
+      <div class="split-row-detail" id="usage-budget-value">{progress.text}</div>
+    {:else}
+      <div class="split-row-detail">No budget is set for this month.</div>
+    {/if}
+  </div>
+  {#if progress}
     <div
-      class="usage-budget-meter"
+      class="budget-meter"
+      class:budget-meter-warn={progress.percent >= 80 && progress.percent < 100}
+      class:budget-meter-critical={progress.percent >= 100}
       role="progressbar"
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={progress.percent}
       aria-valuetext={progress.text}
     >
-      <div class="usage-budget-fill" style={`width: ${progress.fraction * 100}%`}></div>
+      <i style={`width: ${progress.fraction * 100}%`}></i>
     </div>
-    <p class="usage-budget-value" id="usage-budget-value">{progress.text}</p>
-  {:else}
-    <p class="usage-budget-value">No budget is set for this month.</p>
   {/if}
+</div>
 
-  {#each pending as threshold (threshold)}
-    <p class="usage-budget-alert" role="status">
-      <span>{budgetAlertText(threshold, progress?.budgetUSD ?? 0)}</span>
-      <button
-        class="button-secondary"
-        type="button"
-        onclick={() => onAcknowledge([...fired, budgetAlertKey(month, threshold)])}
-      >
-        Got it
-      </button>
-    </p>
-  {/each}
-</section>
+{#each pending as threshold (threshold)}
+  <p class="notice budget-alert" role="status">
+    <span>{budgetAlertText(threshold, progress?.budgetUSD ?? 0)}</span>
+    <button
+      class="pill sm"
+      type="button"
+      onclick={() => onAcknowledge([...fired, budgetAlertKey(month, threshold)])}
+    >
+      Got it
+    </button>
+  </p>
+{/each}
+
+<style>
+.budget-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.budget-form input {
+  width: 110px;
+}
+
+.budget-meter {
+  width: min(200px, 40vw);
+  height: 6px;
+  overflow: hidden;
+  border-radius: 9999px;
+  background: var(--meter-track);
+}
+
+.budget-meter i {
+  display: block;
+  height: 100%;
+  border-radius: 9999px;
+  background: var(--quota-healthy);
+}
+
+.budget-meter-warn i {
+  background: var(--quota-warning);
+}
+
+.budget-meter-critical i {
+  background: var(--quota-critical);
+}
+
+.budget-alert {
+  margin-top: 12px;
+}
+</style>

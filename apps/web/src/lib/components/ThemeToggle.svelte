@@ -1,20 +1,10 @@
 <script lang="ts">
 const THEME_STORAGE_KEY = "quota-theme";
 
-type Theme = "light" | "dark";
-type ThemePreference = "system" | Theme;
+type ThemePreference = "system" | "light" | "dark";
 
 const options = ["system", "light", "dark"] as const satisfies readonly ThemePreference[];
 
-let {
-  id = "theme-toggle",
-  menuPlacement = "up",
-}: {
-  id?: string;
-  menuPlacement?: "up" | "down";
-} = $props();
-
-let menu = $state<HTMLDetailsElement | null>(null);
 let preference = $state<ThemePreference>("system");
 
 function storedPreference(): ThemePreference {
@@ -26,22 +16,21 @@ function storedPreference(): ThemePreference {
   }
 }
 
-function resolvedTheme(value: ThemePreference): Theme {
-  if (value !== "system") return value;
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-}
-
 function label(value: ThemePreference): string {
   return value[0]?.toUpperCase() + value.slice(1);
 }
 
+/** The browser chrome follows the page canvas, read back from the generated `--canvas`. */
 function applyAppearance(value: ThemePreference): void {
-  const theme = resolvedTheme(value);
-  if (value === "system") delete document.documentElement.dataset.theme;
-  else document.documentElement.dataset.theme = value;
-  document
-    .querySelector<HTMLMetaElement>('meta[name="theme-color"]')
-    ?.setAttribute("content", theme === "dark" ? "#111111" : "#f2f8f5");
+  const root = document.documentElement;
+  if (value === "system") delete root.dataset.theme;
+  else root.dataset.theme = value;
+  const canvas = getComputedStyle(root).backgroundColor;
+  if (canvas) {
+    document
+      .querySelector<HTMLMetaElement>('meta[name="theme-color"]')
+      ?.setAttribute("content", canvas);
+  }
 }
 
 function choose(value: ThemePreference): void {
@@ -53,7 +42,6 @@ function choose(value: ThemePreference): void {
     // Private browsing and some test environments expose no storage.
   }
   applyAppearance(value);
-  menu?.removeAttribute("open");
 }
 
 $effect(() => {
@@ -68,33 +56,10 @@ $effect(() => {
 });
 </script>
 
-<details
-  class="appearance-menu"
-  class:appearance-menu-down={menuPlacement === "down"}
-  bind:this={menu}
->
-  <summary
-    {id}
-    class="theme-toggle"
-    aria-label={`Appearance: ${label(preference)}`}
-    title={`Appearance: ${label(preference)}`}
-  >
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <circle cx="12" cy="12" r="8.5" />
-      <path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor" stroke="none" />
-    </svg>
-  </summary>
-  <div class="appearance-options" role="group" aria-label="Appearance">
-    {#each options as option}
-      <button
-        type="button"
-        class:active={preference === option}
-        aria-pressed={preference === option}
-        onclick={() => choose(option)}
-      >
-        <span>{label(option)}</span>
-        <span class="appearance-check" aria-hidden="true">{preference === option ? "✓" : ""}</span>
-      </button>
-    {/each}
-  </div>
-</details>
+<div id="theme-toggle" class="seg" role="group" aria-label="Appearance">
+  {#each options as option (option)}
+    <button type="button" aria-pressed={preference === option} onclick={() => choose(option)}
+      >{label(option)}</button
+    >
+  {/each}
+</div>

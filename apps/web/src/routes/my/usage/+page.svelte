@@ -2,11 +2,7 @@
 import type { UsagePeriodRead } from "@gotry-io/quota-protocol";
 import { goto } from "$app/navigation";
 import { page } from "$app/state";
-import {
-  type AccountError,
-  accountNoticeActionLabel,
-  accountNoticeRetry,
-} from "$lib/account-errors";
+import { accountNoticeActionLabel, accountNoticeRetry } from "$lib/account-errors";
 import { usageStatusLine } from "$lib/account-overview";
 import {
   accountActivityRange,
@@ -15,38 +11,18 @@ import {
   browserTimezone,
   usagePeriodResourceKey,
 } from "$lib/account-reads.ts";
-import {
-  type BudgetEdit,
-  fetchAccountSettings,
-  saveBudget as saveAccountBudget,
-  writeAccountSettings,
-} from "$lib/account-settings-client";
 import { activityRangeKey, getAccountStore } from "$lib/account-store.svelte.ts";
 import LoadingBlock from "$lib/components/LoadingBlock.svelte";
+import PageHeader from "$lib/components/PageHeader.svelte";
 import RetryNotice from "$lib/components/RetryNotice.svelte";
 import UsageActivity from "$lib/components/UsageActivity.svelte";
 import UsageBreakdown from "$lib/components/UsageBreakdown.svelte";
-import UsageBudgetBar from "$lib/components/UsageBudgetBar.svelte";
 import UsageDaily from "$lib/components/UsageDaily.svelte";
 import UsageExportMenu from "$lib/components/UsageExportMenu.svelte";
 import UsagePeriodBar from "$lib/components/UsagePeriodBar.svelte";
 import UsageRhythm from "$lib/components/UsageRhythm.svelte";
 import { costBasisLabel, formatCost, formatCount, formatUtcDateRange } from "$lib/format";
 import { usageActivityDayFromQuery, usageActivityDayHref } from "$lib/usage-activity";
-import {
-  budgetAmountToWire,
-  budgetMonth,
-  budgetProgress,
-  clearLocalBudgetPolicy,
-  costDollars,
-  NO_BUDGET,
-  planBudgetAdoption,
-  readFiredBudgetAlerts,
-  type UsageBudget,
-  usageBudgetFromDocument,
-  usageBudgetStorage,
-  writeFiredBudgetAlerts,
-} from "$lib/usage-budget";
 import {
   accountPeriodExportInput,
   type UsageExportInput,
@@ -69,9 +45,6 @@ import {
 } from "$lib/usage-period";
 
 const store = getAccountStore();
-let budget = $state<UsageBudget>(NO_BUDGET);
-let budgetError = $state<AccountError | null>(null);
-let firedBudgetAlerts = $state<string[]>(readFiredBudgetAlerts(usageBudgetStorage()));
 const utcDate = $derived(store.now.toISOString().slice(0, 10));
 const activityRange = $derived(accountActivityRange(new Date(`${utcDate}T00:00:00Z`)));
 const rangeKey = $derived(activityRangeKey(activityRange));
@@ -111,27 +84,6 @@ const periodError = $derived(
 );
 const status = $derived(
   period ? usageStatusLine(usagePeriodName(selection), period.partial, truncated) : null,
-);
-const month = $derived(budgetMonth(store.now));
-const monthRange = $derived(usagePeriodRange({ segment: "month", offset: 0 }, store.now));
-const monthPeriodRead = $derived.by(() => {
-  if (!monthRange) return null;
-  const withoutBreakdown =
-    store.period[usagePeriodResourceKey({ ...monthRange, timezone, breakdown: false })]?.data ??
-    null;
-  const withBreakdown =
-    store.period[usagePeriodResourceKey({ ...monthRange, timezone, breakdown: true })]?.data ??
-    null;
-  return withoutBreakdown ?? withBreakdown;
-});
-const budgetView = $derived(
-  budget.amountUSD !== null && monthPeriodRead
-    ? budgetProgress(
-        costDollars(monthPeriodRead.cost),
-        budget.amountUSD,
-        monthPeriodRead.cost.status !== "complete",
-      )
-    : null,
 );
 const detailEntry = $derived(selectedDay ? store.dayDetail[selectedDay] : undefined);
 const dayDetail = $derived(detailEntry?.data ?? null);
@@ -174,17 +126,6 @@ $effect(() => {
 });
 
 $effect(() => {
-  if (!monthRange) return;
-  const sameAsSelected =
-    selectedRange !== null &&
-    !fromSummary &&
-    selectedRange.from === monthRange.from &&
-    selectedRange.to === monthRange.to;
-  if (sameAsSelected) return;
-  void store.ensurePeriod(monthRange, { breakdown: false });
-});
-
-$effect(() => {
   if (selection.segment === "all" || !selectedRange) return;
   void store.ensureRhythm(selectedRange);
 });
@@ -210,65 +151,6 @@ function writeDay(day: string | null): void {
     noScroll: true,
   });
 }
-
-$effect(() => {
-  void loadBudget();
-});
-
-async function loadBudget(): Promise<void> {
-  budgetError = null;
-  const fetched = await fetchAccountSettings();
-  if (fetched.status === "error") {
-    budgetError = fetched.error;
-    return;
-  }
-  const storage = usageBudgetStorage();
-  const plan = planBudgetAdoption(fetched.settings, storage);
-  if (plan.write) {
-    const written = await writeAccountSettings(plan.write);
-    if (written.status === "error") {
-      budgetError = written.error;
-      return;
-    }
-    if (written.status === "ok" || written.status === "stale" || written.status === "conflict") {
-      budget = usageBudgetFromDocument(written.settings.budget);
-    }
-  } else {
-    budget = usageBudgetFromDocument(plan.local.budget);
-  }
-  clearLocalBudgetPolicy(storage);
-}
-
-function changeBudget(next: UsageBudget): void {
-  const edit: BudgetEdit =
-    next.alerts !== budget.alerts
-      ? { kind: "set_budget_alerts", value: next.alerts }
-      : { kind: "set_budget_amount", value: budgetAmountToWire(next.amountUSD) };
-  budget = next;
-  void persistBudget(edit);
-}
-
-async function persistBudget(edit: BudgetEdit): Promise<void> {
-  budgetError = null;
-  const result = await saveAccountBudget(edit);
-  if (result.status === "ok") {
-    budget = usageBudgetFromDocument(result.settings.budget);
-    return;
-  }
-  if (result.status === "conflict") {
-    budget = usageBudgetFromDocument(result.settings.budget);
-    budgetError = { status: "unavailable", message: result.message, action: { type: "retry" } };
-    return;
-  }
-  if (result.status === "error") {
-    budgetError = result.error;
-  }
-}
-
-function acknowledgeBudgetAlerts(keys: readonly string[]): void {
-  firedBudgetAlerts = [...keys];
-  writeFiredBudgetAlerts(usageBudgetStorage(), firedBudgetAlerts);
-}
 </script>
 
 <svelte:head>
@@ -276,40 +158,29 @@ function acknowledgeBudgetAlerts(keys: readonly string[]): void {
   <meta name="robots" content="noindex, nofollow" />
 </svelte:head>
 
-<header class="usage-heading">
-  <div>
-    <h1 id="dashboard-title">Usage</h1>
-    {#if status}
-      <p class="dashboard-status">{status}</p>
-    {/if}
-  </div>
-  <div class="usage-heading-tools">
+<PageHeader id="dashboard-title">
+  {#snippet eyebrow()}Usage · {usagePeriodName(selection)}{/snippet}
+  {#if period}
+    <b>{formatCount(period.totals.total_tokens)} tokens</b>, by agent, provider, and model.
+  {:else}
+    Usage by period, agent, and model.
+  {/if}
+  {#snippet controls()}
     <UsageExportMenu input={exportInput} />
-    <UsagePeriodBar
-      {selection}
-      today={store.now}
-      earliest={activityRange.from}
-      onSelect={selectPeriod}
-    />
-  </div>
-</header>
+  {/snippet}
+  {#snippet meta()}
+    {#if status}
+      <span class="dashboard-status">{status}</span>
+    {/if}
+  {/snippet}
+</PageHeader>
 
-<UsageBudgetBar
-  {budget}
-  progress={budgetView}
-  {month}
-  fired={firedBudgetAlerts}
-  onChangeBudget={changeBudget}
-  onAcknowledge={acknowledgeBudgetAlerts}
+<UsagePeriodBar
+  {selection}
+  today={store.now}
+  earliest={activityRange.from}
+  onSelect={selectPeriod}
 />
-
-{#if budgetError}
-  <RetryNotice
-    message={budgetError.message}
-    actionLabel={accountNoticeActionLabel(budgetError)}
-    onRetry={accountNoticeRetry(budgetError, () => void loadBudget())}
-  />
-{/if}
 
 {#if store.loadError}
   <RetryNotice

@@ -1,39 +1,12 @@
 <script lang="ts">
 import { page } from "$app/state";
-import { accountStatusLine, devicesSummaryLine } from "$lib/account-overview";
 import { createAccountStore, setAccountStore } from "$lib/account-store.svelte.ts";
-import { askingCopy } from "$lib/collection-demand";
-import {
-  accountPageTitle,
-  isDevicesPath,
-  isSettingsPath,
-  isSubscriptionPath,
-  isUsagePath,
-} from "$lib/routes";
+import QuotaBand from "$lib/components/QuotaBand.svelte";
 
 let { children } = $props();
 
 const store = createAccountStore();
 setAccountStore(store);
-
-const title = $derived(accountPageTitle(page.url.pathname));
-const showHeading = $derived(
-  !isSubscriptionPath(page.url.pathname) && !isUsagePath(page.url.pathname),
-);
-const headingId = $derived(
-  isSubscriptionPath(page.url.pathname) ? "subscription-title" : "dashboard-title",
-);
-const now = $derived(store.now);
-const status = $derived.by(() => {
-  if (!store.summary) return null;
-  const path = page.url.pathname;
-  if (isUsagePath(path) || isSettingsPath(path) || isSubscriptionPath(path)) return null;
-  if (isDevicesPath(path)) {
-    return devicesSummaryLine(store.summary.devices, now);
-  }
-  if (store.collectionWaitMacs !== null) return askingCopy(store.collectionWaitMacs);
-  return accountStatusLine(store.summary, now);
-});
 
 $effect(() => {
   void page.url.pathname;
@@ -45,14 +18,13 @@ $effect(() => {
 });
 </script>
 
-<section id="dashboard-view" class="dashboard" aria-labelledby={headingId}>
-  {#if showHeading}
-    <header class="dashboard-page-heading">
-      <h1 id="dashboard-title">{title}</h1>
-      {#if status}
-        <p class="dashboard-status">{status}</p>
-      {/if}
-    </header>
-  {/if}
+{#if store.summary && store.summary.subscriptions.length > 0}
+  <QuotaBand
+    subscriptions={store.summary.subscriptions}
+    selectors={store.subscriptionSelectors}
+    now={store.now}
+  />
+{/if}
+<div class="wrap">
   {@render children()}
-</section>
+</div>

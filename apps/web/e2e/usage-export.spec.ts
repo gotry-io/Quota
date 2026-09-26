@@ -82,7 +82,7 @@ test("downloads a CSV for a custom range with a header and formula-safe cells", 
 }) => {
   await mockV6(page);
   await page.goto("/my/usage?period=custom&from=2026-08-10&to=2026-08-12");
-  await expect(page.getByRole("heading", { name: "Usage", exact: true })).toBeVisible();
+  await expect(page.locator("#dashboard-title")).toBeVisible();
   await expect(page.locator("#token-total")).not.toHaveText("—");
 
   expect(csvCell("=1+1")).toBe("'=1+1");

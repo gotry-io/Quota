@@ -1,3 +1,10 @@
+/** The DMG `release-menubar.yml` publishes on every release, always behind this one address. */
+export const QUOTABAR_DMG_URL =
+  "https://github.com/gotry-io/Quota/releases/latest/download/QuotaBar-macos-arm64.dmg";
+
+/** The tap's cask, which `release-menubar.yml` updates alongside the DMG. */
+export const BREW_INSTALL_COMMAND = "brew install gotry-io/tap/quotabar";
+
 export type IosAvailability = "coming-soon" | "testflight" | "app-store";
 
 export type IosAvailabilityCopy = {

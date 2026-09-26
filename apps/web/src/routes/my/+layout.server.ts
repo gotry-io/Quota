@@ -1,4 +1,5 @@
 import { redirect } from "@sveltejs/kit";
+import { signInHref } from "$lib/routes";
 import type { LayoutServerLoad } from "./$types";
 
 /**
@@ -7,9 +8,9 @@ import type { LayoutServerLoad } from "./$types";
  * The Account read the pages fill themselves from is bounded by the caller's calendar, and a
  * document request has no clock: rendering one here would answer in UTC, which every browser
  * keeping another calendar would then throw away and ask again for. One read per load, from the
- * client that knows what to ask for. Child navigations must not re-run this load, so it reads
- * only `locals`.
+ * client that knows what to ask for. Child navigations must not re-run this load, so the
+ * signed-out path is read untracked: only `locals` decides whether it runs again.
  */
-export const load: LayoutServerLoad = ({ locals }) => {
-  if (!locals.viewer) redirect(302, "/");
+export const load: LayoutServerLoad = ({ locals, url, untrack }) => {
+  if (!locals.viewer) redirect(302, signInHref(untrack(() => `${url.pathname}${url.search}`)));
 };
