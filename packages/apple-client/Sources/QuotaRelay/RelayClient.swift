@@ -36,7 +36,8 @@ public enum RelayRoute: CaseIterable, Sendable {
   case accountSettings
   case updateAccountSettings
   case accountUsageActivity(from: String, to: String, detail: ActivityDetail?, timeZone: String?)
-  case accountUsagePeriod(from: String, to: String, timezone: String, breakdown: Bool)
+  case accountUsagePeriod(
+    from: String, to: String, timezone: String, breakdown: Bool, modelSeries: Bool)
   case deviceSync
   case deviceSnapshots
   case providersStatus
@@ -54,7 +55,9 @@ public enum RelayRoute: CaseIterable, Sendable {
       .accountSettings,
       .updateAccountSettings,
       .accountUsageActivity(from: "1970-01-01", to: "1970-01-01", detail: nil, timeZone: nil),
-      .accountUsagePeriod(from: "1970-01-01", to: "1970-01-01", timezone: "UTC", breakdown: false),
+      .accountUsagePeriod(
+        from: "1970-01-01", to: "1970-01-01", timezone: "UTC", breakdown: false,
+        modelSeries: false),
       .deviceSync,
       .deviceSnapshots,
       .providersStatus,
@@ -98,7 +101,8 @@ public enum RelayRoute: CaseIterable, Sendable {
 
   /// Query keys the route itself names. Extra items such as summary `tz` are still passed to
   /// `perform`. Activity lists `from`, `to`, optionally `detail`, and `tz` when asking for hours.
-  /// Period lists inclusive local `from`/`to`, required IANA `timezone`, and `breakdown=1`.
+  /// Period lists inclusive local `from`/`to`, required IANA `timezone`, `breakdown=1`, and
+  /// `series=model` when the read wants the by-day, by-model series.
   public var query: [(String, String)] {
     switch self {
     case .accountUsageActivity(let from, let to, let detail, let timeZone):
@@ -110,10 +114,13 @@ public enum RelayRoute: CaseIterable, Sendable {
         items.append(("tz", timeZone))
       }
       return items
-    case .accountUsagePeriod(let from, let to, let timezone, let breakdown):
+    case .accountUsagePeriod(let from, let to, let timezone, let breakdown, let modelSeries):
       var items = [("from", from), ("to", to), ("timezone", timezone)]
       if breakdown {
         items.append(("breakdown", "1"))
+      }
+      if modelSeries {
+        items.append(("series", "model"))
       }
       return items
     case .accountQuotaHistory(let provider, let fingerprint, let since):
@@ -414,11 +421,13 @@ public struct RelayClient: Sendable {
   /// Reads one inclusive local-date range in a required IANA timezone.
   ///
   /// Passing `etag` turns the read conditional: an unchanged period answers 304 and sends no body.
+  /// `modelSeries` asks `series=model`, which adds ``AccountUsagePeriodResponse/modelSeries``.
   public func fetchAccountUsagePeriod(
     from: String,
     to: String,
     timezone: String,
     breakdown: Bool = false,
+    modelSeries: Bool = false,
     accessToken: String,
     etag: String? = nil
   ) async throws -> AccountUsagePeriodRead {
@@ -435,7 +444,8 @@ public struct RelayClient: Sendable {
       throw RelayClientError.unauthorized
     }
     let (data, response) = try await perform(
-      route: .accountUsagePeriod(from: from, to: to, timezone: timezone, breakdown: breakdown),
+      route: .accountUsagePeriod(
+        from: from, to: to, timezone: timezone, breakdown: breakdown, modelSeries: modelSeries),
       query: [],
       body: nil,
       bearer: accessToken,

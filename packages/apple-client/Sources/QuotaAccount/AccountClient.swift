@@ -75,7 +75,8 @@ public actor AccountClient {
   private var sessionMemoValid = false
   /// A proactive refresh that still looks expired is clock skew, not a 15-minute token.
   private var proactiveRefreshDisabled = false
-  /// In-memory period bodies keyed by `from|to|timezone|breakdown`. A matching 304 answers from here.
+  /// In-memory period bodies keyed by `from|to|timezone|breakdown`, plus `|model` for a series
+  /// read. A matching 304 answers from here.
   private var periodCache: [String: CachedUsagePeriod] = [:]
   private var activityCache: CachedUsageActivity?
   private var snapshotUploadBusy = false
@@ -290,14 +291,17 @@ public actor AccountClient {
   }
 
   /// Reads one inclusive local-date range. Offers If-None-Match when this process already holds
-  /// that key. Does not write the summary cache.
+  /// that key. Does not write the summary cache. `modelSeries` asks for the by-day, by-model
+  /// series (`series=model`); a read with and one without it are cached apart.
   public func fetchUsagePeriod(
     from: String,
     to: String,
     timezone: String,
-    breakdown: Bool = false
+    breakdown: Bool = false,
+    modelSeries: Bool = false
   ) async -> AccountPeriodResult {
-    let key = Self.periodCacheKey(from: from, to: to, timezone: timezone, breakdown: breakdown)
+    let key = Self.periodCacheKey(
+      from: from, to: to, timezone: timezone, breakdown: breakdown, modelSeries: modelSeries)
     let held = periodCache[key]
     do {
       let read = try await withAuthorizedSession { session in
@@ -306,6 +310,7 @@ public actor AccountClient {
           to: to,
           timezone: timezone,
           breakdown: breakdown,
+          modelSeries: modelSeries,
           accessToken: session.accessToken,
           etag: held?.etag
         )
@@ -678,9 +683,10 @@ public actor AccountClient {
     }
   }
 
-  static func periodCacheKey(from: String, to: String, timezone: String, breakdown: Bool) -> String
-  {
-    "\(from)|\(to)|\(timezone)|\(breakdown ? "1" : "0")"
+  static func periodCacheKey(
+    from: String, to: String, timezone: String, breakdown: Bool, modelSeries: Bool
+  ) -> String {
+    "\(from)|\(to)|\(timezone)|\(breakdown ? "1" : "0")\(modelSeries ? "|model" : "")"
   }
 
   /// The summary this read leaves current, and the validator it is current at.
