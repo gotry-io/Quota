@@ -5,6 +5,8 @@
 - Updates [ADR 0051](0051-the-panel-glances-and-the-windows-explain.md), whose website kept
   cross-device Usage behind a quota-first overview
 - Follows [ADR 0059](0059-the-leaderboard-is-retired.md)
+- Amends [ADR 0062](0062-quota-history-may-follow-the-account.md), whose website drew nothing from
+  quota history
 
 ## Context
 
@@ -74,6 +76,9 @@ keep quota in view.**
 - The collection request the website's Overview made on load
   ([ADR 0063](0063-collection-follows-demand-and-activity.md)) is made by the Quota page, whose
   meta line carries **Asking your Mac…**; the rule for when to ask is unchanged.
+- The website's subscription page draws its pace line from the Account's merged quota history
+  ([ADR 0062](0062-quota-history-may-follow-the-account.md)) when the history switch is on, so the
+  website no longer draws nothing from it.
 - Wide model-by-day series come from Relay's period read (`series=model`), added as an optional
   field under [ADR 0023](0023-strict-writes-tolerant-reads.md) rather than a protocol version.
 - Rank-by-provider colours can change when a provider's long-run top four changes. That is rarer
