@@ -85,8 +85,11 @@ Catalog id `claude`. Common collection ladder, bounds, and identity rules live i
    for 24 hours and is kept only in the service's memory: a collection is one request, not two
    ([ADR 0063](../decisions/0063-collection-follows-demand-and-activity.md)). A different access
    token — a renewal, a new sign-in — reads it again. A failed profile read is not remembered.
-   Claude's floor is 300 s (catalog `collection.min_interval_seconds`); the OAuth usage endpoint
-   refills about one request every five minutes and its burst is small, and a 429 backs off as
+   Claude's floor is 180 s (catalog `collection.min_interval_seconds`): with the profile cached a
+   collection is one request, so Claude is asked at most 20 times an hour while Active — fewer than
+   the 24 an hour (usage and profile every five minutes) it was asked before, with no 429 in 170
+   rounds measured on 2026-09-25/26. The OAuth usage endpoint refills about one request every five
+   minutes and its burst is small, so a 429 backs off and holds that account to 300 s for a day as
    [Cadence](../provider-collection.md#cadence) says.
 
    Before asking the network, the collector reads Claude Code's own usage snapshot: the one key

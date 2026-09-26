@@ -52,90 +52,131 @@ every minute.
 
 ### Who asks (Quota iOS and the website)
 
-- Quota iOS asks on cold launch, on return to the foreground, and on pull to refresh, when a
-  reading in the summary from another device is more than two minutes old. It then re-reads the
-  summary conditionally every 20 seconds while in the foreground, for at most three minutes, and
-  stops when a Mac reading is newer than `requested_at` or the app leaves the foreground. While it
-  waits the subtitle says **Asking your Mac…**; on timeout it returns to **Updated Xm ago**. No
-  error is shown.
-- The website dashboard asks on load and when the tab becomes visible again, on the same
-  two-minute condition, and re-reads the summary every 30 seconds for three minutes.
+A viewer asks only for what a Mac could make newer. A subscription is worth asking for when its
+newest reading **from a Mac** (never the asking device's own, never another iPhone's) is older than
+two minutes or its provider's catalog floor, whichever is longer — a Mac does not ask a provider
+again inside its floor, so a younger reading is as fresh as a request could make it. The floor
+reaches both clients from the catalog generator (`ProviderID.minCollectionInterval` in QuotaWire,
+`providerMinCollectionIntervalSeconds` in `@gotry-io/quota-protocol`). The follow-up waits only on
+the subscriptions it asked about, and ends as soon as each has a Mac reading at or after the
+`requested_at` Relay answered.
+
+- **Quota iOS** asks on a cold launch, on a return to the foreground (after its conditional
+  summary read), and on pull to refresh or the refresh button. It then re-reads the summary
+  conditionally every 20 seconds while in the foreground, at most nine times (three minutes), and
+  stops when it is answered, when the app leaves the foreground, or on sign-out. One wait at a
+  time. While it waits the subtitle says **Asking your Mac…** (**Asking your Macs…** when the old
+  readings came from more than one Mac); on timeout it returns to **Updated Xm ago**. A 404, a
+  429, and a timeout end silently, with no banner.
+- **The website** Overview asks on load and when its tab becomes visible again (after re-reading
+  the summary), on the same rule, and re-reads the summary every 30 seconds for three minutes,
+  stopping when it is answered, when the tab is hidden, or when Overview is left. Its status line
+  says the same **Asking your Mac…** while it waits; a refusal or a timeout says nothing.
 
 ### Who answers (QuotaBar)
 
 When the minute Account read carries a `collection_requested_at` later than this Mac's last
-completed collection and no more than ten minutes old, the Mac schedules one collection now on
-the same Quota lane as the timed one (it uploads as usual) and restarts the timer from now. One
-requested instant is answered once. A request older than ten minutes — a Mac that slept through
+complete collection and no more than ten minutes old, the scheduler runs one pass of every
+provider now on the Quota lane (it uploads as usual) and restarts every provider's clock from now.
+One requested instant is answered once. A request older than ten minutes — a Mac that slept through
 it — is ignored. The diagnostics journal names the trigger `demand`, beside `scheduled` and
-`reset`. Every rule below still applies to a demand collection.
+`reset`. The pass goes through the same gate as a timed one, so the floors, backoff, and
+cross-device skip below decide which providers it actually asks; a demand never makes a provider
+faster than its floor.
 
 ### Automatic cadence (QuotaBar)
 
-Refresh Interval gains **Automatic**, the new default. The fixed 1/2/5/10/15-minute values stay;
-a fixed value does not adapt, but demand still applies. An identity whose stored interval is 300
-seconds (the old default) migrates to Automatic; any other value stays fixed
-(`quota_refresh_mode = automatic | fixed` in `identity.sqlite`).
+Refresh Interval gains **Automatic**, the new default. The fixed 1/2/5/10/15-minute values stay; a
+fixed value applies to every provider and does not adapt, but demand still applies. An identity
+whose stored interval is 300 seconds (the old default) migrates to Automatic; any other value stays
+fixed (`quota_refresh_mode = automatic | fixed`, identity migration v6).
 
-Automatic is computed per provider:
+Automatic gives each provider a tier once a minute, and each provider runs on its own clock:
 
-| State | Condition | Interval |
+| Tier | Condition | Interval |
 | --- | --- | --- |
-| Active | that provider's local agent log was written in the last 5 minutes, or a window has < 20 % remaining | 1 minute |
+| Active | that provider's local agent wrote its logs in the last 5 minutes, or a window of this Mac's last reading has < 20 % remaining | 1 minute |
 | Normal | otherwise | 5 minutes |
-| Idle | no local activity and no demand for that provider in 60 minutes | 10 minutes |
+| Idle | no local write and no collection request in 60 minutes | 10 minutes |
 
-Activity is a once-a-minute modification-time check of the known log directories
-([usage-sources](../usage-sources.md)); files are not parsed. Claude Code → `claude`, Codex →
-`codex`, Gemini CLI → `gemini`, Cursor → `cursor`, and OpenCode / Pi by their configured provider;
-an agent with no provider mapping does not count. A provider with no local log source (Copilot,
-OpenRouter, …) is always Normal. Only providers that are due are collected. Settings shows the
-current state under Automatic, for example **Automatic · every 1 min while Claude Code is
-active**.
+Every interval is then raised to the provider's floor. Activity is the newest modification time
+under the agent's Usage log roots ([usage-sources](../usage-sources.md)): a walk of at most 5,000
+entries and six levels, newest directories first, that opens no file. The agents that map to one
+provider are Claude Code → `claude`, Codex → `codex`, Gemini CLI → `gemini`, Cursor → `cursor`, Grok
+CLI → `grok`, Copilot CLI → `copilot`, and Antigravity → `antigravity`. OpenCode, Pi, and Kilo can
+speak for any provider, and saying which would mean parsing their logs, so they do not count. A
+provider with no mapped agent (OpenRouter, DeepSeek, …) is always Normal. A pass takes every
+provider due within 30 seconds, so providers on one interval share it. Usage is scanned every five
+minutes under Automatic, whatever the tiers are, and at the fixed interval otherwise. Settings shows
+the fastest tier among the providers in use, for example **Automatic · every 1 min while Codex is
+active** or **Automatic · every 3 min while Claude Code is active**.
 
-### Floors, backoff, and fairness (R1)
+### Floors, backoff, and fairness
 
-1. **Per-provider floor.** `collection.min_interval_seconds` in `packages/provider/catalog.json`:
-   Claude OAuth 300 (Active does not go below five minutes), Codex 60, providers that only read an
-   official API-key balance (OpenRouter, DeepSeek) 60, every other provider 120. Active is clamped
-   to the floor. Demand, reset catch-up, and Automatic share it; two collections of one provider
-   are never closer than its floor and never closer than 60 seconds. CLI credential renewal
-   (Codex / Claude / Grok, at most hourly) is unaffected.
-2. **Backoff on 429 and rate limiting** (QuotaBar and Quota iOS). A `Retry-After` greater than
-   zero is obeyed, capped at 60 minutes; otherwise backoff starts at five minutes and doubles to
-   at most 30. It is kept per provider and provider account in `cache.sqlite`, so a restart does
-   not reset it. While backing off the last reading is shown with its time, not an error. A manual
-   refresh may pass the backoff, at most once a minute per provider.
-3. **Jitter.** A timed collection is moved by ±10 % at random, so Macs do not all read on the
-   minute.
-4. **Cross-device dedupe.** Before collecting a subscription, a Mac looks at the newest reading
-   of it in the summary; if another device read that provider within the provider's floor, this
-   Mac skips it. Several Macs answering one demand therefore do not all read Claude.
-5. **Claude profile cache.** The plan and email (profile) request is cached for 24 hours and
-   repeated only when the account changes or the cache expires, so a collection costs Claude one
-   request instead of two.
-6. **Claude Code's own snapshot (D6).** While Claude is Active, the Mac may read the usage
-   snapshot Claude Code writes locally (`cachedUsageUtilization`) and use it when it is fresh
-   enough, with no request at all. The format is undocumented, so this is best effort and falls
-   back to the normal read.
+1. **Per-provider floor.** `collection.min_interval_seconds` in `packages/provider/catalog.json`
+   is the shortest time between two asks of one provider on one Mac: Claude 180, Codex 60,
+   providers that only read an official API-key balance (OpenRouter, DeepSeek) 60, every other
+   provider 120. It caps every tier and every fixed interval, and a timed tick, a demand, a window
+   reset catch-up, startup, and a settings or account change all respect it. The scheduler waits
+   for it rather than spending a tick the gate would refuse. A manual refresh or Diagnostics
+   Recheck waits only 60 seconds per provider. CLI credential renewal (Codex / Claude / Grok, at
+   most hourly) is unaffected.
+2. **Backoff on 429** (QuotaBar and Quota iOS). A `Retry-After` greater than zero is obeyed, capped
+   at 60 minutes; otherwise — Anthropic's `retry-after: 0` means nothing — the wait starts at five
+   minutes and doubles to at most 30. While backing off the last reading is shown with its age, not
+   an error. A manual refresh may pass the backoff, at most once a minute per provider. A reading
+   ends the backoff. QuotaBar keeps it per provider and the account it last read for it in
+   `cache.sqlite` metadata; Quota iOS keeps it per provider session in its `UserDefaults`; neither
+   is cleared by a restart. QuotaBar maps a 429 to `rate_limited` in the journal, and to the wire's
+   existing `unavailable` status.
+3. **A raised floor after a 429.** A 429 also holds that provider account to max(catalog floor,
+   300 seconds) for 24 hours from the latest 429, kept beside the backoff. A success in between does
+   not lower it; only the 24 hours running out do. A manual refresh is not held by it.
+4. **Jitter.** Each provider's timed tick moves by up to ±10 %, never below its floor, so Macs do not
+   all read on the minute.
+5. **Cross-device dedupe.** Before asking, a Mac skips a provider when every account it last read
+   for it was observed by another device of the Account within the provider's floor, as the latest
+   summary states it. Several Macs answering one demand therefore do not all read Claude.
+6. **Claude profile cache.** The plan and email (`/api/oauth/profile`) answer for the access token
+   they were read with for 24 hours, held in the service's memory against a SHA-256 digest of that
+   token and never persisted; a renewal or a new sign-in reads them again. A collection costs
+   Claude one request instead of two.
+7. **Claude Code's own snapshot.** Before asking the network, the Claude collector decodes the one
+   key `cachedUsageUtilization` of Claude Code's global config (`$CLAUDE_CONFIG_DIR/.claude.json` or
+   `~/.claude.json`), `{fetchedAtMs, accountUuid?, utilization}`. It stands in for a request only
+   when it is under 60 seconds old, its `accountUuid` is the account of the credential in use, and
+   this Mac read the network for that credential within the hour. The snapshot lacks the
+   limit-reset block (`cedar_ember`), so the **Reset Credits** window is carried from that network
+   read. The format is undocumented; anything else leaves the network to answer
+   ([claude.md](../providers/claude.md)).
+
+With the profile cached, Claude falls from 24 requests an hour (usage and profile every five
+minutes, 170 rounds measured on 2026-09-25/26 with no 429) to at most 20 an hour while Active, and
+fewer when Claude Code's snapshot answers.
 
 ### Privacy
 
 The request carries nothing but the Account it is made under; the stored value is one instant
 that names no provider, device, or requester, and it is deleted with the Account. Activity
-detection reads modification times on this Mac and never leaves it.
+detection reads modification times on this Mac and never leaves it. The cadence records in
+`cache.sqlite` hold instants and the irreversible account fingerprint a backoff was earned on; the
+Claude snapshot is used for one reading and never stored.
 
 ## Consequences
 
-- Opening the phone or the dashboard brings a reading one to two minutes old at worst, while a
-  Mac is awake and signed in.
-- Request volume per provider follows use. Using Claude Code four hours a day is about 48 Claude
-  reads while active (the five-minute floor) plus the Normal and Idle hours — fewer than the 288 a
-  day of the fixed five-minute timer — and an unused provider drops from 288 to about 144.
+- Opening the phone or the dashboard brings a reading one to two minutes old at worst — three for
+  Claude — while a Mac is awake and signed in.
+- Request volume per provider follows use. Using Claude Code four hours a day is about 80 Claude
+  requests while active (the three-minute floor), 12 in the Normal hour after, and about 114 in
+  the Idle rest — about 206 a day against 576 (288 collections of two requests) before — and an
+  unused provider drops from 288 to about 144.
 - Each accepted demand costs every Mac of the Account one extra full summary download. Relay
   stores one column; the SQLite write is negligible.
 - A new client against an old Relay sees 404 and behaves as before; an old client ignores the
   field.
+- The private IPC changed with QuotaBar in one build (`set_quota_refresh_interval` takes
+  `{"mode": "automatic"}` or `{"mode": "fixed", "interval_seconds": N}`; `get_state` adds
+  `quota_refresh_mode` and `quota_refresh_tier`), so `ipc_version` does not move.
 - Release order is Relay, then QuotaBar, then Quota iOS.
 
 ## Alternatives considered

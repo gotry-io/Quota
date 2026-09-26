@@ -114,15 +114,16 @@ on failure, and announced on the same `providers` change event. QuotaBar evaluat
 rules in Swift from the quota readings those events already carry; there is no notification IPC
 event and no sixth component. The service begins a background startup refresh once IPC is available,
 emits revisioned `state_changed` events, and then waits on one scheduler thread for the next of
-four events: an Account conditional read every minute, a quota collection at the stored interval
-(Automatic by default — per provider, one minute while its local agent is active, five normally,
-ten when idle, never below the provider's catalog floor — or a fixed 1, 2, 5, 10, or 15 minutes),
-a quota-only catch-up when a window `resets_at` falls before the next collection, and a
-status-page poll every ten minutes that never wins a tie against quota, reset, or Account work.
-A summary whose `collection_requested_at` is newer than this Mac's last collection and at most
-ten minutes old schedules one `demand` collection now on the same lane; Quota iOS and the website
-set it through `POST /api/v6/account/collection-request`. Floors, backoff, jitter, and
-cross-device dedupe apply to every trigger
+these events: an Account conditional read every minute, a quota pass for the providers whose own
+clock is due — Automatic (the default) gives each provider a tier from its local agent's activity
+and remaining quota, a fixed interval gives all the same one, and the catalog floor bounds both
+([Cadence](provider-collection.md#cadence)) — a pass of every provider when an Account read shows a
+fresh `collection_requested_at`, and a quota-only catch-up when a window `resets_at` falls before
+the next collection, and a status-page poll every ten minutes that never wins a tie against
+quota, reset, or Account work. Quota iOS and the website set `collection_requested_at` through
+`POST /api/v6/account/collection-request`; a request is fresh while it is newer than this Mac's
+last complete collection and at most ten minutes old, and the pass it starts is journaled as
+`demand`. Floors, backoff, jitter, and cross-device dedupe apply to every trigger
 ([ADR 0063](decisions/0063-collection-follows-demand-and-activity.md)). The first status poll runs at scheduler start. QuotaBar follows those events, and also
 re-reads state once a minute on its own and every two seconds while a sign-in is in progress, so
 the panel is never further behind the service than one interval when an event does not reach it. Usage indexes

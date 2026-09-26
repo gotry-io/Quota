@@ -109,8 +109,8 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   metadata, and account tokens never cross IPC.
 - Collection cadence ([ADR 0063](decisions/0063-collection-follows-demand-and-activity.md)) reads
   local agent logs only for their modification times, never their contents, and keeps per provider
-  in `cache.sqlite` metadata only when it last asked, a 429 backoff's end, and the irreversible
-  account fingerprint that backoff was earned on. From Claude Code's global config
+  in `cache.sqlite` metadata only when it last asked, a 429 backoff's end, the end of the day-long
+  raised floor that 429 earned, and the irreversible account fingerprint both were earned on. From Claude Code's global config
   (`~/.claude.json`, or `$CLAUDE_CONFIG_DIR/.claude.json`) the Claude collector decodes the single
   key `cachedUsageUtilization` — usage percentages, reset instants, a fetch time, and Claude Code's
   account UUID — and nothing else; it is used for one reading and never stored. The Claude profile

@@ -119,24 +119,30 @@ How often this Mac asks each provider is decided per provider
   collection request in that time. *Normal*, every five minutes, otherwise. Activity is the newest
   modification time under the agent's log roots (the same roots as
   [`usage-sources.md`](usage-sources.md)), a bounded walk of at most 5,000 entries that opens no
-  file. Only Claude Code → `claude`, Codex → `codex`, Gemini CLI → `gemini`, and Cursor → `cursor`
-  map one to one; OpenCode and Pi can speak for any provider and their logs would have to be parsed
-  to say which, so they do not take part. Every other provider stays *normal*.
+  file. Only Claude Code → `claude`, Codex → `codex`, Gemini CLI → `gemini`, Cursor → `cursor`,
+  Grok CLI → `grok`, Copilot CLI → `copilot`, and Antigravity → `antigravity` map one to one;
+  OpenCode, Pi, and Kilo can speak for any provider and their logs would have to be parsed to say
+  which, so they do not take part. Every other provider stays *normal*.
 - **Floor.** Catalog `collection.min_interval_seconds` is the shortest time between two asks of
-  one provider on one Mac: Claude Code 300 s, Codex, OpenRouter, and DeepSeek 60 s, every other
+  one provider on one Mac: Claude Code 180 s, Codex, OpenRouter, and DeepSeek 60 s, every other
   provider 120 s. It caps every tier and every fixed interval, and a periodic tick, a collection
-  request, a window-reset catch-up, startup, and a settings or account change all respect it. A
-  manual refresh or Recheck waits only 60 s per provider. Only a provider a source was actually
+  request, a window-reset catch-up, startup, and a settings or account change all respect it. The
+  scheduler waits until the floor (and any backoff) has passed rather than spend a tick that jitter
+  or a shared pass brings early. A manual refresh or Recheck waits only 60 s per provider. Only a provider a source was actually
   tried for counts as asked, so a provider set up a moment ago is read at once.
 - **Jitter.** Each provider's periodic tick moves by up to 10 % either way. A pass also takes every
   provider due within 30 s, so providers on one interval share a pass. Usage is scanned with a pass
-  once its own interval has passed: the fixed interval, or five minutes under Automatic.
+  once its own interval has passed: the fixed interval, or every five minutes under Automatic
+  whatever the tiers are, because activity is already judged from modification times and the scan
+  only has to keep Usage current.
 - **Backoff.** A provider that answers 429 keeps its last reading (with its age, and no error) and
   is not asked again until its backoff ends: a positive `Retry-After` is honoured up to an hour;
   without one — Anthropic sends `retry-after: 0` and means nothing by it — the wait is five minutes,
   doubling to thirty. The backoff is kept per provider and the account this Mac last read for it, in
   `cache.sqlite`, so a restart does not end it; the journal records the attempt as `rate_limited`.
-  A manual refresh may still ask once a minute.
+  A manual refresh may still ask once a minute. A 429 also raises that account's floor to
+  max(catalog floor, 300 s) for 24 hours from the latest 429, kept beside the backoff; a success in
+  between does not lower it, only the 24 hours running out do.
 - **Another Mac.** Before asking, a provider is skipped when every account this Mac last read for it
   was observed by another device of the same Account within the provider's floor, as the latest
   Account summary states it. That reading is already the Account's; asking again would only spend
