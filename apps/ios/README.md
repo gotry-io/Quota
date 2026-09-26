@@ -101,6 +101,14 @@ leaves no mark. A successful read moves that session's `lastValidatedAt`, which 
 "Checked …" age the Providers list shows. See
 [ADR 0034](../../docs/decisions/0034-ios-collects-for-itself.md).
 
+A provider that answers 429 is backed off per provider session (provider + account): a
+`Retry-After` above zero is honoured, capped at 60 minutes; without one the wait is 5 minutes,
+doubling to 30. The schedule is kept in the app's `UserDefaults` (`providers.backoff`, instants and
+session keys only), so a relaunch does not clear it. A backed-off session is not asked and keeps its
+last reading on screen and in `local-observations.json`. Pull to refresh and the refresh button may
+ask it anyway, once per session per minute; a reading clears the schedule
+([ADR 0063](../../docs/decisions/0063-collection-follows-demand-and-activity.md)).
+
 ## Launch
 
 A cold signed-in launch reads the two local collection files off the main actor, then one
@@ -302,7 +310,7 @@ content builders in `VisualFixtureContent`, and blocked network / memory stores 
 #   --visual-fixture content
 #   --visual-fixture content --route usage.patterns
 #   --visual-fixture content --visual-clock wall
-# Values: signed-out | connecting | connect-error | expired | confirm-account | connect-refresh-failed | loading | content | cached-error | empty | no-devices | local-only | merged | providers | activity-loading | activity-failed | activity-day-empty | activity-day-failed | sign-in | sign-in-methods
+# Values: signed-out | connecting | connect-error | expired | confirm-account | connect-refresh-failed | loading | asking-mac | content | cached-error | empty | no-devices | local-only | merged | providers | activity-loading | activity-failed | activity-day-empty | activity-day-failed | sign-in | sign-in-methods
 ```
 
 `--route` opens a destination on that scenario without tapping through: `usage`, `usage.today`,

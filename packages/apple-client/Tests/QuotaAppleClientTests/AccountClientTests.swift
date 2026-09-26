@@ -962,6 +962,37 @@ struct AccountClientTests {
         "/api/v6/account/summary",
       ])
   }
+
+  /// A collection request says nothing but the protocol version, and answers the instant Relay
+  /// stored — a merged request's too. A Relay that predates it answers 404, a busy session 429,
+  /// and neither is anything to tell a person.
+  @Test
+  func aCollectionRequestAnswersTheStoredInstantAndARefusalIsNothing() async throws {
+    let transport = ScriptedTransport([
+      .init(
+        status: 200,
+        body: Data(
+          #"{"protocol_version":6,"requested_at":"2026-08-14T15:59:40Z","accepted":false}"#.utf8)
+      ),
+      .init(status: 404, body: try Fixtures.errorBody(code: "not_found")),
+      .init(status: 429, body: try Fixtures.errorBody(code: "rate_limited")),
+    ])
+    let client = AccountClient(
+      relay: RelayClient(transport: transport),
+      sessionStore: MemoryAccountSessionStore(session: Fixtures.session()),
+      summaryStore: MemoryAccountSummaryStore(),
+      now: { Fixtures.date("2026-08-14T16:00:00Z") }
+    )
+
+    #expect(await client.requestCollection() == Fixtures.date("2026-08-14T15:59:40Z"))
+    #expect(await client.requestCollection() == nil)
+    #expect(await client.requestCollection() == nil)
+    #expect(transport.recordedMethods == ["POST", "POST", "POST"])
+    #expect(
+      transport.recordedURLs.map(\.path) == Array(
+        repeating: "/api/v6/account/collection-request", count: 3))
+    #expect(transport.recordedBodies.first == Data(#"{"protocol_version":6}"#.utf8))
+  }
 }
 
 private final class TickClock: @unchecked Sendable {

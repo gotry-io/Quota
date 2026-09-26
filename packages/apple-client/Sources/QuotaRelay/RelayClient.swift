@@ -32,6 +32,7 @@ public enum RelayRoute: CaseIterable, Sendable {
   case revoke
   case accountIdentities
   case accountSummary
+  case collectionRequest
   case accountSettings
   case updateAccountSettings
   case accountUsageActivity(from: String, to: String, detail: ActivityDetail?, timeZone: String?)
@@ -49,6 +50,7 @@ public enum RelayRoute: CaseIterable, Sendable {
       .revoke,
       .accountIdentities,
       .accountSummary,
+      .collectionRequest,
       .accountSettings,
       .updateAccountSettings,
       .accountUsageActivity(from: "1970-01-01", to: "1970-01-01", detail: nil, timeZone: nil),
@@ -67,7 +69,7 @@ public enum RelayRoute: CaseIterable, Sendable {
 
   public var method: String {
     switch self {
-    case .token, .appleSignIn, .revoke: "POST"
+    case .token, .appleSignIn, .revoke, .collectionRequest: "POST"
     case .accountIdentities, .accountSummary, .accountSettings, .accountUsageActivity,
       .accountUsagePeriod, .deviceSync, .providersStatus, .accountQuotaHistory:
       "GET"
@@ -82,6 +84,7 @@ public enum RelayRoute: CaseIterable, Sendable {
     case .revoke: "/oauth/v2/revoke"
     case .accountIdentities: "/api/v2/account"
     case .accountSummary: "/api/v6/account/summary"
+    case .collectionRequest: "/api/v6/account/collection-request"
     case .accountSettings, .updateAccountSettings: "/api/v2/account/settings"
     case .accountUsageActivity: "/api/v6/account/usage/activity"
     case .accountUsagePeriod: "/api/v6/account/usage/period"
@@ -115,8 +118,9 @@ public enum RelayRoute: CaseIterable, Sendable {
       return items
     case .accountQuotaHistory(let provider, let fingerprint, let since):
       return [("provider", provider), ("fingerprint", fingerprint), ("since", since)]
-    case .token, .appleSignIn, .revoke, .accountIdentities, .accountSummary, .accountSettings,
-      .updateAccountSettings, .deviceSync, .deviceSnapshots, .providersStatus, .uploadQuotaHistory:
+    case .token, .appleSignIn, .revoke, .accountIdentities, .accountSummary, .collectionRequest,
+      .accountSettings, .updateAccountSettings, .deviceSync, .deviceSnapshots, .providersStatus,
+      .uploadQuotaHistory:
       return []
     }
   }
@@ -331,6 +335,22 @@ public struct RelayClient: Sendable {
     } catch {
       throw RelayClientError.invalidResponse
     }
+  }
+
+  /// Ask the Account's Macs for a fresh reading. Any signed-in session may ask; Relay keeps one
+  /// instant per Account and answers the one a Mac has to beat.
+  public func requestCollection(accessToken: String) async throws -> CollectionRequestResponse {
+    guard WireValidation.isIOSAccessToken(accessToken) else {
+      throw RelayClientError.unauthorized
+    }
+    return try await send(
+      route: .collectionRequest,
+      query: [],
+      body: try WireCodec.encodeRequest(CollectionRequest()),
+      bearer: accessToken,
+      expectedStatus: 200,
+      decode: CollectionRequestResponse.self
+    )
   }
 
   /// Reads UTC activity days. Passing `etag` turns the read conditional: an unchanged body

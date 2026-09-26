@@ -289,6 +289,21 @@ final class QuotaScreenUITests: QuotaUITestCase {
     try audit(app)
   }
 
+  /// The Macs asked for a fresh reading: **Asking your Mac…** under the title while the phone
+  /// waits, and the refresh button still free to press.
+  func testAskingMacFixtureSaysWhoItIsWaitingOn() throws {
+    let app = launch(fixture: "asking-mac")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["overview.root"].waitForExistence(timeout: 10),
+      "overview.root"
+    )
+    let asking = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Asking your Mac'"))
+    XCTAssertTrue(asking.firstMatch.waitForExistence(timeout: 5), "subtitle")
+    XCTAssertTrue(app.buttons["overview.refresh"].isEnabled, "refresh stays available")
+    attachScreenshot(app, name: "overview-asking-mac")
+    try audit(app)
+  }
+
   /// Idle: the age under the title and a refresh button that can be pressed.
   func testContentFixtureShowsTheAgeUnderTheTitle() throws {
     let app = launch(fixture: "content")

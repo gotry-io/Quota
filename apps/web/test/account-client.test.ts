@@ -7,6 +7,7 @@ import { USAGE_HOUR_GRID_RULE } from "@gotry-io/quota-protocol";
 import {
   fetchAccountSummary,
   fetchAccountUsagePeriod,
+  requestCollection,
   requestEmailSignInLink,
   unlinkIdentity,
 } from "../src/lib/account-client.ts";
@@ -150,6 +151,40 @@ test("offers the last period ETag back and returns the cached body on 304", asyn
   } finally {
     globalThis.fetch = originalFetch;
     clearStoredPeriods();
+  }
+});
+
+test("asks for a collection with the protocol version alone, and a refusal is nothing", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: Array<{ url: string; method: string | undefined; body: string }> = [];
+  const answers = [
+    new Response(
+      JSON.stringify({
+        protocol_version: 6,
+        requested_at: "2026-08-12T09:40:02Z",
+        accepted: false,
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    ),
+    new Response(JSON.stringify({ error: { code: "not_found", message: "Not found" } }), {
+      status: 404,
+    }),
+  ];
+  globalThis.fetch = (async (input, init) => {
+    requests.push({ url: String(input), method: init?.method, body: String(init?.body) });
+    return answers.shift() ?? new Response(null, { status: 429 });
+  }) as typeof fetch;
+  try {
+    assert.equal(await requestCollection(), Date.parse("2026-08-12T09:40:02Z"));
+    assert.equal(await requestCollection(), null);
+    assert.equal(await requestCollection(), null);
+    assert.deepEqual(requests[0], {
+      url: "/api/v6/account/collection-request",
+      method: "POST",
+      body: '{"protocol_version":6}',
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });
 

@@ -72,6 +72,8 @@ final class AppModel {
   private let installation: any InstallationIdentifying
   private let providerStatusClient: any ProviderStatusServing
   private let now: @Sendable () -> Date
+  /// How the collection follow-up waits between summary reads. Tests answer it at once.
+  private let demandSleep: @Sendable (Duration) async throws -> Void
 
   /// The provider sessions this phone signed in for, and the consent behind them. Settings owns
   /// the rows; the sessions themselves are the Keychain store's.
@@ -152,6 +154,15 @@ final class AppModel {
   private var providerStatusTask: Task<Void, Never>?
   @ObservationIgnored
   private var uploadTask: Task<Void, Never>?
+  /// The Macs this phone has asked for a fresh reading and is waiting on, while it waits
+  /// ([ADR 0063](../../../docs/decisions/0063-collection-follows-demand-and-activity.md)).
+  private(set) var collectionDemand: CollectionDemand?
+  /// The one request-and-follow-up in flight. Backgrounding and signing out cancel it.
+  @ObservationIgnored
+  private var demandTask: Task<Void, Never>?
+  /// Whether the app is in front of someone. Only then is anyone looking to ask on behalf of.
+  @ObservationIgnored
+  private var isForeground = false
   @ObservationIgnored private var firstReadingSignaled = false
   #if DEBUG
     @ObservationIgnored private var firstContentSignaled = false
@@ -204,9 +215,13 @@ final class AppModel {
     settingsDefaults: UserDefaults = .standard,
     syncAccountSettings: Bool = false,
     installation: any InstallationIdentifying = KeychainInstallationIdentity(),
-    now: @escaping @Sendable () -> Date = { Date() }
+    now: @escaping @Sendable () -> Date = { Date() },
+    demandSleep: @escaping @Sendable (Duration) async throws -> Void = {
+      try await Task.sleep(for: $0)
+    }
   ) {
     self.installation = installation
+    self.demandSleep = demandSleep
     self.providers = ProvidersModel(store: providerSessions)
     self.localStore = localStore
     self.sampleStore = sampleStore
@@ -435,6 +450,7 @@ final class AppModel {
     async let foreground: Void = setForeground(true)
     observeApplicationLifecycle()
     _ = await (first, foreground)
+    demandCollectionIfStale()
   }
 
   /// Restore the local state, then run the first refresh it calls for.
@@ -789,7 +805,8 @@ final class AppModel {
   @discardableResult
   func refresh(
     budget: Duration = LocalCollector.foregroundBudget,
-    awaitUpload: Bool = true
+    awaitUpload: Bool = true,
+    manual: Bool = false
   ) async -> Bool {
     guard !isRefreshing else { return false }
     isRefreshing = true
@@ -810,7 +827,7 @@ final class AppModel {
     async let collected: LocalCollector.Pass? =
       asked.isEmpty
       ? nil
-      : collector.collect(within: budget) { [weak self] answer in
+      : collector.collect(within: budget, manual: manual) { [weak self] answer in
         await self?.accept(answer)
       }
     // The session is read from its store rather than from what a previous read left in memory: a
@@ -890,23 +907,28 @@ final class AppModel {
     }
   }
 
-  /// What the pass came to. A complete pass is the whole answer. A pass cut at its budget keeps
-  /// every reading that arrived, and for a session that did not answer in time, the reading it
-  /// had before — a phone woken briefly shows the last quota it knows, not none.
+  /// What the pass came to. A complete pass is the whole answer, except for a provider that
+  /// asked to be left alone: rate limited or still backed off, it keeps the reading it had. A pass
+  /// cut at its budget keeps every reading that arrived, and for a session that did not answer in
+  /// time, the reading it had before — a phone woken briefly shows the last quota it knows, not
+  /// none.
   private func finishLocalPass(_ pass: LocalCollector.Pass, previous: LocalCollection?) {
-    guard !pass.isComplete else {
-      applyLocalCollection(pass.collection)
-      return
-    }
     var collection = pass.collection
     let answered = Set(
       collection.snapshots.map(LocalCollector.sessionKey(for:)) + collection.needsSignIn)
-    let unanswered = Set(pass.sessionKeys).subtracting(answered)
+    var kept = Set(pass.heldSessionKeys)
+    if !pass.isComplete {
+      kept.formUnion(Set(pass.sessionKeys).subtracting(answered))
+    }
+    guard !kept.isEmpty else {
+      applyLocalCollection(collection)
+      return
+    }
     collection.snapshots += (previous?.snapshots ?? []).filter {
-      unanswered.contains(LocalCollector.sessionKey(for: $0))
+      kept.contains(LocalCollector.sessionKey(for: $0))
     }
     collection.snapshots.sort { $0.account.fingerprint < $1.account.fingerprint }
-    collection.needsSignIn += (previous?.needsSignIn ?? []).filter(unanswered.contains)
+    collection.needsSignIn += (previous?.needsSignIn ?? []).filter(kept.contains)
     collection.needsSignIn.sort()
     applyLocalCollection(collection)
   }
@@ -1008,6 +1030,10 @@ final class AppModel {
   /// Start or stop the ten-minute status-page timer with the scene. A background refresh still
   /// polls through `refresh()`; this is the independent foreground cadence.
   func setForeground(_ isForeground: Bool) async {
+    self.isForeground = isForeground
+    if !isForeground {
+      stopCollectionDemand()
+    }
     if isForeground {
       await startProviderStatusPolling()
       async let activity: Void = usage.loadActivity(force: true)
@@ -1036,6 +1062,17 @@ final class AppModel {
       ) { [weak self] _ in
         Task { @MainActor in
           await self?.setForeground(false)
+        }
+      }
+    )
+    sceneObservers.append(
+      center.addObserver(
+        forName: UIApplication.willEnterForegroundNotification,
+        object: nil,
+        queue: .main
+      ) { [weak self] _ in
+        Task { @MainActor in
+          await self?.returnedToForeground()
         }
       }
     )
@@ -1101,6 +1138,103 @@ final class AppModel {
     await account.logout()
     applySignedOut()
   }
+
+  /// Pull to refresh and the refresh button: read everything this phone reads, then ask the
+  /// Account's Macs when what they last sent is old. A provider this phone backed off from may
+  /// be asked anyway, once a minute.
+  func refreshOnRequest() async {
+    await refresh(manual: true)
+    demandCollectionIfStale()
+  }
+
+  /// Back from the background: read the summary, and ask the Macs when what it shows is old.
+  func returnedToForeground() async {
+    isForeground = true
+    guard phase == .signedIn, !isRefreshing, demandTask == nil else { return }
+    await readSummaryForDemand()
+    demandCollectionIfStale()
+  }
+
+  /// Ask the Account's Macs for a fresh reading when a Mac's reading on screen is more than two
+  /// minutes old, then follow the summary until they answer, the app leaves the foreground, or
+  /// three minutes pass. A Relay that refuses — one that predates the request, or a session that
+  /// asked too often — is not an error anyone sees: the readings stay as they are.
+  func demandCollectionIfStale() {
+    #if DEBUG
+      if skipsRestore { return }
+    #endif
+    guard isForeground, phase == .signedIn, sessionActivation == .active, demandTask == nil,
+      let summary,
+      let demand = CollectionDemand.stale(in: summary, selfDeviceID: sessionDeviceID, now: now())
+    else { return }
+    demandTask = Task { [weak self] in
+      await self?.followUp(demand)
+    }
+  }
+
+  private func followUp(_ asked: CollectionDemand) async {
+    defer {
+      if !Task.isCancelled {
+        demandTask = nil
+        collectionDemand = nil
+      }
+    }
+    guard let requestedAt = await account.requestCollection(), !Task.isCancelled else { return }
+    var demand = asked
+    demand.requestedAt = requestedAt
+    collectionDemand = demand
+    for _ in 0..<CollectionDemand.followUpReads {
+      do {
+        try await demandSleep(CollectionDemand.followUpInterval)
+      } catch {
+        return
+      }
+      guard !Task.isCancelled else { return }
+      if !isRefreshing {
+        await readSummaryForDemand()
+      }
+      guard !Task.isCancelled, phase == .signedIn, let summary else { return }
+      if demand.isAnswered(by: summary, selfDeviceID: sessionDeviceID) { return }
+    }
+  }
+
+  private func stopCollectionDemand() {
+    demandTask?.cancel()
+    demandTask = nil
+    collectionDemand = nil
+  }
+
+  /// The Macs being waited on, when the subtitle should say so.
+  var askingMacs: Int? {
+    guard let collectionDemand, collectionDemand.requestedAt != nil else { return nil }
+    return collectionDemand.macCount
+  }
+
+  /// One conditional summary read and nothing else: the providers this phone reads for itself
+  /// are not what a Mac is being waited on for. An unchanged answer changes nothing on screen.
+  private func readSummaryForDemand() async {
+    let result = await account.fetchTodaySummary()
+    if result.error == nil, result.etag != nil, result.etag == summaryETag, summary != nil {
+      fetchedAt = result.fetchedAt
+      return
+    }
+    switch await apply(result) {
+    case .publish:
+      publishWidget()
+      evaluateAlerts()
+    case .afterFailure(let hasTrustedSummary):
+      syncWidgetAfterFailure(hasTrustedSummary: hasTrustedSummary, collected: false)
+    case .none:
+      break
+    }
+  }
+
+  #if DEBUG
+    /// Test seam: wait for the request and its follow-up to finish.
+    func waitForCollectionDemand() async {
+      await demandTask?.value
+    }
+  #endif
 
   /// Read the channels that reach this Account. Settings asks on appearance and after a bind.
   func loadIdentities() async {
@@ -1398,6 +1532,7 @@ final class AppModel {
     pendingSubscriptionSelection = nil
     overviewPath = []
     accountSessionEpoch += 1
+    stopCollectionDemand()
     usage.accountWentAway()
     quotaHistory.clear()
     // The providers this phone signed in to are not the account's, so what it collects for
@@ -1507,6 +1642,7 @@ final class AppModel {
       fetchedAt: Date?,
       fromCache: Bool,
       isRefreshing: Bool,
+      collectionDemand: CollectionDemand? = nil,
       pendingReadings: Set<String>,
       refreshReads: Int,
       banner: Banner?,
@@ -1531,6 +1667,7 @@ final class AppModel {
       self.fetchedAt = fetchedAt
       self.fromCache = fromCache
       self.isRefreshing = isRefreshing
+      self.collectionDemand = collectionDemand
       self.pendingReadings = pendingReadings
       self.refreshReads = refreshReads
       self.banner = banner

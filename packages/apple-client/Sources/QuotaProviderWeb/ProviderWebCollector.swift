@@ -16,10 +16,29 @@ public enum ProviderWebErrorCategory: String, Equatable, Sendable {
 public struct ProviderWebError: Error, Equatable, Sendable {
   public let category: ProviderWebErrorCategory
   public let source: String
+  /// Set when the provider answered 429: it is reachable and asked to be left alone. What it
+  /// said about how long is kept, because the backoff honours it.
+  public let rateLimit: ProviderRateLimit?
 
   public init(_ category: ProviderWebErrorCategory, _ source: String) {
+    self.init(category, source, rateLimit: nil)
+  }
+
+  public init(
+    _ category: ProviderWebErrorCategory, _ source: String, rateLimit: ProviderRateLimit?
+  ) {
     self.category = category
     self.source = source
+    self.rateLimit = rateLimit
+  }
+}
+
+/// A provider's 429, and the `Retry-After` it carried in whole seconds when it named one.
+public struct ProviderRateLimit: Equatable, Sendable {
+  public let retryAfterSeconds: Int?
+
+  public init(retryAfterSeconds: Int?) {
+    self.retryAfterSeconds = retryAfterSeconds
   }
 }
 

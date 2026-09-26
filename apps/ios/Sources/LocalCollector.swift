@@ -24,12 +24,14 @@ struct LocalCollector: Sendable {
 
   private let sessions: any ProviderSessionStoring
   private let collectors: CollectorFactory
+  private let backoff: any ProviderBackoffStoring
   private let now: @Sendable () -> Date
 
   init(
     sessions: any ProviderSessionStoring,
     transport: any ProviderWebTransport = URLSessionProviderWebTransport(),
     clientVersion: String = ProviderWebLogin.clientVersion(),
+    backoff: any ProviderBackoffStoring = UserDefaultsProviderBackoffStore(),
     now: @escaping @Sendable () -> Date = { Date() }
   ) {
     self.init(
@@ -42,6 +44,7 @@ struct LocalCollector: Sendable {
           now: moment
         )
       },
+      backoff: backoff,
       now: now
     )
   }
@@ -49,10 +52,12 @@ struct LocalCollector: Sendable {
   init(
     sessions: any ProviderSessionStoring,
     collectors: @escaping CollectorFactory,
+    backoff: any ProviderBackoffStoring = MemoryProviderBackoffStore(),
     now: @escaping @Sendable () -> Date = { Date() }
   ) {
     self.sessions = sessions
     self.collectors = collectors
+    self.backoff = backoff
     self.now = now
   }
 
@@ -64,6 +69,10 @@ struct LocalCollector: Sendable {
       case needsSignIn
       /// The provider could not be reached, which says nothing about the session.
       case unanswered
+      /// The provider answered 429 to this read. It is backed off, and its last reading stands.
+      case rateLimited(retryAfterSeconds: Int?)
+      /// Not asked: the provider is still backed off from an earlier 429. Its last reading stands.
+      case held
     }
 
     let sessionKey: String
@@ -76,6 +85,9 @@ struct LocalCollector: Sendable {
     /// Every session this pass asked, answered or not.
     var sessionKeys: [String]
     var isComplete: Bool
+    /// Sessions a provider asked to be left alone for: rate limited now, or still backed off.
+    /// Their last reading is kept rather than dropped.
+    var heldSessionKeys: [String] = []
   }
 
   /// The key of the stored session a reading answers for: the provider and the account the
@@ -92,16 +104,35 @@ struct LocalCollector: Sendable {
   /// The pass is abandoned at `budget`. A pass cut short keeps the answers that did arrive and
   /// says it is incomplete: a phone that was woken briefly should show what it managed to read,
   /// and the last quota it knows for the rest, not none.
+  ///
+  /// A provider that answered 429 is not asked again until its backoff runs out
+  /// ([ADR 0063](../../../docs/decisions/0063-collection-follows-demand-and-activity.md)).
+  /// A `manual` pass — pull to refresh, the refresh button — may ask it anyway, once a minute.
   func collect(
     within budget: Duration,
+    manual: Bool = false,
     onAnswer: @escaping @Sendable (Answer) async -> Void = { _ in }
   ) async -> Pass {
     let stored = (try? sessions.list()) ?? []
     let moment = now()
     var collection = LocalCollection(collectedAt: moment)
     var answered = 0
+    var schedule = backoff.load()
+    var asked: [StoredProviderSession] = []
+    var held: [String] = []
+    for session in stored {
+      if schedule.admits(session.key, now: moment, manual: manual) {
+        asked.append(session)
+      } else {
+        held.append(session.key)
+      }
+    }
+    for key in held {
+      answered += 1
+      await onAnswer(Answer(sessionKey: key, kind: .held))
+    }
     await withTaskGroup(of: Answer?.self) { group in
-      for session in stored {
+      for session in asked {
         group.addTask { await read(session, at: moment) }
       }
       group.addTask {
@@ -113,20 +144,28 @@ struct LocalCollector: Sendable {
         guard let answer = next else { break }
         answered += 1
         switch answer.kind {
-        case .reading(let snapshot): collection.snapshots.append(snapshot)
+        case .reading(let snapshot):
+          collection.snapshots.append(snapshot)
+          schedule.answered(answer.sessionKey)
         case .needsSignIn: collection.needsSignIn.append(answer.sessionKey)
-        case .unanswered: break
+        case .rateLimited(let retryAfterSeconds):
+          schedule.rateLimited(
+            answer.sessionKey, retryAfterSeconds: retryAfterSeconds, now: moment)
+          held.append(answer.sessionKey)
+        case .unanswered, .held: break
         }
         await onAnswer(answer)
       }
       group.cancelAll()
     }
+    backoff.save(schedule)
     collection.snapshots.sort { $0.account.fingerprint < $1.account.fingerprint }
     collection.needsSignIn.sort()
     return Pass(
       collection: collection,
       sessionKeys: stored.map(\.key),
-      isComplete: answered == stored.count
+      isComplete: answered == stored.count,
+      heldSessionKeys: held.sorted()
     )
   }
 
@@ -151,6 +190,10 @@ struct LocalCollector: Sendable {
       return Answer(sessionKey: session.key, kind: .reading(snapshot))
     } catch let error as ProviderWebError where error.category == .authRequired {
       return Answer(sessionKey: session.key, kind: .needsSignIn)
+    } catch let error as ProviderWebError where error.rateLimit != nil {
+      return Answer(
+        sessionKey: session.key,
+        kind: .rateLimited(retryAfterSeconds: error.rateLimit?.retryAfterSeconds))
     } catch {
       return Answer(sessionKey: session.key, kind: .unanswered)
     }

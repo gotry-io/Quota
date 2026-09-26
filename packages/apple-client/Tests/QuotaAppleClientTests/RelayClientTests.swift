@@ -20,6 +20,7 @@ struct RelayClientTests {
         "/oauth/v2/revoke",
         "/api/v2/account",
         "/api/v6/account/summary",
+        "/api/v6/account/collection-request",
         "/api/v2/account/settings",
         "/api/v6/account/usage/activity",
         "/api/v6/account/usage/period",

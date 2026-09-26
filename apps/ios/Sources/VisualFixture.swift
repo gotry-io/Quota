@@ -12,6 +12,7 @@ enum VisualFixture: String, CaseIterable, Sendable {
   case loading
   case launch
   case updating
+  case askingMac = "asking-mac"
   case content
   case cachedError = "cached-error"
   case empty

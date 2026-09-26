@@ -19,6 +19,8 @@ import QuotaWire
     var fetchedAt: Date?
     var fromCache: Bool
     var isRefreshing: Bool
+    /// The Macs asked for a fresh reading and waited on, with the instant Relay stored.
+    var collectionDemand: CollectionDemand?
     /// Provider sessions whose reading has not come back in the posed refresh.
     var pendingReadings: Set<String>
     var refreshReads: Int
@@ -47,7 +49,7 @@ import QuotaWire
           nil
         case .confirmAccount, .connectRefreshFailed:
           .pending
-        case .content, .launch, .updating, .cachedError, .empty, .noDevices, .merged, .providers,
+        case .content, .launch, .updating, .askingMac, .cachedError, .empty, .noDevices, .merged, .providers,
           .activityLoading, .activityFailed, .activityDayEmpty, .activityDayFailed, .signInMethods:
           .active
         }
@@ -68,6 +70,7 @@ import QuotaWire
         fetchedAt: nil,
         fromCache: false,
         isRefreshing: false,
+        collectionDemand: nil,
         pendingReadings: [],
         refreshReads: 0,
         banner: nil,
@@ -178,6 +181,16 @@ import QuotaWire
             LocalCollector.sessionKey(for: $0.snapshot)
           })
         scenario.refreshReads = 3
+      case .askingMac:
+        // Opened on readings older than two minutes: the Macs were asked twenty seconds ago.
+        signedInContent(fromCache: false, fetchedOffset: -20, banner: nil)
+        scenario.collectionDemand = CollectionDemand.stale(
+          in: populated, selfDeviceID: phoneID, now: now
+        ).map {
+          var demand = $0
+          demand.requestedAt = now.addingTimeInterval(-20)
+          return demand
+        }
       case .confirmAccount:
         scenario.phase = .confirmingAccount(label: populated.account.displayLabel ?? "octocat")
         scenario.summary = populated
@@ -289,6 +302,7 @@ import QuotaWire
         fetchedAt: fetchedAt,
         fromCache: fromCache,
         isRefreshing: isRefreshing,
+        collectionDemand: collectionDemand,
         pendingReadings: pendingReadings,
         refreshReads: refreshReads,
         banner: banner,
@@ -353,6 +367,9 @@ import QuotaWire
       }
       if fixture == .updating, pendingReadings.isEmpty || !isRefreshing {
         issues.append("updating is a refresh with a reading still pending")
+      }
+      if fixture == .askingMac, collectionDemand?.requestedAt == nil {
+        issues.append("askingMac waits on a request Relay stored")
       }
       if fixture == .signIn, presentsSignIn != true {
         issues.append("signIn presents the sheet")
