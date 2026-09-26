@@ -25,7 +25,17 @@ enum QuotaTheme {
   /// Token-mix fills (docs/design.md colour roles): cached input is the brand colour, ≥ 3:1 on
   /// the card; fresh input is neutral, and is told apart by the legend beside it, not by contrast.
   static let cachedFill = color(DesignTokens.Color.chartCache)
+  static let cacheWriteFill = color(DesignTokens.Color.chartCacheWrite)
   static let freshInputFill = color(DesignTokens.Color.chartInput)
+  /// Output, reasoning included: `label` at reduced opacity, so it follows Increase Contrast
+  /// (the Apple `chart.output` override).
+  static let outputFill = Color.primary.opacity(0.85)
+
+  /// A model's fill in the river, the ledger, and the agent tree: its provider's family at the
+  /// shade `ModelColorAssignment` gave it (docs/design.md, Model colours). Never mint.
+  static func modelFill(_ swatch: ModelSwatch) -> Color {
+    color(swatch.color)
+  }
 
   /// The one warning color: a window whose pace runs it out before its reset.
   static let warning = color(DesignTokens.Color.quotaWarning)

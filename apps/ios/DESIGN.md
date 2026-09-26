@@ -42,7 +42,7 @@ tile minimum width 140, identity avatar 44, Settings row icon 28, device symbol 
 Connect mark 72.
 
 Type roles are in [`docs/design.md`](../../docs/design.md#type). `QuotaDesign.Typography` maps
-them: `statValue` is rounded `largeTitle` semibold (Usage tiles), `remainingValue` is rounded
+them: `statValue` is rounded `largeTitle` semibold (the day sheet's tiles), `remainingValue` is rounded
 `title` semibold, `cardTitle` is `headline`, `support` is `subheadline`, `meta` is `footnote`,
 `sectionTitle` is `title3` semibold. Supporting copy may be `QuotaTheme.secondary` at
 `subheadline` and larger. `footnote` / `caption` metadata stays `.primary`.
@@ -61,7 +61,19 @@ sizes.
 `QuotaTheme.color(for: QuotaTone.remaining(percent:))`, or a caller-supplied `QuotaTone` when the
 bar is spend, not remaining. Height 8 by default, 4 on compact Overview windows. Hidden from
 VoiceOver; the window's remaining figure is the spoken value. `QuotaTheme.emerald` remains the
-accent and the healthy fill.
+accent and the healthy fill. A remaining meter carries the even-pace tick
+([`docs/design.md`](../../docs/design.md#components)): a 2-point ink tick, 6 points taller than
+the track, where `EvenPacePosition.remainingPercent` says remaining would stand at an even burn
+rate. It is drawn only where the pace rule answers, so it always sits beside a pace line, and is
+hidden from VoiceOver like the meter. Overview, subscription detail, and every window block draw
+it; widgets do not (they show no pace).
+
+Model fills are `QuotaTheme.modelFill(_:)` over the one `ModelColorAssignment` Usage holds, made
+from the Account summary's `all` agent tree when a summary is accepted, so switching period never
+recolours a model ([ADR 0064](../../docs/decisions/0064-analysis-surfaces-lead-with-model-usage.md)).
+The token-mix roles are `QuotaTheme.cachedFill` (cache read, brand), `cacheWriteFill` (brand
+light), `freshInputFill` (neutral), and `outputFill` (`Color.primary` at 0.85). No model and no
+agent share bar is emerald.
 
 `ProviderMark` (`QuotaBrandIcons`) is the catalog template mark, 22 points on Overview rows and 40
 points on the subscription-detail header, tinted by the caller, hidden from VoiceOver. `QuotaMark`
@@ -212,7 +224,20 @@ Body, in order:
    with **No usage today.** (`overview.today.empty`). One VoiceOver label names Today, the
    accessible token count, and the API-equivalent cost together. At accessibility sizes the
    values wrap under the label rather than truncating. Input and Output tiles are gone.
-6. When `summary.devices` is empty, the compact Mac setup Section after Today. When devices exist,
+6. Next resets, after the quota cards and before Today, once anything has been read (not over
+   placeholder cards): a `QuotaCard` titled **Next resets** (`section.header.next-resets`) over
+   the coming seven days in local time, from `NextResets.lanes` over the subscriptions in the
+   order the cards list them — stale ones and ones with no reset in the span have no lane. A
+   Swift Charts plot: one row per lane named by the provider (a second account of the same
+   provider adds its masked label), weekday ticks along the top of the span, and at each reset
+   instant an 11-point ring in the band colour of the lowest remaining it refills (secondary for
+   a balance), labelled with the window titles that share that minute. At accessibility sizes the
+   plot becomes one wrapping line per ring: **Codex 5 Hours · Resets in 3h 12m**. One VoiceOver
+   element (`overview.next-resets`), **Next resets, next 7 days, local time**, whose value is
+   each ring's lane, titles, and shared reset copy. Absent when no lane has a reset in the span.
+   The tightest-window gauge is not drawn on iPhone: every card already leads with its own
+   remaining.
+7. When `summary.devices` is empty, the compact Mac setup Section after Today. When devices exist,
    Overview does not repeat the Devices list; the Devices tab is the one full device list.
 
 Glance hierarchy follows the same information order as the Nowdex-inspired widgets (remaining first,
@@ -348,11 +373,15 @@ Shared rules:
 
 ### Usage
 
-Shown when a session exists. One inset-grouped `List` is the scrolling hierarchy. Every Usage
-selection except **All** reads `GET /api/v6/account/usage/period?from&to&timezone=` with the
+Usage is an analysis surface ([ADR 0064](../../docs/decisions/0064-analysis-surfaces-lead-with-model-usage.md)):
+it opens with a sentence about the reader's own model usage, then the model river, the model
+ledger, and the token mix. Shown when a session exists. One inset-grouped `List` is the scrolling
+hierarchy. Every Usage selection except **All** reads
+`GET /api/v6/account/usage/period?from&to&timezone=&breakdown=1&series=model` with the
 selection's inclusive local dates and this iPhone's IANA zone. Presets are the same path: Today is
 `from=to=localDate`, Last 7 days is `localDate−6`, Last 30 days is `localDate−29`. `breakdown=1`
-carries the agent/model tree. **All** stays the Account summary's 730 UTC-day window. Overview's
+carries the agent/model tree and `series=model` the by-day, by-model `model_series` the river
+draws; the monthly budget's read asks for neither. **All** stays the Account summary's 730 UTC-day window. Overview's
 Today row still reads `summary.usage.today`. The monthly budget measures this iPhone's local month
 through the same period read; signed in, that spend is the Account's. Opening Usage also requests the last 365 UTC days of activity once
 (`from = today-364`, `to = today`) for the year heatmap in **Activity patterns**; that answer stays
@@ -375,39 +404,61 @@ Body, in order:
    **Custom range**. Default is **Last 30 days**. The selection lives in memory for the signed-in
    session. It is a system content filter and it scrolls with the List. `usage.period` is the
    menu. Under it, the range the period covers and this iPhone's timezone identifier, in
-   `support`, wrapping at large type (`usage.period.title`). Stepping chevrons (**Previous
-   period** / **Next period**) show only for Today, This week, and This month; the current unit
-   is the last, so **Next period** is disabled there. The calendar button opens a **Custom range**
-   sheet of two `DatePicker`s bounded by the activity range, with **Cancel** and **Apply**.
-2. Two headline values only (`usage.headline`): **Tokens** and **API-equivalent** (`statValue`).
-   Complete cost is `$X.XX`, partial is `≥ $X.XX`, unavailable is **— unpriced**. Coverage
-   (`{cost-basis} · Priced N of M rows`) sits under the pair as `meta` (`usage.headline.priced`).
-   **Some hours in this period were scanned incompletely.** when `coverage.partial` is true, as a
-   `Label` with `exclamationmark.triangle` in `QuotaTheme.warning`. **This range goes past what
-   Quota still keeps.** when `coverage.truncated_by_retention` is true (`usage.headline.retention`).
-   Input, output, cache hit, reasoning, and messages live on the breakdown destination, not here.
-   Cache hit and its saving follow
-   [ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md).
-3. One daily chart, for any period but All and only when those days reported something. It covers
-   every asked local date in the period's `[from, to]`, using the period body's local `days[]`. A
-   date missing from `days[]` keeps its slot as a gap, never a $0 / 0-token day. A segmented
-   **Tokens** / **Cost** control decides what the bars measure; in Tokens the bar stacks cached
-   input, fresh input, and output, which add up to the day's total, and in Cost it is one emerald
-   fill. Y-axis: two or three value ticks including zero. X-axis: date ticks at the ends and
-   spaced through the range. Tokens bars use the brand ramp: cached input
-   `QuotaTheme.cachedFill`, fresh input `QuotaTheme.emerald`, output
-   `Color.primary.opacity(0.85)`. Empty and unpriced days follow **An empty day is a tick, not a
-   bar** in [Shared product vocabulary](../../docs/design.md#shared-product-vocabulary) — a
-   missing day keeps its slot as a gap, never a zero bar. A caption legend of three 8pt squares
-   (Cached, Fresh, Output) sits under the chart in Tokens mode; the squares scale with the caption
-   (capped at 1.75×) and the row reflows into a column when three of them stop fitting on one line,
-   because a legend that cannot grow reads to the auditor as unsupported Dynamic Type. The legend
-   is accessibility-hidden — `section.footer.daily` carries the same words for VoiceOver. Tap or drag selects a day and
-   opens that day's sheet. `usage.daily.chart` stays. The All period has no Daily chart.
-4. Three destination rows:
-   - **By provider / By model** (`usage.open-breakdown` → `usage.breakdown`): secondary token
-     counts (input, output, cache hit with saving, reasoning, messages), then the existing top
-     models and agent/provider/model tree from the period body.
+   `support`, wrapping at large type (`usage.period.title`) — the eyebrow of the sentence under
+   it. Stepping chevrons (**Previous period** / **Next period**) show only for Today, This week,
+   and This month; the current unit is the last, so **Next period** is disabled there. The
+   calendar button opens a **Custom range** sheet of two `DatePicker`s bounded by the activity
+   range, with **Cancel** and **Apply**. The controls come first on iPhone, above the sentence,
+   so the sentence always reads as the answer to the period chosen.
+2. Sentence header (`usage.header`), when the period reported tokens: one sentence in `title3`,
+   numbers and model names semibold in `.primary`, the rest in `QuotaTheme.secondary`
+   (`usage.sentence`): **You ran 11.4M tokens through 11 models. gpt-5 carried 17% of it.** — or
+   **So far today you ran …** on Today, and **…, all through gpt-5.** when one model did it all.
+   The model count is the ledger's (names merged across agents). Under it, one `meta` line of
+   facts — **26% of input from cache · 6 of 30 days active · 980 messages** (no active days for
+   All or a single day) — and the cost basis line (`{cost-basis} · Priced N of M rows`). **Some
+   hours in this period were scanned incompletely.** when `coverage.partial` is true, and **This
+   range goes past what Quota still keeps.** when `coverage.truncated_by_retention` is true,
+   each a `Label` with `exclamationmark.triangle` in `QuotaTheme.warning`. The meta block is one
+   VoiceOver element (`usage.header.meta`). While the first read of a period is on its way the
+   sentence is **Reading this period…**. Nothing ranks the reader against anyone.
+3. Metric tabs and the model river, in one `QuotaCard`. Two tabs carry their values — **Tokens**
+   (`usage.metric.tokens`, compact count) and **API-equivalent** (`usage.metric.cost`: complete
+   `$X.XX`, partial `≥ $X.XX`, unavailable **— unpriced**) — label in `support`, value in
+   `remainingValue`, a 2-point ink underline on the selected one. They sit side by side and
+   stack at accessibility sizes. Each is one combined element named with its full value
+   (**Tokens, 11,400,000 tokens**; **API-equivalent cost, $8.50, complete**), selected state as
+   a trait, and a tap or VoiceOver activation selects it. The series carries no messages, so
+   Messages is a fact in the header, not a tab, and there is no Amount / Share switch on iPhone.
+   The river (`usage.river`) is a Swift Charts stacked `AreaMark` per legend model per asked
+   local date — Relay's top eight by tokens, largest at the bottom, then **Other** — measured in
+   the selected tab; a one-day period draws one stacked bar. Every asked date keeps its slot: a
+   date `model_series` does not name reported nothing and is a 2-point baseline tick with the
+   stack meeting the baseline, and a model without a cell that day is zero there. In Cost, a
+   cell Relay could not price is left out of the stack rather than drawn as $0, and a day with
+   nothing priced is the dashed unpriced mark. Today, still being counted, is veiled with the
+   card colour at 55%. Y-axis: two or three value ticks including zero; X-axis: date ticks at the
+   ends and spaced through the range. Tap or drag selects a day and opens that day's sheet; the
+   VoiceOver element speaks the days, the total, the largest model, unpriced days in Cost, and
+   **today so far**, with a **View day** action. The ledger under it is the legend. All, and a
+   body a Relay answered without `model_series`, have no river.
+4. Model ledger, headed **Models** (`section.header.models`): `ModelLedger.rows` over the
+   period's tree, six rows (`usage.ledger.row`), each a model swatch (10-point, scales with the
+   text), the model name, and its tokens, then a `meta` line **17.0% · 25% from cache · $2.40**
+   and a 4-point bar of its tokens against the largest row's, in the model colour. Then **N more
+   models** with their tokens and share (`usage.ledger.more`) opens All models. Each row is one
+   VoiceOver element. There is no previous-period read on iPhone, so the ledger states no change
+   of share.
+5. Token mix, headed **Token mix** (`usage.token-mix`): one 12-point bar of cache read, cache
+   write, fresh input, and output that adds up to the period's tokens, in the chart roles, then a
+   row per part present with its whole percent — **Output** adds **32% of it reasoning** — and
+   **Cache saved $0.41 against list price** ([ADR 0036](../../docs/decisions/0036-usage-derived-metrics.md)).
+   One VoiceOver element.
+6. Three destination rows:
+   - **All models** (`usage.open-breakdown` → `usage.breakdown`): secondary token counts (input,
+     output, cache hit with saving, reasoning, messages), then the full model ledger — every
+     row, with the agents that sent it — then the agent/provider/model tree from the period
+     body. Provider share bars there are the provider's family at shade 1, not emerald.
    - **Activity patterns** (`usage.open-patterns` → `usage.patterns`): the rhythm heatmap and
      year activity, with their Less/More legends and this iPhone's timezone in the section
      footers. They are not on the Usage root.
@@ -419,7 +470,7 @@ Body, in order:
      ([ADR 0061](../../docs/decisions/0061-alert-policy-and-the-budget-follow-the-account.md));
      signed out they stay on this iPhone. The two crossings post one local notification each per
      calendar month.
-5. When the selected period reported no tokens: `ContentUnavailableView` titled **No usage**,
+7. When the selected period reported no tokens: `ContentUnavailableView` titled **No usage**,
    system image `chart.bar`, description **No usage was reported for this period.** Destinations
    still follow.
 
@@ -450,17 +501,13 @@ Activity (on **Activity patterns**), headed **Activity**:
   two-tile row: the long UTC date as `caption`, tokens and cost as `remainingValue`, then a
   44-point `.borderedProminent` **View day** button that presents that day.
 
-Top models, headed **Top models**, when the period has more than one model leaf: the three
-largest as ranked rows — rank numeral (`caption`, secondary, monospaced), model name, trailing
-`{share} · {tokens}`, and a 4pt emerald bar under each proportional to its share of the top
-model. `usage.top-model` stays.
-
 Each agent is a `QuotaCard(title: agent.displayName)` with an SF Symbol (codex `terminal`,
 claudeCode `sparkles`, grok `bolt`, cursor `cursorarrow`, gemini `star.circle`, copilot
 `airplane`, opencode / pi / kilo / antigravity / unknown
 `chevron.left.forwardslash.chevron.right`). Agents are not providers; do not use
 `ProviderMark`. Provider names are subhead rows (`InferenceProvider.displayName`) ending in
-that provider's whole-percent share of the period, with a 4pt emerald share bar under them;
+that provider's whole-percent share of the period, with a 4pt share bar in the provider's
+family colour (shade 1) under them;
 models keep `{tokens} · {cost} · {share}` trailing. The model `other` is **Other**. Each
 provider shows at most five models until **Show N more** reveals the rest; **Show fewer**
 collapses them again. Both are 44-point buttons with expanded / collapsed accessibility state.
@@ -476,8 +523,8 @@ totals card the day sheet has always used (identifiers `usage.day.headline` etc.
 `QuotaCard`s like the breakdown, including **Some hours on this day were scanned incompletely.**
 when `partial` is true. Loading text: **Loading this day's usage…**. Failure: **Couldn't load
 this day's usage.** with **Retry**. Empty: **No usage on this day.** The sheet asks
-`detail=agents` for that date. There is no custom material. Opening the sheet from the daily
-chart uses the same `usage.day` presentation as **View day** on Activity patterns.
+`detail=agents` for that date. There is no custom material. Opening the sheet from the model
+river uses the same `usage.day` presentation as **View day** on Activity patterns.
 
 ### Devices
 
@@ -880,7 +927,8 @@ provider and support, and no custom card chrome beyond the system widget contain
   reach it.
 - `scripts/ios-ui-screenshots.sh` removes its `/tmp/quota-ios-uitest-*` override files on exit; a
   stale text-size override would otherwise silently run every later UI test at that size.
-- Overview and Usage census tests scroll the list (`overview-scrolled`). Tab-bar minimization
+- Overview and Usage census tests scroll the list (`overview-scrolled`, `usage-scrolled`), then
+  capture Next resets (`overview-next-resets`) and the ledger and token mix (`usage-ledger`). Tab-bar minimization
   (`tabBarMinimizeBehavior(.onScrollDown)`) is a manual visual gate: the simulator used for
   screenshots does not expose a measurable height drop or a single-button minimized tab bar.
 
@@ -890,11 +938,12 @@ Inspect Connect with GitHub and Continue with Apple (72-point mark, **Quota** ti
 three feature lines, three buttons, and footnote in the normal state), connecting,
 connect error, expired session, the inline GitHub account confirmation, the launch mark, the
 first-refresh placeholder cards, a refresh in flight (subtitle, busy button, pending card), signed-in
-Overview (quota cards first, Today card second, trailing chevron on each card, no device-summary
+Overview (quota cards first, Next resets, then Today, trailing chevron on each card, no device-summary
 duplication, no content glass), empty quota/Today, no-devices Mac setup without a QR code or raw
 URL, cached content with a plain status Label, subscription detail (header card, Quota window
 cards, Today, Readings),
-Devices content and empty, Usage at 30 Days as one native scrolling List (period control, totals,
+Devices content and empty, Usage at 30 Days as one native scrolling List (period control, sentence
+header, metric tabs over the model river, the model ledger and token mix,
 Activity heatmap with full month abbreviations, agent sections, no glass cards), Usage empty /
 activity loading / activity failed, a single-day sheet (populated, empty, failed) with system
 chrome and medium/large detents, the four tabs (tab-bar minimization is a manual gate), Settings
@@ -912,7 +961,7 @@ PNGs land in a subdirectory. Re-run Connect, Confirm, Overview, Usage, Devices, 
 detail, and each Settings destination at one accessibility text size.
 The required check asserts the seven essential values at `accessibilityExtraLarge`, the size that
 truncates first (`QuotaSmokeUITests.testEssentialValuesAtAccessibilitySize`): Overview remaining, Today tokens, cost and the combined Today label, the
-Usage headline's tokens and cost, and subscription remaining — each exists, is hittable, carries
+Usage metric tabs' tokens and cost, and subscription remaining — each exists, is hittable, carries
 its whole accessibility label, and sits on screen. One large-type journey stays with them,
 Settings › About and back with Log Out still on the hub. Everything else at that size — the
 providers matrix, the day sheet, the rest of the screens — is captured and audited by the
@@ -961,7 +1010,7 @@ For deterministic simulator screenshots (DEBUG builds only), pass a launch argum
 | `launch` | The `content` Overview under the launch overlay, its mark held still; `--launch-progress <0…1>` picks how far the fill has come (default 0.5; 0 is the faint track alone, 1 is filled) |
 | `updating` | The `content` account with a refresh running: **Updating… 2 of 3**, refresh button busy, Claude's card waiting with a mini spinner |
 | `asking-mac` | The `content` account read 20 s ago with its old Mac readings asked for: subtitle **Asking your Mac…**, refresh button available |
-| `content` | Signed-in Overview with synthetic Codex / Claude / Grok windows and Today values. Claude has a last-good `minor` status-page reading (**Partial System Outage**), so the row shows the 8pt incident dot. Codex reports from two devices so subscription detail can show per-device readings, and its Reset Credits window lists two of its three credits expiring in 27 days; Usage has four periods with increasing totals, one provider group of more than five models, and an in-memory Activity heatmap of the last 365 UTC days |
+| `content` | Signed-in Overview with synthetic Codex / Claude / Grok windows and Today values. Claude has a last-good `minor` status-page reading (**Partial System Outage**), so the row shows the 8pt incident dot. Codex reports from two devices so subscription detail can show per-device readings, and its Reset Credits window lists two of its three credits expiring in 27 days; Usage has four periods with increasing totals, each period read answering a synthetic `model_series` split across the period's models, one provider group of more than five models, and an in-memory Activity heatmap of the last 365 UTC days |
 | `cached-error` | Same content plus **Showing saved data. Couldn't refresh.** |
 | `empty` | Signed-in Overview with empty quota and **No usage today.** Devices remain so Mac setup does not occupy this screen. Usage of every period is **No usage** / **No usage was reported for this period.** Activity is **No activity in the last year.** |
 | `no-devices` | Signed-in Overview with no devices and no subscriptions (compact Mac setup Section) |

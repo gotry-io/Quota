@@ -506,6 +506,12 @@ final class QuotaScreenUITests: QuotaUITestCase {
     attachScreenshot(app, name: "overview-content")
     try audit(app)
     try assertListScrolls(app, screenshot: "overview-scrolled")
+    revealIdentifier(app, "overview.next-resets")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["overview.next-resets"].exists,
+      "Next resets follows the quota cards"
+    )
+    attachScreenshot(app, name: "overview-next-resets")
   }
 
   /// A subscription this phone has no readings for: identity, windows, why there is no history,
@@ -702,6 +708,14 @@ final class QuotaScreenUITests: QuotaUITestCase {
     settle(app)
     attachScreenshot(app, name: "usage-content")
     try audit(app)
+    try assertListScrolls(app, screenshot: "usage-scrolled")
+    revealIdentifier(app, "usage.token-mix")
+    XCTAssertTrue(
+      app.descendants(matching: .any)["usage.ledger.row"].firstMatch.exists
+        && app.descendants(matching: .any)["usage.token-mix"].exists,
+      "the model ledger and the token mix follow the river"
+    )
+    attachScreenshot(app, name: "usage-ledger")
   }
 
   /// Usage on Today, opened directly on that period: the capture the period journey used to take.
@@ -716,8 +730,8 @@ final class QuotaScreenUITests: QuotaUITestCase {
     XCTAssertTrue(
       selectedPeriod(app).contains("Today"), "opened on Today, got \(selectedPeriod(app))")
     XCTAssertTrue(
-      app.descendants(matching: .any)["usage.headline"].waitForExistence(timeout: 5),
-      "usage.headline"
+      app.descendants(matching: .any)["usage.header"].waitForExistence(timeout: 5),
+      "usage.header"
     )
     settle(app)
     attachScreenshot(app, name: "usage-today")
@@ -739,8 +753,8 @@ final class QuotaScreenUITests: QuotaUITestCase {
       "opened on the custom range, got \(selectedPeriod(app))"
     )
     XCTAssertTrue(
-      app.descendants(matching: .any)["usage.headline"].waitForExistence(timeout: 5),
-      "usage.headline"
+      app.descendants(matching: .any)["usage.header"].waitForExistence(timeout: 5),
+      "usage.header"
     )
     let title = app.descendants(matching: .any)["usage.period.title"].firstMatch
     XCTAssertTrue(
@@ -750,7 +764,7 @@ final class QuotaScreenUITests: QuotaUITestCase {
     try audit(app)
   }
 
-  /// By provider / By model, and Activity patterns, each opened directly.
+  /// All models, and Activity patterns, each opened directly.
   func testUsageBreakdownScreen() throws {
     let app = launch(fixture: "content", route: "usage.breakdown")
     XCTAssertTrue(
