@@ -81,6 +81,29 @@ Catalog id `claude`. Common collection ladder, bounds, and identity rules live i
    list — is omitted too, and never fails the reading beside it. Unknown fields are ignored.
    Nothing here redeems a reset (`reset_rate_limits` is not called).
 6. Enrich identity best-effort through `/api/oauth/profile`; usage remains valid if enrichment fails.
+   The profile (email, organization, account UUID) answers for the credential it was read with
+   for 24 hours and is kept only in the service's memory: a collection is one request, not two
+   ([ADR 0063](../decisions/0063-collection-follows-demand-and-activity.md)). A different access
+   token — a renewal, a new sign-in — reads it again. A failed profile read is not remembered.
+   Claude's floor is 300 s (catalog `collection.min_interval_seconds`); the OAuth usage endpoint
+   refills about one request every five minutes and its burst is small, and a 429 backs off as
+   [Cadence](../provider-collection.md#cadence) says.
+
+   Before asking the network, the collector reads Claude Code's own usage snapshot: the one key
+   `cachedUsageUtilization` of Claude Code's global config, `$CLAUDE_CONFIG_DIR/.claude.json` when
+   that is set and `~/.claude.json` otherwise. Its shape is not documented; Claude Code 2.1.282
+   writes `{fetchedAtMs, accountUuid?, utilization}`, where `utilization` is the OAuth usage body
+   of step 4 (five-hour, seven-day, model-scoped, extra usage, `limits[]`, each with `resets_at`)
+   and Claude Code reuses it for 60 s. Only that key is decoded — the rest of the file is skipped,
+   never held — and nothing from it is persisted. It stands in for a request only when it is under
+   60 s old, its `accountUuid` equals the account UUID the profile of the credential in use names,
+   and this Mac read the network for that credential within the hour. The snapshot has no
+   `cedar_ember` block, so the **Reset Credits** window that network read found is carried beside
+   it; after an hour the network is read again, which also keeps the plan and grants current. Its
+   `observed_at` is the snapshot's own fetch time. Anything else — no key, an older snapshot,
+   another account, an unreadable file — leaves the network to answer. A fresh snapshot exists
+   only while Claude Code is running and reading its usage, which is the only time the tier makes
+   Claude worth asking often.
 7. Usage accepts `utilization` / `resets_at` and the aliases `utilization_pct` / `reset_at`.
 8. If no credential exists or the OAuth rung answers `auth_required`, and a stored Claude
    [browser session](../provider-collection.md#browser-session) exists, send the stored allowlisted Cookie header

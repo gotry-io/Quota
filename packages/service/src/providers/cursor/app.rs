@@ -198,6 +198,7 @@ mod tests {
             keychain: Default::default(),
             cli_versions: Default::default(),
             proven_credentials: Default::default(),
+            claude_memo: Default::default(),
         }
     }
 

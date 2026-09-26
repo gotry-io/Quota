@@ -194,6 +194,7 @@ mod tests {
                 keychain: Default::default(),
                 cli_versions: Default::default(),
                 proven_credentials: Default::default(),
+                claude_memo: Default::default(),
             };
             assert!(!context.allows_host_keychain(), "{provider:?}");
             assert!(discover(provider, &context).is_empty(), "{provider:?}");

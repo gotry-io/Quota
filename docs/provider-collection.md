@@ -104,6 +104,50 @@ How long a collected snapshot describes current quota is derived from the readin
 described in [`architecture.md`](architecture.md). Collectors do not report it, providers do not
 report it, and nothing stamps it onto the upload.
 
+## Cadence
+
+How often this Mac asks each provider is decided per provider
+([ADR 0063](decisions/0063-collection-follows-demand-and-activity.md)); the scheduler itself is in
+`packages/service/src/service/schedule.rs` and the rules in `service/cadence.rs`.
+
+- **Refresh Interval** is **Automatic** (the default) or a fixed 1, 2, 5, 10, or 15 minutes. An
+  identity still on the five-minute default became Automatic; any other stored interval stayed
+  fixed. A fixed interval applies to every provider.
+- **Automatic** gives each provider a tier once a minute. *Active*, every minute: the provider's
+  own local agent wrote its logs in the last five minutes, or a window of this Mac's last reading
+  has less than 20 % left. *Idle*, every ten minutes: no such write for sixty minutes and no
+  collection request in that time. *Normal*, every five minutes, otherwise. Activity is the newest
+  modification time under the agent's log roots (the same roots as
+  [`usage-sources.md`](usage-sources.md)), a bounded walk of at most 5,000 entries that opens no
+  file. Only Claude Code → `claude`, Codex → `codex`, Gemini CLI → `gemini`, and Cursor → `cursor`
+  map one to one; OpenCode and Pi can speak for any provider and their logs would have to be parsed
+  to say which, so they do not take part. Every other provider stays *normal*.
+- **Floor.** Catalog `collection.min_interval_seconds` is the shortest time between two asks of
+  one provider on one Mac: Claude Code 300 s, Codex, OpenRouter, and DeepSeek 60 s, every other
+  provider 120 s. It caps every tier and every fixed interval, and a periodic tick, a collection
+  request, a window-reset catch-up, startup, and a settings or account change all respect it. A
+  manual refresh or Recheck waits only 60 s per provider. Only a provider a source was actually
+  tried for counts as asked, so a provider set up a moment ago is read at once.
+- **Jitter.** Each provider's periodic tick moves by up to 10 % either way. A pass also takes every
+  provider due within 30 s, so providers on one interval share a pass. Usage is scanned with a pass
+  once its own interval has passed: the fixed interval, or five minutes under Automatic.
+- **Backoff.** A provider that answers 429 keeps its last reading (with its age, and no error) and
+  is not asked again until its backoff ends: a positive `Retry-After` is honoured up to an hour;
+  without one — Anthropic sends `retry-after: 0` and means nothing by it — the wait is five minutes,
+  doubling to thirty. The backoff is kept per provider and the account this Mac last read for it, in
+  `cache.sqlite`, so a restart does not end it; the journal records the attempt as `rate_limited`.
+  A manual refresh may still ask once a minute.
+- **Another Mac.** Before asking, a provider is skipped when every account this Mac last read for it
+  was observed by another device of the same Account within the provider's floor, as the latest
+  Account summary states it. That reading is already the Account's; asking again would only spend
+  the provider's rate limit twice.
+- **Collection requests.** When an Account read shows `collection_requested_at` newer than this
+  Mac's last complete collection and at most ten minutes old, the scheduler runs one pass of every
+  provider now (trigger `demand`, uploaded as usual) and restarts every clock. Each instant is
+  answered once; one that expired while the Mac slept is ignored.
+- A provider not asked in a pass keeps the result it had, so a pass of one provider never blanks
+  another.
+
 ## Official CLI identity
 
 Two endpoints answer the provider's own command-line client and nothing else, so the Codex and

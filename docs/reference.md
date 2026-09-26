@@ -14,20 +14,20 @@ From `packages/provider/catalog.json`. What Quota can do with each id, and what 
 the generated [provider capability matrix](providers/README.md). Strategy for each catalog id is
 [`docs/providers/<id>.md`](provider-collection.md#providers).
 
-| Order | Id | Display name | Account sync | Default visible | Setup | Credential | Browser session | Status page | Environment keys | Default base URL |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 0 | [`codex`](providers/codex.md) | Codex | true | true | codex login | — | yes | statuspage_v2 | CODEX_HOME | — |
-| 1 | [`claude`](providers/claude.md) | Claude Code | true | true | claude auth login | — | yes | statuspage_v2 | CLAUDE_CONFIG_DIR | — |
-| 2 | [`grok`](providers/grok.md) | Grok | true | true | grok login | — | yes | none | GROK_HOME | — |
-| 3 | [`openrouter`](providers/openrouter.md) | OpenRouter | true | false | Configure in QuotaBar | api_key | — | none | OPENROUTER_API_KEY | https://openrouter.ai/api/v1 |
-| 4 | [`deepseek`](providers/deepseek.md) | DeepSeek | true | false | Configure in QuotaBar | api_key | — | none | DEEPSEEK_API_KEY, DEEPSEEK_KEY | https://api.deepseek.com |
-| 5 | [`kimi`](providers/kimi.md) | Kimi Code | true | false | Configure in QuotaBar | api_key | yes | statuspage_v2 | KIMI_CODE_API_KEY, KIMI_API_KEY | https://api.kimi.com |
-| 6 | [`litellm`](providers/litellm.md) | LiteLLM | true | false | Configure in QuotaBar | api_key | — | none | LITELLM_API_KEY, LITELLM_BASE_URL | — |
-| 7 | [`cursor`](providers/cursor.md) | Cursor | true | false | Sign in with browser | — | exclusive | statuspage_v2 | — | — |
-| 8 | [`gemini`](providers/gemini.md) | Gemini CLI | true | false | gemini | — | — | — | GOOGLE_CLOUD_PROJECT | — |
-| 9 | [`copilot`](providers/copilot.md) | GitHub Copilot | true | false | copilot login | — | — | — | COPILOT_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN | — |
-| 10 | [`antigravity`](providers/antigravity.md) | Antigravity | true | false | agy | — | — | none | GOOGLE_CLOUD_PROJECT | — |
-| 11 | [`opencode_go`](providers/opencode_go.md) | OpenCode Go | true | false | Configure in QuotaBar | api_key | — | none | OPENCODE_API_KEY | https://opencode.ai/zen/go/v1 |
+| Order | Id | Display name | Account sync | Default visible | Setup | Credential | Browser session | Status page | Min interval | Environment keys | Default base URL |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 | [`codex`](providers/codex.md) | Codex | true | true | codex login | — | yes | statuspage_v2 | 60 s | CODEX_HOME | — |
+| 1 | [`claude`](providers/claude.md) | Claude Code | true | true | claude auth login | — | yes | statuspage_v2 | 300 s | CLAUDE_CONFIG_DIR | — |
+| 2 | [`grok`](providers/grok.md) | Grok | true | true | grok login | — | yes | none | 120 s | GROK_HOME | — |
+| 3 | [`openrouter`](providers/openrouter.md) | OpenRouter | true | false | Configure in QuotaBar | api_key | — | none | 60 s | OPENROUTER_API_KEY | https://openrouter.ai/api/v1 |
+| 4 | [`deepseek`](providers/deepseek.md) | DeepSeek | true | false | Configure in QuotaBar | api_key | — | none | 60 s | DEEPSEEK_API_KEY, DEEPSEEK_KEY | https://api.deepseek.com |
+| 5 | [`kimi`](providers/kimi.md) | Kimi Code | true | false | Configure in QuotaBar | api_key | yes | statuspage_v2 | 120 s | KIMI_CODE_API_KEY, KIMI_API_KEY | https://api.kimi.com |
+| 6 | [`litellm`](providers/litellm.md) | LiteLLM | true | false | Configure in QuotaBar | api_key | — | none | 120 s | LITELLM_API_KEY, LITELLM_BASE_URL | — |
+| 7 | [`cursor`](providers/cursor.md) | Cursor | true | false | Sign in with browser | — | exclusive | statuspage_v2 | 120 s | — | — |
+| 8 | [`gemini`](providers/gemini.md) | Gemini CLI | true | false | gemini | — | — | — | 120 s | GOOGLE_CLOUD_PROJECT | — |
+| 9 | [`copilot`](providers/copilot.md) | GitHub Copilot | true | false | copilot login | — | — | — | 120 s | COPILOT_GITHUB_TOKEN, GH_TOKEN, GITHUB_TOKEN | — |
+| 10 | [`antigravity`](providers/antigravity.md) | Antigravity | true | false | agy | — | — | none | 120 s | GOOGLE_CLOUD_PROJECT | — |
+| 11 | [`opencode_go`](providers/opencode_go.md) | OpenCode Go | true | false | Configure in QuotaBar | api_key | — | none | 120 s | OPENCODE_API_KEY | https://opencode.ai/zen/go/v1 |
 
 ## Protocol
 

@@ -819,6 +819,7 @@ private struct TemporaryService {
               "revision": revision,
               "usage_upload_enabled": True,
               "group_usage_by_project": True,
+              "quota_refresh_mode": "automatic",
               "quota_refresh_interval_seconds": 300,
               "usage_periods": {"local": {}, "account": {}},
               "quota": component("unavailable"),

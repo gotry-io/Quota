@@ -35,7 +35,7 @@ keeps the menu bar; **Quit QuotaBar Completely** ⌥⌘Q quits. The Browser Acce
 Sparkle's updater are not part of that count.
 
 The Rust service returns persisted component state immediately, then performs startup collection in
-the background. It owns the five-minute schedule, providers, Usage, pricing, OAuth/account sync,
+the background. It owns the collection schedule, providers, Usage, pricing, OAuth/account sync,
 its owner-only identity store and disposable cache, the hours it still owes an Account, and the
 two-way merge of a subscription Relay resolved against this Mac's own reading. Signing in is
 Authorization Code with PKCE over a loopback callback and issues one session, which reads the
