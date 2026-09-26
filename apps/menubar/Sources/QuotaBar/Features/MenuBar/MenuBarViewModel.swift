@@ -102,7 +102,13 @@ final class MenuBarViewModel {
   private(set) var isUpdatingGroupUsageByProject = false
   private(set) var groupUsageByProject = true
   private(set) var quotaRefreshIntervalSeconds = QuotaRefreshInterval.fallback.rawValue
+  private(set) var quotaRefreshMode = QuotaRefreshMode.automatic
+  private(set) var quotaRefreshTier: LocalServiceQuotaRefreshTier?
   private(set) var isUpdatingQuotaRefreshInterval = false
+
+  var quotaRefreshChoice: QuotaRefreshChoice {
+    QuotaRefreshChoice(mode: quotaRefreshMode, intervalSeconds: quotaRefreshIntervalSeconds)
+  }
   private(set) var lastCheckedAt: Date?
   private(set) var providerConfigurations: [ProviderID: LocalServiceProviderConfig] = [:]
   private(set) var providerStatus: [ProviderID: LocalServiceProviderStatus] = [:]
@@ -792,15 +798,16 @@ final class MenuBarViewModel {
     }
   }
 
-  func setQuotaRefreshInterval(_ interval: QuotaRefreshInterval) async {
-    guard !isUpdatingQuotaRefreshInterval, interval.rawValue != quotaRefreshIntervalSeconds,
-      let client
-    else { return }
+  func setQuotaRefresh(_ choice: QuotaRefreshChoice) async {
+    guard !isUpdatingQuotaRefreshInterval, choice != quotaRefreshChoice, let client else {
+      return
+    }
     isUpdatingQuotaRefreshInterval = true
     defer { isUpdatingQuotaRefreshInterval = false }
     do {
-      quotaRefreshIntervalSeconds =
-        try await client.setQuotaRefreshInterval(seconds: interval.rawValue).intervalSeconds
+      let setting = try await client.setQuotaRefresh(choice)
+      quotaRefreshMode = setting.mode
+      quotaRefreshIntervalSeconds = setting.intervalSeconds
       await reloadState()
     } catch is CancellationError {
       return
@@ -956,6 +963,8 @@ final class MenuBarViewModel {
     quotaHistorySync = state.historySync
     groupUsageByProject = state.groupUsageByProject
     quotaRefreshIntervalSeconds = state.quotaRefreshIntervalSeconds
+    quotaRefreshMode = state.quotaRefreshMode
+    quotaRefreshTier = state.quotaRefreshTier
     report = state.quota.value
     let previouslySignedIn = accountFlow.hasAccountSession
     accountFlow.acceptState(state)

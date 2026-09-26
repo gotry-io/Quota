@@ -50,6 +50,7 @@ func rejectsUnknownNestedLocalServiceStateFields() throws {
       "revision": 0,
       "usage_upload_enabled": true,
       "group_usage_by_project": true,
+      "quota_refresh_mode": "automatic",
       "quota_refresh_interval_seconds": 300,
       "usage_periods": {"local": {}, "account": {}},
       "quota": {
@@ -144,6 +145,7 @@ func decodesAccountSettingsWhenPresentAndIgnoresUnknownDocumentKeys() throws {
       "revision": 0,
       "usage_upload_enabled": true,
       "group_usage_by_project": true,
+      "quota_refresh_mode": "automatic",
       "quota_refresh_interval_seconds": 300,
       "usage_periods": {"local": {}, "account": {}},
       "quota": {
@@ -259,6 +261,7 @@ func rejectsUnknownProviderStatusIndicators() {
       "revision": 0,
       "usage_upload_enabled": true,
       "group_usage_by_project": true,
+      "quota_refresh_mode": "automatic",
       "quota_refresh_interval_seconds": 300,
       "usage_periods": {"local": {}, "account": {}},
       "quota": {
@@ -845,4 +848,27 @@ func anAccountPeriodWithoutProjectsDecodes() throws {
   #expect(decoded.projects == nil)
   #expect(decoded.days == nil)
   #expect(decoded.isValid)
+}
+
+/// Settings says what Automatic is doing in the helper's words: the tier, its interval, and the
+/// provider that set it.
+@Test
+func automaticTierHintNamesTheProviderAndWhy() throws {
+  let decode = { (json: String) in
+    try QuotaWireCodec.makeDecoder().decode(
+      LocalServiceQuotaRefreshTier.self, from: Data(json.utf8))
+  }
+  #expect(
+    try decode(#"{"tier":"active","interval_seconds":60,"provider":"codex","reason":"agent_active"}"#)
+      .hint == "Automatic · every 1 min while Codex is active")
+  #expect(
+    try decode(
+      #"{"tier":"active","interval_seconds":300,"provider":"claude","reason":"low_remaining"}"#
+    ).hint == "Automatic · every 5 min while Claude Code is running low")
+  #expect(
+    try decode(#"{"tier":"idle","interval_seconds":600,"provider":"codex"}"#).hint
+      == "Automatic · every 10 min while idle")
+  #expect(throws: DecodingError.self) {
+    _ = try decode(#"{"tier":"normal","interval_seconds":300,"provider":"codex","extra":1}"#)
+  }
 }

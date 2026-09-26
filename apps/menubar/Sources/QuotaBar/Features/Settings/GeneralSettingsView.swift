@@ -76,21 +76,28 @@ struct GeneralSettingsView: View {
         .accessibilityLabel(GeneralSettingsCopy.showInDock)
         .accessibilityHint(GeneralSettingsCopy.showInDockHint)
 
-        Picker(
-          GeneralSettingsCopy.refreshInterval,
-          selection: Binding(
-            get: { QuotaRefreshInterval.resolved(model.quotaRefreshIntervalSeconds) },
-            set: { interval in
-              Task { await model.setQuotaRefreshInterval(interval) }
+        VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xs) {
+          Picker(
+            GeneralSettingsCopy.refreshInterval,
+            selection: Binding(
+              get: { model.quotaRefreshChoice },
+              set: { choice in
+                Task { await model.setQuotaRefresh(choice) }
+              }
+            )
+          ) {
+            ForEach(QuotaRefreshChoice.allCases) { choice in
+              Text(choice.label).tag(choice)
             }
-          )
-        ) {
-          ForEach(QuotaRefreshInterval.allCases) { interval in
-            Text(interval.label).tag(interval)
+          }
+          .disabled(model.isUpdatingQuotaRefreshInterval)
+          .accessibilityLabel(GeneralSettingsCopy.refreshInterval)
+          if model.quotaRefreshChoice == .automatic, let tier = model.quotaRefreshTier {
+            Text(tier.hint)
+              .font(.caption)
+              .foregroundStyle(.secondary)
           }
         }
-        .disabled(model.isUpdatingQuotaRefreshInterval)
-        .accessibilityLabel(GeneralSettingsCopy.refreshInterval)
 
         Toggle(
           GeneralSettingsCopy.uploadUsage,

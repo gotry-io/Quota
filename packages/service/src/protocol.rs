@@ -15,7 +15,8 @@ use serde_json::Value;
 pub const IPC_VERSION: u32 = 5;
 pub const MAXIMUM_LINE_BYTES: usize = 1_048_576;
 pub const MAXIMUM_REQUEST_ID_BYTES: usize = 128;
-/// Allowed Quota collection intervals, in seconds. The default is five minutes.
+/// Fixed Quota collection intervals, in seconds. Automatic is the default mode; five minutes is
+/// the fixed interval an identity holds until someone picks another.
 pub const QUOTA_REFRESH_INTERVALS_SECONDS: [u64; 5] = [60, 120, 300, 600, 900];
 pub const DEFAULT_QUOTA_REFRESH_INTERVAL_SECONDS: u64 = 300;
 /// How many local days one `usage_period` request may fold, which is a year and a leap day.
@@ -653,10 +654,61 @@ pub struct SetGroupUsageByProjectPayload {
     pub enabled: bool,
 }
 
+/// How this Mac paces provider collection (ADR 0063).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuotaRefreshMode {
+    /// Each provider on its own tier, from local agent activity and remaining quota.
+    Automatic,
+    /// Every provider on `quota_refresh_interval_seconds`.
+    Fixed,
+}
+
+impl QuotaRefreshMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Automatic => "automatic",
+            Self::Fixed => "fixed",
+        }
+    }
+}
+
+/// `{"mode": "automatic"}`, or `{"mode": "fixed", "interval_seconds": <one of the intervals>}`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SetQuotaRefreshIntervalPayload {
+    pub mode: QuotaRefreshMode,
+    #[serde(default)]
+    pub interval_seconds: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuotaRefreshTier {
+    Active,
+    Normal,
+    Idle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuotaRefreshTierReason {
+    /// The provider's local agent wrote its logs in the last five minutes.
+    AgentActive,
+    /// A window of the provider's last reading has less than 20 % left.
+    LowRemaining,
+}
+
+/// What Automatic is doing now: the fastest tier among the providers this Mac collects.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct QuotaRefreshTierHint {
+    pub tier: QuotaRefreshTier,
     pub interval_seconds: u64,
+    pub provider: String,
+    /// Present only for `active`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<QuotaRefreshTierReason>,
 }
 
 /// Pin Overview to one reporting source for a subscription, or clear the pin (Automatic).
@@ -732,6 +784,7 @@ pub struct GroupUsageByProjectSetting {
 #[derive(Debug, Clone, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct QuotaRefreshIntervalSetting {
+    pub mode: QuotaRefreshMode,
     pub interval_seconds: u64,
 }
 
@@ -904,7 +957,11 @@ pub struct StateSnapshot {
     pub revision: u64,
     pub usage_upload_enabled: bool,
     pub group_usage_by_project: bool,
+    pub quota_refresh_mode: QuotaRefreshMode,
     pub quota_refresh_interval_seconds: u64,
+    /// Present only in Automatic, once the scheduler has judged the providers it collects.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quota_refresh_tier: Option<QuotaRefreshTierHint>,
     pub usage_periods: UsagePeriodCache,
     pub quota: ComponentState,
     pub usage: ComponentState,
@@ -1077,6 +1134,8 @@ pub enum DiagnosticAttemptTrigger {
     Recheck,
     SettingsChange,
     AccountChange,
+    /// Another signed-in client asked the Account for a fresh reading (ADR 0063).
+    Demand,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
@@ -1109,6 +1168,8 @@ pub enum DiagnosticAttemptCode {
     MalformedData,
     TruncatedActiveSource,
     DeviceDeleted,
+    /// The provider answered 429. The reading before it stands; this Mac waits it out.
+    RateLimited,
 }
 
 /// One completed or still-running piece of work, as the copied report lists it.

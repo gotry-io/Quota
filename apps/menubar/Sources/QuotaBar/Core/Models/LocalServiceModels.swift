@@ -526,7 +526,11 @@ struct LocalServiceState: Decodable, Sendable {
   let revision: Int
   let usageUploadEnabled: Bool
   let groupUsageByProject: Bool
+  let quotaRefreshMode: QuotaRefreshMode
+  /// The fixed interval. Kept while Automatic is chosen, so a fixed choice resumes from it.
   let quotaRefreshIntervalSeconds: Int
+  /// Present only in Automatic, once the helper has judged its providers.
+  let quotaRefreshTier: LocalServiceQuotaRefreshTier?
   let usagePeriods: LocalServiceUsagePeriodCache
   let quota: LocalServiceComponent<QuotaCollectionReport>
   let usage: LocalServiceComponent<LocalUsageReport>
@@ -549,7 +553,9 @@ struct LocalServiceState: Decodable, Sendable {
     revision: Int,
     usageUploadEnabled: Bool,
     groupUsageByProject: Bool,
+    quotaRefreshMode: QuotaRefreshMode = .automatic,
     quotaRefreshIntervalSeconds: Int,
+    quotaRefreshTier: LocalServiceQuotaRefreshTier? = nil,
     usagePeriods: LocalServiceUsagePeriodCache,
     quota: LocalServiceComponent<QuotaCollectionReport>,
     usage: LocalServiceComponent<LocalUsageReport>,
@@ -568,7 +574,9 @@ struct LocalServiceState: Decodable, Sendable {
     self.revision = revision
     self.usageUploadEnabled = usageUploadEnabled
     self.groupUsageByProject = groupUsageByProject
+    self.quotaRefreshMode = quotaRefreshMode
     self.quotaRefreshIntervalSeconds = quotaRefreshIntervalSeconds
+    self.quotaRefreshTier = quotaRefreshTier
     self.usagePeriods = usagePeriods
     self.quota = quota
     self.usage = usage
@@ -589,7 +597,9 @@ struct LocalServiceState: Decodable, Sendable {
     case revision
     case usageUploadEnabled
     case groupUsageByProject
+    case quotaRefreshMode
     case quotaRefreshIntervalSeconds
+    case quotaRefreshTier
     case usagePeriods
     case quota
     case usage
@@ -661,7 +671,7 @@ extension LocalServiceState {
   init(from decoder: Decoder) throws {
     try decoder.rejectUnknownWireKeys([
       "ipcVersion", "revision", "usageUploadEnabled", "groupUsageByProject",
-      "quotaRefreshIntervalSeconds",
+      "quotaRefreshMode", "quotaRefreshIntervalSeconds", "quotaRefreshTier",
       "usagePeriods", "quota", "usage",
       "account", "accountSettings", "historySync", "pricing", "providers", "providerStatus",
       "providerBrowserSessions",
@@ -673,7 +683,10 @@ extension LocalServiceState {
     revision = try container.decode(Int.self, forKey: .revision)
     usageUploadEnabled = try container.decode(Bool.self, forKey: .usageUploadEnabled)
     groupUsageByProject = try container.decode(Bool.self, forKey: .groupUsageByProject)
+    quotaRefreshMode = try container.decode(QuotaRefreshMode.self, forKey: .quotaRefreshMode)
     quotaRefreshIntervalSeconds = try container.decode(Int.self, forKey: .quotaRefreshIntervalSeconds)
+    quotaRefreshTier = try container.decodeIfPresent(
+      LocalServiceQuotaRefreshTier.self, forKey: .quotaRefreshTier)
     usagePeriods = try container.decode(LocalServiceUsagePeriodCache.self, forKey: .usagePeriods)
     quota = try container.decode(LocalServiceComponent<QuotaCollectionReport>.self, forKey: .quota)
     usage = try container.decode(LocalServiceComponent<LocalUsageReport>.self, forKey: .usage)
@@ -904,9 +917,11 @@ extension LocalServiceGroupUsageByProjectSetting {
 }
 
 struct LocalServiceQuotaRefreshIntervalSetting: Decodable, Sendable {
+  let mode: QuotaRefreshMode
   let intervalSeconds: Int
 
   private enum CodingKeys: String, CodingKey {
+    case mode
     case intervalSeconds
   }
 }

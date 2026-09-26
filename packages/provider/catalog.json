@@ -42,6 +42,9 @@
         "kind": "statuspage_v2",
         "url": "https://status.openai.com/api/v2/status.json"
       },
+      "collection": {
+        "min_interval_seconds": 60
+      },
       "capabilities": {
         "tier": "first_class",
         "known_gaps": [],
@@ -141,6 +144,9 @@
       "status_page": {
         "kind": "statuspage_v2",
         "url": "https://status.claude.com/api/v2/status.json"
+      },
+      "collection": {
+        "min_interval_seconds": 300
       },
       "capabilities": {
         "tier": "first_class",
@@ -244,6 +250,9 @@
         "kind": "none",
         "url": "https://status.x.ai/"
       },
+      "collection": {
+        "min_interval_seconds": 120
+      },
       "capabilities": {
         "tier": "best_effort",
         "known_gaps": [],
@@ -330,6 +339,9 @@
         "kind": "none",
         "url": "https://status.openrouter.ai/"
       },
+      "collection": {
+        "min_interval_seconds": 60
+      },
       "capabilities": {
         "tier": "best_effort",
         "known_gaps": [],
@@ -388,6 +400,9 @@
       "status_page": {
         "kind": "none",
         "url": "https://status.deepseek.com/"
+      },
+      "collection": {
+        "min_interval_seconds": 60
       },
       "capabilities": {
         "tier": "best_effort",
@@ -449,6 +464,9 @@
       "status_page": {
         "kind": "statuspage_v2",
         "url": "https://status.moonshot.cn/api/v2/status.json"
+      },
+      "collection": {
+        "min_interval_seconds": 120
       },
       "capabilities": {
         "tier": "best_effort",
@@ -515,6 +533,9 @@
         "kind": "none",
         "url": null
       },
+      "collection": {
+        "min_interval_seconds": 120
+      },
       "capabilities": {
         "tier": "best_effort",
         "known_gaps": [],
@@ -570,6 +591,9 @@
       "status_page": {
         "kind": "statuspage_v2",
         "url": "https://status.cursor.com/api/v2/status.json"
+      },
+      "collection": {
+        "min_interval_seconds": 120
       },
       "capabilities": {
         "tier": "best_effort",
@@ -641,6 +665,9 @@
       "browser_session": null,
       "default_base_url": null,
       "base_url_environment_key": null,
+      "collection": {
+        "min_interval_seconds": 120
+      },
       "capabilities": {
         "tier": "best_effort",
         "known_gaps": [],
@@ -699,6 +726,9 @@
       "browser_session": null,
       "default_base_url": null,
       "base_url_environment_key": null,
+      "collection": {
+        "min_interval_seconds": 120
+      },
       "capabilities": {
         "tier": "best_effort",
         "known_gaps": [],
@@ -746,6 +776,9 @@
       "status_page": {
         "kind": "none",
         "url": "https://www.google.com/appsstatus/dashboard/"
+      },
+      "collection": {
+        "min_interval_seconds": 120
       },
       "capabilities": {
         "tier": "best_effort",
@@ -814,6 +847,9 @@
       "status_page": {
         "kind": "none",
         "url": null
+      },
+      "collection": {
+        "min_interval_seconds": 120
       },
       "capabilities": {
         "tier": "best_effort",

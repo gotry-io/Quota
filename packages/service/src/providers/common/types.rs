@@ -19,6 +19,10 @@ pub enum ErrorCategory {
     /// because a reader on another device can neither see nor change this one's access; the
     /// marker that separates it travels with the local collection result.
     AccessDenied,
+    /// The provider answered 429. It reads as `unavailable` everywhere a category is written,
+    /// because the reading before it stands; what this device does about it — wait the provider
+    /// out — happens here (ADR 0063).
+    RateLimited,
     Unavailable,
     Unsupported,
     Error,
@@ -28,7 +32,7 @@ impl ErrorCategory {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::AuthRequired => "auth_required",
-            Self::AccessDenied | Self::Unavailable => "unavailable",
+            Self::AccessDenied | Self::RateLimited | Self::Unavailable => "unavailable",
             Self::Unsupported => "unsupported",
             Self::Error => "error",
         }
@@ -41,7 +45,7 @@ impl ErrorCategory {
         match self {
             Self::AuthRequired => "auth_required",
             Self::AccessDenied => "access_denied",
-            Self::Unavailable => "unavailable",
+            Self::RateLimited | Self::Unavailable => "unavailable",
             Self::Unsupported => "unsupported",
             Self::Error => "error",
         }
@@ -56,6 +60,8 @@ impl ErrorCategory {
 pub struct ProviderError {
     pub category: ErrorCategory,
     pub source_id: &'static str,
+    /// A positive `Retry-After` the provider sent with a 429, in seconds.
+    pub retry_after_seconds: Option<u64>,
 }
 
 impl ProviderError {
@@ -63,6 +69,15 @@ impl ProviderError {
         Self {
             category,
             source_id: source,
+            retry_after_seconds: None,
+        }
+    }
+
+    pub const fn rate_limited(source: &'static str, retry_after_seconds: Option<u64>) -> Self {
+        Self {
+            category: ErrorCategory::RateLimited,
+            source_id: source,
+            retry_after_seconds,
         }
     }
 }
@@ -250,6 +265,10 @@ pub struct CollectionContext {
     /// only evidence that outlives a refresh.  Written by the refresh worker after collection;
     /// a collector only reads it.
     pub proven_credentials: BTreeMap<String, String>,
+    /// What the Claude collector remembers between refreshes: the profile it read for the
+    /// credential in use, for a day, and when it last read usage over the network. Held by the
+    /// backend so every refresh shares it; a new credential clears it.
+    pub claude_memo: Arc<std::sync::Mutex<crate::providers::claude::Memo>>,
 }
 
 impl Default for CollectionContext {
@@ -270,6 +289,7 @@ impl Default for CollectionContext {
             keychain: Arc::new(OnceLock::new()),
             cli_versions: BTreeMap::new(),
             proven_credentials: BTreeMap::new(),
+            claude_memo: Default::default(),
         }
     }
 }

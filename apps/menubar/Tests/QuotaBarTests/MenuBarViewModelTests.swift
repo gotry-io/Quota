@@ -1224,8 +1224,14 @@ struct StubLocalService: LocalServiceServing {
   func setGroupUsageByProject(enabled: Bool) async throws -> LocalServiceGroupUsageByProjectSetting {
     LocalServiceGroupUsageByProjectSetting(enabled: enabled)
   }
-  func setQuotaRefreshInterval(seconds: Int) async throws -> LocalServiceQuotaRefreshIntervalSetting {
-    LocalServiceQuotaRefreshIntervalSetting(intervalSeconds: seconds)
+  func setQuotaRefresh(_ choice: QuotaRefreshChoice) async throws
+    -> LocalServiceQuotaRefreshIntervalSetting
+  {
+    switch choice {
+    case .automatic: LocalServiceQuotaRefreshIntervalSetting(mode: .automatic, intervalSeconds: 300)
+    case .fixed(let interval):
+      LocalServiceQuotaRefreshIntervalSetting(mode: .fixed, intervalSeconds: interval.rawValue)
+    }
   }
   func setOverviewSourcePin(
     provider: ProviderID,

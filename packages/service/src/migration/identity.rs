@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::state::StateError;
 
-const CURRENT_SCHEMA: i64 = 5;
+const CURRENT_SCHEMA: i64 = 6;
 
 pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
     conn.execute_batch(
@@ -34,6 +34,7 @@ pub fn apply(conn: &mut Connection) -> Result<(), StateError> {
             3 => migration_v3(&tx)?,
             4 => migration_v4(&tx)?,
             5 => migration_v5(&tx)?,
+            6 => migration_v6(&tx)?,
             _ => return Err(StateError::InvalidState),
         }
         tx.execute(
@@ -150,6 +151,20 @@ fn migration_v5(tx: &rusqlite::Transaction<'_>) -> Result<(), StateError> {
     Ok(())
 }
 
+/// Automatic cadence is the default (ADR 0063). An identity still on the five-minute default
+/// never chose a cadence, so it becomes Automatic; any other stored interval was a choice and
+/// stays a fixed one.
+fn migration_v6(tx: &rusqlite::Transaction<'_>) -> Result<(), StateError> {
+    tx.execute_batch(
+        "INSERT OR IGNORE INTO preferences(key, value)
+         SELECT 'quota_refresh_mode',
+                CASE WHEN value = '300' THEN 'automatic' ELSE 'fixed' END
+         FROM preferences WHERE key = 'quota_refresh_interval_seconds';
+         INSERT OR IGNORE INTO preferences(key, value) VALUES ('quota_refresh_mode', 'automatic');",
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,6 +268,52 @@ mod tests {
             .expect("installation again"),
             installation
         );
+    }
+
+    /// Only the untouched default becomes Automatic; a cadence someone picked stays theirs.
+    #[test]
+    fn a_v5_image_on_the_default_interval_becomes_automatic_and_a_chosen_one_stays_fixed() {
+        for (stored, expected) in [("300", "automatic"), ("60", "fixed"), ("900", "fixed")] {
+            let mut conn = Connection::open_in_memory().expect("memory");
+            conn.execute_batch(
+                "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);",
+            )
+            .expect("ladder");
+            let tx = conn.transaction().expect("transaction");
+            for (version, migration) in [
+                migration_v1 as fn(&rusqlite::Transaction<'_>) -> Result<(), StateError>,
+                migration_v2,
+                migration_v3,
+                migration_v4,
+                migration_v5,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                migration(&tx).expect("older rung");
+                tx.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (?1, '2026-09-01T00:00:00Z')",
+                    params![version as i64 + 1],
+                )
+                .expect("ledger");
+            }
+            tx.execute(
+                "UPDATE preferences SET value = ?1 WHERE key = 'quota_refresh_interval_seconds'",
+                params![stored],
+            )
+            .expect("chosen interval");
+            tx.commit().expect("commit");
+
+            apply(&mut conn).expect("upgrade");
+            let mode: String = conn
+                .query_row(
+                    "SELECT value FROM preferences WHERE key = 'quota_refresh_mode'",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("mode");
+            assert_eq!(mode, expected, "stored {stored}");
+        }
     }
 
     #[test]

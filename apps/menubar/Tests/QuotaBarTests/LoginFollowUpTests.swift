@@ -71,10 +71,10 @@ final class ScriptedLocalService: LocalServiceServing, @unchecked Sendable {
   {
     try await base.setGroupUsageByProject(enabled: enabled)
   }
-  func setQuotaRefreshInterval(seconds: Int) async throws
+  func setQuotaRefresh(_ choice: QuotaRefreshChoice) async throws
     -> LocalServiceQuotaRefreshIntervalSetting
   {
-    try await base.setQuotaRefreshInterval(seconds: seconds)
+    try await base.setQuotaRefresh(choice)
   }
   func setOverviewSourcePin(
     provider: ProviderID, fingerprint: String, scope: String, identitySourceID: String?,
