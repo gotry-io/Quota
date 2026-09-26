@@ -360,6 +360,21 @@ export interface AccountVersionStamp {
   device_signed_out_at: string | null;
   snapshots: number;
   snapshot_updated_at: string | null;
+  /** The newest accepted collection request. The summary states it, so it moves the ETag. */
+  collection_requested_at: string | null;
+}
+
+/** A client asking this Account's Macs to collect now (ADR 0063). */
+export interface CollectionRequestInput {
+  account_id: string;
+  requested_at: string;
+  /** A request stored after this instant stands, and this one folds into it. */
+  coalesce_after: string;
+}
+
+export interface CollectionRequestResult {
+  requested_at: string;
+  accepted: boolean;
 }
 
 /**
@@ -661,6 +676,8 @@ export interface AccountState {
    */
   findEnabledPublicProfile(handle: string): Promise<PublicProfileRecord | null>;
   accountVersionStamp(accountId: string, activeSince: string): Promise<AccountVersionStamp>;
+  /** Store a collection request, or answer the one standing inside the window. Null: no Account. */
+  requestCollection(input: CollectionRequestInput): Promise<CollectionRequestResult | null>;
   accountUsageVersionStamp(accountId: string): Promise<AccountUsageVersionStamp>;
   deleteDeviceData(
     accountId: string,

@@ -157,6 +157,16 @@
         },
         "model_catalog_revision": {
           "$ref": "#/$defs/__schema1"
+        },
+        "collection_requested_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/__schema3"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -166,7 +176,8 @@
         "subscriptions",
         "usage",
         "pricing_revision",
-        "model_catalog_revision"
+        "model_catalog_revision",
+        "collection_requested_at"
       ],
       "additionalProperties": false
     },
@@ -994,6 +1005,34 @@
         }
       },
       "required": ["protocol_version", "sync", "windows"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "type": "number",
+          "const": 6
+        }
+      },
+      "required": ["protocol_version"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "type": "number",
+          "const": 6
+        },
+        "requested_at": {
+          "$ref": "#/$defs/__schema3"
+        },
+        "accepted": {
+          "type": "boolean"
+        }
+      },
+      "required": ["protocol_version", "requested_at", "accepted"],
       "additionalProperties": false
     },
     {

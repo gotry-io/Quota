@@ -268,6 +268,22 @@ managed account boundary in [ADR 0006](decisions/0006-managed-account-device-usa
   `quota_history` row of the Account in the same transaction
   ([ADR 0062](decisions/0062-quota-history-may-follow-the-account.md)).
 
+## Collection requests
+
+- `POST /api/v6/account/collection-request` lets any session that may read the summary
+  (`account:read`: a Device session, the iOS read-only session, or the browser cookie) ask this
+  Account's Macs to collect now
+  ([ADR 0063](decisions/0063-collection-follows-demand-and-activity.md)). A browser also presents
+  the exact same-origin `Origin` and same-origin Fetch Metadata when present, so a cross-site form
+  cannot spend the Account's provider requests. The body is `protocol_version` alone and is
+  refused with any other key, so a caller cannot name a provider, device, or reason.
+- Relay stores one instant, `accounts.collection_requested_at`, and calls no provider. A request
+  within 60 seconds of the stored one is folded into it, and each session may make 30 requests per
+  10 minutes (rate limit keyed on the session id, hashed like every other limit key). The Macs
+  bound what a request can cost a provider: each provider's floor, backoff, and the ten-minute
+  expiry of a request apply to a demand collection exactly as to a timed one. The column is
+  deleted with the Account row.
+
 ## Upload, Usage, and deletion safety
 
 - Quota and Usage uploads require `device:write` and a session whose Device ID and generation match

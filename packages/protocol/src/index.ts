@@ -1626,9 +1626,42 @@ export const AccountSummarySchema = z
     usage: AccountUsageSchema,
     pricing_revision: OpaqueIdSchema,
     model_catalog_revision: OpaqueIdSchema,
+    /**
+     * When a signed-in client of this Account last asked its Macs to collect now, or null when
+     * none has. Account-wide and part of the representation, so a new request moves the ETag.
+     * See [ADR 0063](../../../docs/decisions/0063-collection-follows-demand-and-activity.md).
+     */
+    collection_requested_at: Rfc3339InstantSchema.nullable(),
   })
   .strict();
 export type AccountSummary = z.infer<typeof AccountSummarySchema>;
+
+/**
+ * Ask this Account's Macs to collect now (`POST /api/v6/account/collection-request`).
+ *
+ * The body names nothing but the contract: the request is a timestamp on the Account, so there
+ * is no provider, device, or reason a client could state. It carries the managed-data version,
+ * as every `/api/v6` body does.
+ */
+export const CollectionRequestSchema = z
+  .object({
+    protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
+  })
+  .strict();
+export type CollectionRequest = z.infer<typeof CollectionRequestSchema>;
+
+/**
+ * What a collection request answers. `accepted` is false when a request already stood within
+ * the coalescing window; `requested_at` is then that stored instant, not this call's.
+ */
+export const CollectionRequestResponseSchema = z
+  .object({
+    protocol_version: z.literal(MANAGED_DATA_PROTOCOL_VERSION),
+    requested_at: Rfc3339InstantSchema,
+    accepted: z.boolean(),
+  })
+  .strict();
+export type CollectionRequestResponse = z.infer<typeof CollectionRequestResponseSchema>;
 
 /**
  * One UTC day of the activity chart, which stays on UTC dates whatever calendar reads it.
@@ -2338,6 +2371,8 @@ export const AccountSummaryReadSchema = AccountSummarySchema.extend({
   devices: z.array(AccountDeviceReadSchema).max(256),
   subscriptions: z.array(QuotaSubscriptionReadSchema).max(1_024),
   usage: AccountUsageReadSchema,
+  // A Relay deployed before collection requests states no such field (ADR 0063).
+  collection_requested_at: Rfc3339InstantSchema.nullable().optional(),
 }).loose();
 export type AccountSummaryRead = z.infer<typeof AccountSummaryReadSchema>;
 
@@ -2365,6 +2400,9 @@ export const AccountSettingsResponseReadSchema = AccountSettingsResponseSchema.e
   history: AccountSettingsHistorySchema.optional(),
 }).loose();
 export type AccountSettingsResponseRead = z.infer<typeof AccountSettingsResponseReadSchema>;
+
+export const CollectionRequestResponseReadSchema = CollectionRequestResponseSchema.loose();
+export type CollectionRequestResponseRead = z.infer<typeof CollectionRequestResponseReadSchema>;
 
 export const QuotaHistoryResponseReadSchema = QuotaHistoryResponseSchema.loose();
 export type QuotaHistoryResponseRead = z.infer<typeof QuotaHistoryResponseReadSchema>;

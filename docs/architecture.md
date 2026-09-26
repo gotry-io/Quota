@@ -115,9 +115,15 @@ rules in Swift from the quota readings those events already carry; there is no n
 event and no sixth component. The service begins a background startup refresh once IPC is available,
 emits revisioned `state_changed` events, and then waits on one scheduler thread for the next of
 four events: an Account conditional read every minute, a quota collection at the stored interval
-(1, 2, 5, 10, or 15 minutes; default five), a quota-only catch-up when a window `resets_at`
-falls before the next collection, and a status-page poll every ten minutes that never wins a tie
-against quota, reset, or Account work. The first status poll runs at scheduler start. QuotaBar follows those events, and also
+(Automatic by default — per provider, one minute while its local agent is active, five normally,
+ten when idle, never below the provider's catalog floor — or a fixed 1, 2, 5, 10, or 15 minutes),
+a quota-only catch-up when a window `resets_at` falls before the next collection, and a
+status-page poll every ten minutes that never wins a tie against quota, reset, or Account work.
+A summary whose `collection_requested_at` is newer than this Mac's last collection and at most
+ten minutes old schedules one `demand` collection now on the same lane; Quota iOS and the website
+set it through `POST /api/v6/account/collection-request`. Floors, backoff, jitter, and
+cross-device dedupe apply to every trigger
+([ADR 0063](decisions/0063-collection-follows-demand-and-activity.md)). The first status poll runs at scheduler start. QuotaBar follows those events, and also
 re-reads state once a minute on its own and every two seconds while a sign-in is in progress, so
 the panel is never further behind the service than one interval when an event does not reach it. Usage indexes
 on the collection tick when the file index is dirty, on its own in-flight lane, so a long scan does
@@ -425,7 +431,7 @@ resolved, clearing it when there is nothing to show.
 carries a strong `ETag` over an account version stamp, the request's full query string, the pricing
 and model catalog revisions, and — for the summary — the caller's local date, because that is what
 moves `today` with no write behind it. The summary stamp is a handful of aggregates over the devices
-and observation rows the response projects; the activity and period stamps are usage-only (device count, usage
+and observation rows the response projects, plus the Account's `collection_requested_at`; the activity and period stamps are usage-only (device count, usage
 revision, generation, and the Account's `updated_at`). Activity includes `detail` in the query string it
 keys on; the period read includes `from`, `to`, `timezone`, and `breakdown`. A matching `If-None-Match` returns 304 before any Usage query runs. `detail=hours`
 is the same rule: `tz` is in the query string, so a different clock is a different validator.

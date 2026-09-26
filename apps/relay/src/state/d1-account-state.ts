@@ -27,6 +27,8 @@ import type {
   AccountState,
   AccountUsageVersionStamp,
   AccountVersionStamp,
+  CollectionRequestInput,
+  CollectionRequestResult,
   CompleteIdentityLoginInput,
   CompleteIdentityLoginResult,
   ConsumeAccountLoginGrantInput,
@@ -1510,7 +1512,10 @@ export class D1AccountState implements AccountState {
         )
         .bind(accountId),
       this.database
-        .prepare("SELECT updated_at AS account_updated_at FROM accounts WHERE id = ?1")
+        .prepare(
+          `SELECT updated_at AS account_updated_at, collection_requested_at
+           FROM accounts WHERE id = ?1`,
+        )
         .bind(accountId),
     ]);
     const merged = {
@@ -1529,7 +1534,34 @@ export class D1AccountState implements AccountState {
       device_signed_out_at: stampInstant(merged.device_signed_out_at),
       snapshots: stampCount(merged.snapshots),
       snapshot_updated_at: stampInstant(merged.snapshot_updated_at),
+      collection_requested_at: stampInstant(merged.collection_requested_at),
     };
+  }
+
+  /**
+   * One conditional write: the stored instant moves to `requested_at` unless a request already
+   * stands after `coalesce_after`, in which case that one is the answer. No row is a deleted
+   * Account.
+   */
+  async requestCollection(input: CollectionRequestInput): Promise<CollectionRequestResult | null> {
+    const written = await this.database
+      .prepare(
+        `UPDATE accounts SET collection_requested_at = ?2
+         WHERE id = ?1
+           AND (collection_requested_at IS NULL OR collection_requested_at <= ?3)
+         RETURNING collection_requested_at`,
+      )
+      .bind(input.account_id, input.requested_at, input.coalesce_after)
+      .run<{ collection_requested_at: string }>();
+    const accepted = written.results[0]?.collection_requested_at;
+    if (accepted) return { requested_at: accepted, accepted: true };
+    const standing = await this.database
+      .prepare("SELECT collection_requested_at FROM accounts WHERE id = ?1")
+      .bind(input.account_id)
+      .first<{ collection_requested_at: string | null }>();
+    return standing?.collection_requested_at
+      ? { requested_at: standing.collection_requested_at, accepted: false }
+      : null;
   }
 
   /**
