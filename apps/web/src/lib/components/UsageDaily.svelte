@@ -71,8 +71,11 @@ function monthName(date: string): string {
   {#if !hasUsage}
     <p class="empty-state">No Usage on these days.</p>
   {:else}
+    <!-- A narrow screen scrolls the days sideways, so the plot takes focus to be scrolled. -->
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
     <div
       class="usage-daily-plot"
+      tabindex="0"
       role="img"
       aria-label="Usage by day. {dailyChartSummary(rows, mode)}"
     >

@@ -18,7 +18,7 @@ const CANVAS = "#ffffff";
 const EMERALD = "#087456";
 const BAR_TRACK = "#eef2f0";
 
-const SANS = 'Inter, "Helvetica Neue", Arial, sans-serif';
+const SANS = 'ui-sans-serif, system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif';
 
 interface ShareCardStat {
   label: string;

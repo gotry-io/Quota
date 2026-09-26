@@ -335,30 +335,3 @@ it("parses a period response and renders totals, cost, and coverage", async () =
     "Some hours in this period were scanned incompletely.",
   );
 });
-
-it("meters the monthly budget from the Account document", async () => {
-  vi.useFakeTimers();
-  vi.setSystemTime(new Date("2026-08-12T12:00:00Z"));
-  const payload = acceptedSummary();
-  mockFetch(
-    (url) => {
-      if (url.includes("/account/summary")) return jsonResponse(payload);
-      if (url.includes("/account/usage/period"))
-        return jsonResponse(periodFromSummary(url, payload));
-      const to = new URL(url, "https://quota.test").searchParams.get("to") ?? "2026-08-12";
-      return jsonResponse(activityBody(to));
-    },
-    settingsBody({ amount_usd: "50.00", alerts: true }, 1),
-  );
-
-  const store = createAccountStore();
-  await store.ensureSummary();
-  const view = render(UsagePageHarness, { store });
-  await waitFor(() => {
-    expect(view.container.querySelector("#usage-budget-value")?.textContent).toContain("$50.00");
-  });
-  expect(view.container.textContent).toContain("This budget follows your Account.");
-  expect(view.container.querySelector("#usage-budget-value")?.textContent).toMatch(
-    /\/ \$50\.00 · /,
-  );
-});

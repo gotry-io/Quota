@@ -37,27 +37,22 @@ Usage APIs still 401, so the smoke fulfills `/api/v6` in the browser rather than
 worker. Install Chromium with
 `pnpm --filter @gotry-io/quota-web exec playwright install chromium`.
 
-`/my` is the GitHub-backed account dashboard. It is a signed-in shell with four routes: `/my`
-(overview), `/my/usage`, `/my/devices`, and `/my/settings`. When the session is on `/my`, the site
-header carries that nav (Overview / Usage / Devices / Settings) and an account menu with a
-first-letter mark, login, Settings, and Sign out. Each `/my` page has one `h1` (the page name).
-Overview's status line is `Latest quota updated <age> · <n> devices reporting`, or **Asking your
-Mac…** / **Asking your Macs…** while it waits on a collection request (below); Usage shows the
-selected period and partial state; Devices uses the Devices summary. Unsigned visits to any of
-them — and to `/my/subscriptions/<sel>` — are a server redirect home. Every page requires a session;
-Quota Web publishes no account data anonymously. `/app` shipped in 0.0.4, so it and anything under
-it stay a redirect to `/my`; new links and OAuth callbacks name `/my` directly. Overview is remaining
-quota: subscription cards (each a link to `/my/subscriptions/<sel>`), a Today strip to
-`/my/usage?period=today`, and a Devices summary line to `/my/devices`. Usage puts period tabs on the
-same row as the page name, an Export menu (CSV / JSON) for the selected period, totals Tokens /
-API-equivalent cost / Messages, and a two-column tree +
-Activity layout at 1024 px. Devices is a last-seen table with platform icons, or two-column cards
-below 620 px. Settings groups Appearance, Sign-in methods, Account, Public profile, and Legal.
-The header **Sign in** is a link to `/sign-in`. That page offers **Continue with Apple**, **Continue
-with GitHub**, and **Send sign-in link** (`POST /api/auth/email/start`) in that order. Sign-out posts
-to `/api/auth/logout` and Delete Account is `DELETE /api/v2/account`. Those routes, Device deletion,
-and unbinding an identity all require an exact same-origin request, and the destructive ones a
-session authenticated within ten minutes.
+`/my` is the signed-in account shell. Every page shares one 1080 px column (24 px gutter, 16 px
+below 768 px) and opens with the same page header: an eyebrow, one sentence whose numbers are in
+ink, controls on the right, and a meta line. Inside `/my` the site header carries the Account nav
+(Home `/my`, Models `/my/models`, Quota `/my/quota`, Recap `/my/recap`) and an account menu with
+Devices, Settings, Public page (the Settings group), and Sign out; under it, a quota band names
+each subscription's tightest window and links to `/my/subscriptions/<sel>`. `/my/usage` keeps the
+period, Activity, and Export page. Settings groups Sign-in methods, Monthly budget (the amount and
+alert switch follow the Account), Notifications and Privacy (read-only here; QuotaBar and Quota for
+iPhone change them), Public page, and Account. Devices is one table at every width, with the delete
+confirmation in the row. Unsigned visits to any `/my` page redirect to
+`/sign-in?return_to=<path>`. `/app` shipped in 0.0.4, so it and anything under it stay a redirect to
+`/my`. The header **Sign in** is a link to `/sign-in`. That page offers **Continue with Apple**,
+**Continue with GitHub**, and **Send sign-in link** (`POST /api/auth/email/start`) in that order.
+Sign-out posts to `/api/auth/logout` and Delete Account is `DELETE /api/v2/account`. Those routes,
+Device deletion, and unbinding an identity all require an exact same-origin request, and the
+destructive ones a session authenticated within ten minutes.
 
 The document for `/my` is a signed-in shell and carries no Account data. The read that fills it is
 bounded by the caller's calendar — a local day begins at local midnight, which is what decides where
@@ -71,7 +66,7 @@ at access time and the cache key changes at the UTC day boundary. Each tab reads
 second visit within 60 s is a cache hit (stale-while-revalidate, in-flight dedup), not a new
 request. Switching the Usage period recomputes from the summary and does not refetch.
 
-Overview asks the Account's Macs for a fresh reading
+Home asks the Account's Macs for a fresh reading
 ([ADR 0063](../../docs/decisions/0063-collection-follows-demand-and-activity.md)): when it opens, and
 when its tab becomes visible again (after re-reading the summary), a subscription whose newest Mac
 reading is older than two minutes or its provider's catalog floor
@@ -79,7 +74,7 @@ reading is older than two minutes or its provider's catalog floor
 (`{"protocol_version":6}`, the cookie session and the browser's same-origin `Origin`). The summary is
 then re-read (conditional GET) every 30 seconds for up to three minutes, stopping once every
 subscription asked about has a Mac reading at or after the `requested_at` Relay answered, when the
-tab is hidden, or when Overview is left. One wait at a time; a 404, a 429, or a timeout is silent.
+tab is hidden, or when Home is left. One wait at a time; a 404, a 429, or a timeout is silent.
 The rule and the follow-up live in `src/lib/collection-demand.ts`.
 
 It then renders what Relay resolved: `subscriptions[]` as one card per subscription, whichever of

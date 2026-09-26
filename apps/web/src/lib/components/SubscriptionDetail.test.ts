@@ -175,7 +175,7 @@ it("renders the matching subscription with windows, countdown, and Reporting", (
   expect(container.textContent).not.toContain(DEVICE_ID);
   expect(container.textContent).not.toContain(SECRET_DEVICE_ID);
   expect(container.textContent).not.toContain(KEY);
-  expect(screen.getByRole("link", { name: "← Overview" }).getAttribute("href")).toBe("/my");
+  expect(screen.getByRole("link", { name: "← Quota" }).getAttribute("href")).toBe("/my/quota");
 });
 
 it("still matches after a newer subscription is inserted first", () => {
@@ -217,7 +217,7 @@ it("says the subscription is no longer reported when the selector misses", () =>
   expect(screen.getByText("This subscription is no longer reported.")).toBeTruthy();
   expect(screen.queryByText("Weekly")).toBeNull();
   expect(screen.queryByText("Reporting")).toBeNull();
-  expect(screen.getByRole("link", { name: "← Overview" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "← Quota" })).toBeTruthy();
 });
 
 it("shows Retry when the summary failed to load", () => {

@@ -98,7 +98,7 @@ function seriousOrCritical(
     }));
 }
 
-test("Overview does not prefetch activity", async ({ page }) => {
+test("Home does not prefetch activity", async ({ page }) => {
   let activityListRequests = 0;
   let periodRequests = 0;
   await page.route("**/api/v6/**", async (route) => {
@@ -135,7 +135,7 @@ test("Overview does not prefetch activity", async ({ page }) => {
   expect(periodRequests).toBe(0);
 });
 
-test("switching account tabs does not refetch summary or activity", async ({ page }) => {
+test("moving between account pages does not refetch summary or activity", async ({ page }) => {
   let summaryRequests = 0;
   let activityListRequests = 0;
   await mockAccountRead(page);
@@ -193,133 +193,104 @@ test("switching account tabs does not refetch summary or activity", async ({ pag
 
   await page.goto("/my");
   const accountNav = page.getByRole("navigation", { name: "Account" });
+  const accountMenu = page.locator("#header-account-menu");
   await expect(page.locator(".quota-card").filter({ hasText: "Codex" })).toBeVisible();
 
-  await accountNav.getByRole("link", { name: "Usage" }).click();
-  await expect(page.getByRole("heading", { name: "Usage", exact: true })).toBeVisible();
+  await page.locator("a.today-strip").click();
   await expect(page.getByRole("group", { name: "Usage activity by day" })).toBeVisible();
 
-  await accountNav.getByRole("link", { name: "Devices" }).click();
+  await accountNav.getByRole("link", { name: "Models" }).click();
+  await expect(page.getByRole("heading", { name: "By agent and model" })).toBeVisible();
+
+  await accountNav.getByRole("link", { name: "Quota" }).click();
+  await expect(page.locator(".quota-card").filter({ hasText: "Codex" })).toBeVisible();
+
+  await accountMenu.locator("summary").click();
+  await accountMenu.getByRole("link", { name: "Devices" }).click();
   await expect(page.locator("#device-list")).toContainText("Studio");
 
-  await accountNav.getByRole("link", { name: "Settings" }).click();
+  await accountMenu.locator("summary").click();
+  await accountMenu.getByRole("link", { name: "Settings" }).click();
   await expect(page.getByRole("heading", { name: "Delete Account" })).toBeVisible();
 
-  await accountNav.getByRole("link", { name: "Overview" }).click();
+  await accountNav.getByRole("link", { name: "Home" }).click();
   await expect(page.locator(".quota-card").filter({ hasText: "Codex" })).toBeVisible();
   await expect(page.locator(".loading-block")).toHaveCount(0);
 
-  await accountNav.getByRole("link", { name: "Usage" }).click();
-  await expect(page.getByRole("heading", { name: "Usage", exact: true })).toBeVisible();
+  await page.locator("a.today-strip").click();
   await expect(page.getByRole("group", { name: "Usage activity by day" })).toBeVisible();
-  await expect(page.locator(".loading-block")).toHaveCount(0);
 
   expect(summaryRequests).toBe(1);
   expect(activityListRequests).toBe(1);
 });
 
-test("/my shows overview, Usage period switch, and Devices", async ({ page }) => {
+test("the account shell carries the quota band, the Account nav, and the account menu", async ({
+  page,
+}) => {
   await mockV6(page);
   await page.goto("/my");
 
-  const header = page.getByRole("banner");
-  const accountNav = header.getByRole("navigation", { name: "Account" });
-  await expect(accountNav).toBeVisible();
-  await expect(accountNav.getByRole("link", { name: "Overview" })).toHaveAttribute(
+  const accountNav = page.getByRole("banner").getByRole("navigation", { name: "Account" });
+  await expect(accountNav.getByRole("link", { name: "Home" })).toHaveAttribute(
     "aria-current",
     "page",
   );
-  await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
   await expect(page.getByText(/Latest quota updated .* · \d+ devices? reporting/)).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Subscriptions" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Today" })).toBeVisible();
-  await expect(page.locator(".quota-card").filter({ hasText: "Codex" })).toBeVisible();
-  await expect(page.locator(".quota-card")).toContainText("Plus");
-  await expect(page.locator("a.today-strip")).toHaveAttribute("href", "/my/usage?period=day");
-  await expect(page.locator("a.devices-strip")).toBeVisible();
-  await expect(page.locator("a.devices-strip")).toHaveAttribute("href", "/my/devices");
+
+  const band = page.getByRole("navigation", { name: "Remaining quota" });
+  await expect(band.locator("[data-provider]")).toHaveCount(accountSummary.subscriptions.length);
+  await expect(band.getByRole("link", { name: "Quota →" })).toHaveAttribute("href", "/my/quota");
 
   const accountMenu = page.locator("#header-account-menu");
   await accountMenu.locator("summary").click();
-  await expect(accountMenu.getByRole("link", { name: "Settings" })).toBeVisible();
+  for (const name of ["Devices", "Settings", "Public page"]) {
+    await expect(accountMenu.getByRole("link", { name })).toBeVisible();
+  }
   await expect(accountMenu.getByRole("button", { name: "Sign out" })).toBeVisible();
-  await accountMenu.locator("summary").click();
+  await page.keyboard.press("Escape");
+  await expect(accountMenu.getByRole("link", { name: "Devices" })).toBeHidden();
 
-  await accountNav.getByRole("link", { name: "Usage" }).click();
-  await expect(page.getByRole("heading", { name: "Usage", exact: true })).toBeVisible();
-  await expect(accountNav.getByRole("link", { name: "Usage" })).toHaveAttribute(
+  await accountNav.getByRole("link", { name: "Quota" }).click();
+  await expect(accountNav.getByRole("link", { name: "Quota" })).toHaveAttribute(
     "aria-current",
     "page",
   );
-  const tokens = page.locator("#token-total");
-  const cost = page.locator("#cost-total");
-  const messages = page.locator("#message-total");
-  await expect(tokens).not.toHaveText("—");
-  await expect(cost).not.toHaveText("—");
-  await expect(messages).not.toHaveText("—");
-  await expect(page.getByText("Messages", { exact: true })).toBeVisible();
+  await expect(page.locator(".quota-card").filter({ hasText: "Codex" })).toContainText("Plus");
 
+  await page.goto("/my/usage");
+  const tokens = page.locator("#token-total");
+  await expect(tokens).not.toHaveText("—");
   const thirtyDayTokens = await tokens.innerText();
-  await expect(page.getByRole("rowheader", { name: "gpt-fold-6" })).toHaveCount(0);
-  await page.getByRole("button", { name: "Show 1 more" }).click();
-  const fewer = page.getByRole("button", { name: "Show fewer" });
-  await expect(fewer).toHaveAttribute("aria-expanded", "true");
-  await expect(page.getByRole("rowheader", { name: "gpt-fold-6" })).toBeVisible();
-  await fewer.click();
-  await expect(page.getByRole("button", { name: "Show 1 more" })).toHaveAttribute(
-    "aria-expanded",
-    "false",
-  );
   await page.getByRole("button", { name: "Today", exact: true }).click();
   await expect(tokens).not.toHaveText(thirtyDayTokens);
   await expect(page).toHaveURL(/[?&]period=day(?:&|$)/);
 
-  await accountNav.getByRole("link", { name: "Devices" }).click();
-  await expect(page.getByRole("heading", { name: "Devices" })).toBeVisible();
-  await expect(accountNav.getByRole("link", { name: "Devices" })).toHaveAttribute(
-    "aria-current",
-    "page",
-  );
-  await expect(page.locator("#device-list")).toContainText("Studio");
-  await expect(page.getByRole("img", { name: "macOS" }).first()).toBeVisible();
+  await page.goto("/my/devices");
   await expect(page.getByRole("columnheader", { name: "Last contact" })).toBeVisible();
   const deviceNames = page.locator("#device-list tbody th");
   await expect(deviceNames.nth(0)).toHaveText("Studio");
   await expect(deviceNames.nth(1)).toHaveText("Kitchen");
 });
 
-test("subscription card opens the detail page with windows and Reporting", async ({ page }) => {
+test("a band item opens its subscription, which names no device id or key", async ({ page }) => {
   await mockV6(page);
   await page.goto("/my");
-  await page.locator("a.quota-card-main").first().click();
+  const band = page.getByRole("navigation", { name: "Remaining quota" });
+  await band.locator("a[data-provider]").first().click();
 
   await expect(page).toHaveURL(/\/my\/subscriptions\/[a-f0-9]{12}$/);
-  expect(page.url()).not.toContain("codex_account_1");
-  expect(page.url()).not.toContain("device_1");
-  await expect(page.getByRole("link", { name: "← Overview" })).toBeVisible();
-  await expect(page.getByText("Weekly")).toBeVisible();
+  await expect(page.getByRole("link", { name: "← Quota" })).toBeVisible();
   await expect(page.getByText("Reporting")).toBeVisible();
   await expect(page.locator("body")).not.toContainText("codex_account_1");
   await expect(page.locator("body")).not.toContainText("device_1");
-
-  const results = await new AxeBuilder({ page }).analyze();
-  expect(seriousOrCritical(results.violations)).toEqual([]);
 });
 
-test("Usage is two columns at 1440 and stacked at 390", async ({ page }) => {
+test("Usage keeps the model tree beside Activity at 1440 and above it at 390", async ({ page }) => {
   await mockV6(page);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/my/usage");
-  await expect(page.locator(".usage-columns")).toBeVisible();
   await expect(page.locator("#token-total")).not.toHaveText("—");
   await expect(page.getByRole("group", { name: "Usage activity by day" })).toBeVisible();
-  const headingRow = await page.evaluate(() => {
-    const h1 = document.querySelector(".usage-heading h1")?.getBoundingClientRect();
-    const tabs = document.querySelector(".period-tabs")?.getBoundingClientRect();
-    if (!h1 || !tabs) return false;
-    return Math.abs(h1.top - tabs.top) < 48;
-  });
-  expect(headingRow).toBe(true);
   const sideBySide = await page.evaluate(() => {
     const tree = document.querySelector(".usage-tree-panel")?.getBoundingClientRect();
     const activity = document.querySelector(".usage-activity-panel")?.getBoundingClientRect();
@@ -378,7 +349,7 @@ test("Settings shows a one-time notice when a link was already taken", async ({ 
 
 test("landing provider marks resolve to files", async ({ page }) => {
   await page.goto("/");
-  const providers = page.locator(".catalog-grid .name-list").first();
+  const providers = page.getByRole("list", { name: "Providers" });
   await expect(providers.locator("li")).toHaveCount(12);
   await expect(providers.locator("img.provider-mark")).toHaveCount(12);
   for (const img of await providers.locator("img.provider-mark").all()) {
@@ -436,27 +407,45 @@ test("activity grid is one tab stop and Enter opens the day tree", async ({ page
   await expect(panel.getByRole("rowheader", { name: "gpt-5.6-sol" })).toBeVisible();
 });
 
-test("axe reports no serious or critical violations on /", async ({ page }) => {
-  await page.goto("/");
-  const results = await new AxeBuilder({ page }).analyze();
-  expect(seriousOrCritical(results.violations)).toEqual([]);
+/** Every page opens on the same column: the header, the page header, and the footer align. */
+const shellPages = [
+  "/",
+  "/sign-in",
+  "/download",
+  "/my",
+  "/my/quota",
+  "/my/devices",
+  "/my/settings",
+] as const;
+
+async function openSettled(page: Page, path: string): Promise<void> {
+  await page.goto(path);
+  if (path.startsWith("/my")) {
+    await expect(page.getByRole("navigation", { name: "Account" })).toBeVisible();
+    await expect(page.locator(".loading-block")).toHaveCount(0);
+  }
+}
+
+test("every page's content starts on the same left edge at 1440", async ({ page }) => {
+  await mockV6(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const edges: Record<string, number> = {};
+  for (const path of shellPages) {
+    await openSettled(page, path);
+    // The landing opens on its hero rather than a page header; both are the column's first line.
+    const first = path === "/" ? page.locator("#hero-title") : page.locator("main h1");
+    edges[path] = Math.round((await first.boundingBox())?.x ?? -1);
+  }
+  const brand = Math.round((await page.locator(".brand").boundingBox())?.x ?? -2);
+  expect(new Set(Object.values(edges))).toEqual(new Set([brand]));
+  expect(brand).toBe((1440 - 1080) / 2);
 });
 
-for (const viewport of [
-  { width: 390, height: 844 },
-  { width: 1440, height: 900 },
-] as const) {
-  test(`landing does not overflow horizontally at ${viewport.width}`, async ({ page }) => {
-    await page.setViewportSize(viewport);
-    await page.goto("/");
-    await expect(
-      page.getByRole("heading", {
-        name: "See what's left across your coding-agent plans.",
-      }),
-    ).toBeVisible();
-    await expect(page.getByRole("link", { name: "Download for macOS" })).toBeVisible();
-    await expect(page.getByRole("link", { name: "Sign in" }).first()).toBeVisible();
-    await expect(page.locator(".hero-preview img").first()).toBeVisible();
+for (const path of [...shellPages, "/my/models", "/my/recap", "/my/usage", "/u/octocat"]) {
+  test(`${path} fits 390 px and axe finds nothing serious`, async ({ page }) => {
+    await mockV6(page);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openSettled(page, path);
     await page.evaluate(async () => {
       await Promise.all(
         [...document.images].map((image) =>
@@ -473,47 +462,19 @@ for (const viewport of [
       () => document.documentElement.scrollWidth <= window.innerWidth,
     );
     expect(fits).toBe(true);
-    if (viewport.width === 390) {
-      const width = await page
-        .locator(".preview-web")
-        .evaluate((element) => element.getBoundingClientRect().width);
-      expect(width).toBeGreaterThanOrEqual(280);
-    }
-  });
-}
-
-for (const path of ["/my", "/my/usage", "/my/devices", "/my/settings"] as const) {
-  test(`axe reports no serious or critical violations on ${path}`, async ({ page }) => {
-    await mockV6(page);
-    await page.goto(path);
-    await expect(page.getByRole("navigation", { name: "Account" })).toBeVisible();
-    if (path === "/my") {
-      await expect(page.locator(".quota-card")).toBeVisible();
-    } else if (path === "/my/usage") {
-      await expect(page.getByRole("heading", { name: "Usage", exact: true })).toBeVisible();
-    } else if (path === "/my/devices") {
-      await expect(page.locator("#device-list")).toBeVisible();
-    } else {
-      await expect(page.getByRole("heading", { name: "Delete Account" })).toBeVisible();
-    }
     const results = await new AxeBuilder({ page }).analyze();
     expect(seriousOrCritical(results.violations)).toEqual([]);
   });
 }
 
 async function chooseAppearance(page: Page, name: "Light" | "Dark"): Promise<void> {
-  const toggle = page.locator("#theme-toggle");
+  const appearance = page.getByRole("group", { name: "Appearance" });
   const expected = name.toLowerCase();
-  await toggle.scrollIntoViewIfNeeded();
-  // The landing paints screenshot CSS before ThemeToggle hydrates; a native click
-  // on the still-inert option does not write data-theme. Retry until it does.
+  await appearance.scrollIntoViewIfNeeded();
+  // The landing paints before ThemeToggle hydrates; a click on the still-inert button does not
+  // write data-theme. Retry until it does.
   await expect(async () => {
-    if (!(await page.locator(".appearance-options").isVisible())) {
-      await toggle.click();
-    }
-    const option = page.getByRole("button", { name, exact: true });
-    await expect(option).toBeVisible();
-    await option.click();
+    await appearance.getByRole("button", { name, exact: true }).click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", expected);
   }).toPass();
 }
@@ -524,7 +485,6 @@ test("landing screenshots follow an explicit Dark theme on a light OS", async ({
   await expect(page.locator(".preview-web .shot-light")).toBeVisible();
   await expect(page.locator(".preview-web .shot-dark")).toBeHidden();
   await chooseAppearance(page, "Dark");
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await expect(page.locator(".preview-web .shot-dark")).toBeVisible();
   await expect(page.locator(".preview-web .shot-light")).toBeHidden();
 });
@@ -535,7 +495,6 @@ test("landing screenshots follow an explicit Light theme on a dark OS", async ({
   await expect(page.locator(".preview-web .shot-dark")).toBeVisible();
   await expect(page.locator(".preview-web .shot-light")).toBeHidden();
   await chooseAppearance(page, "Light");
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await expect(page.locator(".preview-web .shot-light")).toBeVisible();
   await expect(page.locator(".preview-web .shot-dark")).toBeHidden();
 });

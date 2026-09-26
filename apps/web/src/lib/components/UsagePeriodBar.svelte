@@ -95,8 +95,8 @@ function applyCustom(event: SubmitEvent): void {
       <span>To</span>
       <input type="date" bind:value={draft.to} min={earliest} max={latest} required />
     </label>
-    <button class="button-primary" type="submit" disabled={!draftValid}>Apply</button>
-    <button class="button-secondary" type="button" onclick={() => (pickerOpen = false)}>
+    <button class="pill primary" type="submit" disabled={!draftValid}>Apply</button>
+    <button class="pill" type="button" onclick={() => (pickerOpen = false)}>
       Cancel
     </button>
   </form>

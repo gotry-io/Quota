@@ -1,26 +1,25 @@
 <script lang="ts">
-import { observedSnapshotStatus } from "@gotry-io/quota-model";
-import type { AccountSummaryRead } from "@gotry-io/quota-protocol";
-import { providerDisplayName } from "@gotry-io/quota-protocol";
 import { accountNoticeActionLabel, accountNoticeRetry } from "$lib/account-errors";
-import { devicesSummaryLine, subscriptionCardMeta, topUsageModel } from "$lib/account-overview";
+import { accountStatusLine, devicesSummaryLine, topUsageModel } from "$lib/account-overview";
 import { getAccountStore } from "$lib/account-store.svelte.ts";
+import { askingCopy } from "$lib/collection-demand";
 import LoadingBlock from "$lib/components/LoadingBlock.svelte";
-import ProviderMark from "$lib/components/ProviderMark.svelte";
-import QuotaWindows from "$lib/components/QuotaWindows.svelte";
+import PageHeader from "$lib/components/PageHeader.svelte";
+import PageSection from "$lib/components/PageSection.svelte";
 import RetryNotice from "$lib/components/RetryNotice.svelte";
-import { fetchProviderStatus, showsProviderStatusDot } from "$lib/provider-status";
-import { costBasisLabel, formatCost, formatCount, observationFreshnessCopy } from "$lib/format";
-import { DEVICES_PATH, planDisplayName, subscriptionPath, USAGE_PATH } from "$lib/routes";
+import SubscriptionCards from "$lib/components/SubscriptionCards.svelte";
+import { costBasisLabel, formatCost, formatCount } from "$lib/format";
+import { DEVICES_PATH, USAGE_PATH } from "$lib/routes";
 
 const store = getAccountStore();
 const now = $derived(store.now);
 let today = $derived(store.summary?.usage.today ?? null);
 let topModel = $derived(topUsageModel(today));
-let deviceNames = $derived(
-  new Map(store.summary?.devices.map((device) => [device.id, device.display_name]) ?? []),
-);
-let providerStatus = $state<Map<string, { indicator: string; description: string }>>(new Map());
+const status = $derived.by(() => {
+  if (!store.summary) return null;
+  if (store.collectionWaitMacs !== null) return askingCopy(store.collectionWaitMacs);
+  return accountStatusLine(store.summary, now);
+});
 
 // Someone opened the dashboard: ask the Macs once when what they sent is old, and again each
 // time the tab comes back into view. A hidden tab has nobody to wait for.
@@ -45,44 +44,30 @@ $effect(() => {
     store.stopCollectionDemand();
   };
 });
-
-$effect(() => {
-  let cancelled = false;
-  void fetchProviderStatus().then((rows) => {
-    if (cancelled) return;
-    providerStatus = new Map(rows.map((row) => [row.id, row]));
-  });
-  return () => {
-    cancelled = true;
-  };
-});
-
-function deviceName(deviceId: string): string {
-  return deviceNames.get(deviceId) ?? "Device";
-}
-
-function reportingDevice(subscription: AccountSummaryRead["subscriptions"][number]): string {
-  const selected = subscription.sources.find(
-    (source) => source.observed_at === subscription.snapshot.observed_at,
-  );
-  return deviceName(selected?.device_id ?? "");
-}
-
-function cardMeta(subscription: AccountSummaryRead["subscriptions"][number]): string {
-  const snapshot = subscription.snapshot;
-  const quotaStatus = observedSnapshotStatus(snapshot, now);
-  const device = reportingDevice(subscription);
-  if (quotaStatus === "available") {
-    return subscriptionCardMeta(device, snapshot.observed_at, now);
-  }
-  return `${device} · ${observationFreshnessCopy(quotaStatus, snapshot.observed_at, now)}`;
-}
 </script>
 
 <svelte:head>
-  <title>Account · Quota</title>
+  <title>Home · Quota</title>
   <meta name="robots" content="noindex, nofollow" />
 </svelte:head>
+
+<PageHeader>
+  {#snippet eyebrow()}Home{/snippet}
+  {#if today && store.summary}
+    You ran <b>{formatCount(today.totals.total_tokens)} tokens</b> today, across
+    <b
+      >{store.summary.subscriptions.length}
+      {store.summary.subscriptions.length === 1 ? "subscription" : "subscriptions"}</b
+    >.
+  {:else}
+    Your subscriptions and today's Usage.
+  {/if}
+  {#snippet meta()}
+    {#if status}
+      <span class="dashboard-status">{status}</span>
+    {/if}
+  {/snippet}
+</PageHeader>
 
 {#if store.loadError}
   <RetryNotice
@@ -92,60 +77,21 @@ function cardMeta(subscription: AccountSummaryRead["subscriptions"][number]): st
   />
 {/if}
 
-<section class="overview-section" aria-labelledby="quota-title">
-  <h2 id="quota-title">Subscriptions</h2>
+<PageSection id="quota-title" title="Subscriptions">
   {#if !store.summary}
     {#if !store.loadError}
       <LoadingBlock lines={4} label="Loading subscriptions" />
     {/if}
   {:else}
-    <div id="quota-list" class="quota-grid">
-      {#if store.summary.subscriptions.length === 0}
-        <p class="empty-state">No quota snapshots yet. Sign in from QuotaBar to add this Mac.</p>
-      {:else}
-        {#each store.summary.subscriptions as subscription (subscription.key)}
-          {@const snapshot = subscription.snapshot}
-          {@const sel = store.subscriptionSelectors[subscription.key]}
-          {@const plan = planDisplayName(snapshot.account.plan)}
-          {@const status = providerStatus.get(subscription.provider)}
-          <article class="quota-card">
-            {#snippet card()}
-              <div class="quota-card-heading">
-                <ProviderMark provider={subscription.provider} />
-                <div class="quota-card-identity">
-                  <p class="quota-card-provider">
-                    {providerDisplayName(subscription.provider)}
-                    {#if status && showsProviderStatusDot(status.indicator)}
-                      <span
-                        class="provider-status-dot provider-status-dot-{status.indicator}"
-                        title={status.description}
-                        aria-hidden="true"
-                      ></span>
-                    {/if}
-                  </p>
-                  <p class="quota-card-account">{snapshot.account.label || "Account"}</p>
-                </div>
-                {#if plan}
-                  <span class="status-pill">{plan}</span>
-                {/if}
-              </div>
-              <QuotaWindows windows={snapshot.windows} provider={subscription.provider} {now} />
-              <p class="quota-card-meta">{cardMeta(subscription)}</p>
-            {/snippet}
-            {#if sel}
-              <a class="quota-card-main" href={subscriptionPath(sel)}>{@render card()}</a>
-            {:else}
-              <div class="quota-card-main">{@render card()}</div>
-            {/if}
-          </article>
-        {/each}
-      {/if}
-    </div>
+    <SubscriptionCards
+      summary={store.summary}
+      selectors={store.subscriptionSelectors}
+      {now}
+    />
   {/if}
-</section>
+</PageSection>
 
-<section class="overview-section" aria-labelledby="today-title">
-  <h2 id="today-title">Today</h2>
+<PageSection id="today-title" title="Today">
   {#if !today}
     {#if !store.loadError}
       <LoadingBlock lines={2} label="Loading today" />
@@ -170,12 +116,10 @@ function cardMeta(subscription: AccountSummaryRead["subscriptions"][number]): st
       </article>
     </a>
   {/if}
-</section>
+</PageSection>
 
 {#if store.summary && (store.summary.devices.length > 0 || store.summary.subscriptions.length > 0)}
-  <section class="overview-section overview-devices">
-    <a class="devices-strip" href={DEVICES_PATH}
-      >{devicesSummaryLine(store.summary.devices, now)}</a
-    >
-  </section>
+  <PageSection id="home-devices-title" title="Devices" titleHidden>
+    <a class="devices-strip" href={DEVICES_PATH}>{devicesSummaryLine(store.summary.devices, now)}</a>
+  </PageSection>
 {/if}

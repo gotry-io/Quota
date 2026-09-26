@@ -1,5 +1,3 @@
-# Terms
-
 Effective date: TBD
 
 This page is a skeleton of the terms for Quota and is not in force until review removes the Draft

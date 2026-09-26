@@ -4,19 +4,22 @@ import AccountNav from "./AccountNav.svelte";
 
 afterEach(cleanup);
 
-it("marks the current account route", () => {
-  render(AccountNav, { currentPath: "/my/usage" });
+function current(): string[] {
+  return screen
+    .getAllByRole("link")
+    .filter((link) => link.getAttribute("aria-current") === "page")
+    .map((link) => link.textContent ?? "");
+}
 
-  expect(screen.getByRole("link", { name: "Usage" }).getAttribute("aria-current")).toBe("page");
-  expect(screen.getByRole("link", { name: "Overview" }).getAttribute("aria-current")).toBeNull();
-  expect(screen.getByRole("link", { name: "Devices" }).getAttribute("aria-current")).toBeNull();
-  expect(screen.getByRole("link", { name: "Settings" }).getAttribute("aria-current")).toBeNull();
-  expect(
-    screen.getByRole("link", { name: "Overview" }).getAttribute("data-sveltekit-preload-data"),
-  ).toBe("hover");
+it("marks the nav item a page belongs to, and none for the account menu's pages", () => {
+  render(AccountNav, { currentPath: "/my/usage" });
+  expect(current()).toEqual(["Home"]);
 
   cleanup();
-  render(AccountNav, { currentPath: "/my" });
-  expect(screen.getByRole("link", { name: "Overview" }).getAttribute("aria-current")).toBe("page");
-  expect(screen.getByRole("link", { name: "Usage" }).getAttribute("aria-current")).toBeNull();
+  render(AccountNav, { currentPath: "/my/subscriptions/0123456789ab" });
+  expect(current()).toEqual(["Quota"]);
+
+  cleanup();
+  render(AccountNav, { currentPath: "/my/settings" });
+  expect(current()).toEqual([]);
 });

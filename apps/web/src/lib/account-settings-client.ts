@@ -8,7 +8,7 @@ import {
   PROTOCOL_VERSION,
 } from "@gotry-io/quota-protocol";
 import { type AccountError, classifyAccountError } from "./account-errors.ts";
-import { USAGE_PATH } from "./routes.ts";
+import { SETTINGS_PATH } from "./routes.ts";
 
 export const ACCOUNT_SETTINGS_PATH = "/api/v2/account/settings";
 
@@ -21,7 +21,7 @@ const jsonRequest = {
   headers: { Accept: "application/json" },
 } satisfies RequestInit;
 
-const usagePath = { currentPath: USAGE_PATH } as const;
+const settingsPath = { currentPath: SETTINGS_PATH } as const;
 
 export type BudgetEdit = Extract<
   AccountSettingsEdit,
@@ -87,16 +87,16 @@ export async function fetchAccountSettings(): Promise<AccountSettingsResult> {
     const response = await fetch(ACCOUNT_SETTINGS_PATH, { ...jsonRequest, headers });
     if (response.status === 304) {
       if (!lastSettings || !lastETag) {
-        return { status: "error", error: classifyAccountError(response, usagePath) };
+        return { status: "error", error: classifyAccountError(response, settingsPath) };
       }
       return { status: "not_modified", settings: lastSettings, etag: lastETag };
     }
     if (!response.ok) {
-      return { status: "error", error: classifyAccountError(response, usagePath) };
+      return { status: "error", error: classifyAccountError(response, settingsPath) };
     }
     return remember(response, await response.json(), "ok");
   } catch {
-    return { status: "error", error: classifyAccountError(null, usagePath) };
+    return { status: "error", error: classifyAccountError(null, settingsPath) };
   }
 }
 
@@ -109,7 +109,7 @@ export async function writeAccountSettings(
 ): Promise<AccountSettingsResult> {
   const etag = lastETag;
   if (!etag) {
-    return { status: "error", error: classifyAccountError(null, usagePath) };
+    return { status: "error", error: classifyAccountError(null, settingsPath) };
   }
   try {
     const response = await fetch(ACCOUNT_SETTINGS_PATH, {
@@ -130,11 +130,11 @@ export async function writeAccountSettings(
       return remember(response, await response.json(), "stale");
     }
     if (!response.ok) {
-      return { status: "error", error: classifyAccountError(response, usagePath) };
+      return { status: "error", error: classifyAccountError(response, settingsPath) };
     }
     return remember(response, await response.json(), "ok");
   } catch {
-    return { status: "error", error: classifyAccountError(null, usagePath) };
+    return { status: "error", error: classifyAccountError(null, settingsPath) };
   }
 }
 
@@ -163,7 +163,7 @@ export async function saveBudget(edit: BudgetEdit): Promise<AccountSettingsResul
 
 async function writeEdited(edit: BudgetEdit): Promise<AccountSettingsResult> {
   if (!lastSettings) {
-    return { status: "error", error: classifyAccountError(null, usagePath) };
+    return { status: "error", error: classifyAccountError(null, settingsPath) };
   }
   return writeAccountSettings(reapplyEdit(edit, storedDocument(lastSettings)));
 }
@@ -189,7 +189,7 @@ function remember(
 ): AccountSettingsResult {
   const parsed = AccountSettingsResponseReadSchema.safeParse(body);
   if (!parsed.success) {
-    return { status: "error", error: classifyAccountError(null, usagePath) };
+    return { status: "error", error: classifyAccountError(null, settingsPath) };
   }
   const etag = response.headers.get("ETag") || `"${parsed.data.revision}"`;
   lastSettings = parsed.data;

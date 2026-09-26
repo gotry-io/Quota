@@ -2,9 +2,14 @@ import type { IdentityProvider } from "@gotry-io/quota-protocol";
 import { KNOWN_PLANS } from "./plan-display.generated.ts";
 
 export const DASHBOARD_PATH = "/my";
+export const MODELS_PATH = "/my/models";
+export const QUOTA_PATH = "/my/quota";
+export const RECAP_PATH = "/my/recap";
 export const USAGE_PATH = "/my/usage";
 export const DEVICES_PATH = "/my/devices";
 export const SETTINGS_PATH = "/my/settings";
+/** The Settings group that configures the published page. */
+export const PUBLIC_PAGE_SETTINGS_PATH = `${SETTINGS_PATH}#public-page`;
 
 /** Where a published page lives, and the address it is shared as. */
 export const PUBLIC_PROFILE_ORIGIN = "https://quota.gotry.io";
@@ -29,37 +34,20 @@ export function isSubscriptionPath(pathname: string): boolean {
   return pathname.startsWith(`${DASHBOARD_PATH}/subscriptions/`);
 }
 
-export function isUsagePath(pathname: string): boolean {
-  return pathname === USAGE_PATH;
-}
-
-export function isDevicesPath(pathname: string): boolean {
-  return pathname === DEVICES_PATH;
-}
-
 /** A published page lives outside the account shell: no session, no Account nav, no viewer. */
 export function isPublicProfilePath(pathname: string): boolean {
   return pathname === "/u" || pathname.startsWith("/u/");
 }
 
 /**
- * Every page a link can be followed to without an Account, which is every page that wears the
- * published header rather than the account one.
+ * The Account nav item a path belongs to. Usage is still Home's page and a subscription is a
+ * Quota page; Devices and Settings live in the account menu, so they mark no nav item.
  */
-export function isPublishedPagePath(pathname: string): boolean {
-  return isPublicProfilePath(pathname);
-}
-
-export function isSettingsPath(pathname: string): boolean {
-  return pathname === SETTINGS_PATH;
-}
-
-export function accountPageTitle(pathname: string): string {
-  if (pathname === DASHBOARD_PATH) return "Overview";
-  if (pathname === USAGE_PATH) return "Usage";
-  if (pathname === DEVICES_PATH) return "Devices";
-  if (pathname === SETTINGS_PATH) return "Settings";
-  return "Account";
+export function accountNavPath(pathname: string): string | null {
+  if (pathname === DASHBOARD_PATH || pathname === USAGE_PATH) return DASHBOARD_PATH;
+  if (pathname === QUOTA_PATH || isSubscriptionPath(pathname)) return QUOTA_PATH;
+  if (pathname === MODELS_PATH || pathname === RECAP_PATH) return pathname;
+  return null;
 }
 
 /**

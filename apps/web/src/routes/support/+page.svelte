@@ -1,6 +1,7 @@
 <script lang="ts">
 import support from "../../content/support.md?raw";
 import MarkdownBody from "$lib/components/MarkdownBody.svelte";
+import PageHeader from "$lib/components/PageHeader.svelte";
 </script>
 
 <svelte:head>
@@ -11,5 +12,10 @@ import MarkdownBody from "$lib/components/MarkdownBody.svelte";
   />
   <link rel="canonical" href="https://quota.gotry.io/support" />
 </svelte:head>
+
+<PageHeader>
+  {#snippet eyebrow()}Support{/snippet}
+  <b>Support.</b> Where the numbers come from, the iPhone app, diagnostics, and deleting an Account.
+</PageHeader>
 
 <MarkdownBody source={support} />

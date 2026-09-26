@@ -23,6 +23,8 @@ let emailOpen = $state(false);
 let sent = $state(false);
 let sending = $state(false);
 let unlinking = $state<IdentityProvider | null>(null);
+/** The channel asking whether to unlink; the question sits in its own row, not a dialog. */
+let confirming = $state<IdentityProvider | null>(null);
 let emailError = $state<string | null>(null);
 
 const bound = $derived(new Map(identities.map((identity) => [identity.provider, identity])));
@@ -30,16 +32,10 @@ const last = $derived(identities.length <= 1);
 
 async function onUnlink(provider: IdentityProvider): Promise<void> {
   if (last) return;
-  if (
-    !window.confirm(
-      `Unlink ${identityProviderDisplayName(provider)} from this Account? You can link it again later.`,
-    )
-  ) {
-    return;
-  }
   unlinking = provider;
   const outcome = await unlinkIdentity(provider, SETTINGS_PATH);
   unlinking = null;
+  confirming = null;
   if (outcome === "ok" || outcome === "last_identity") {
     await onChanged();
     return;
@@ -81,142 +77,111 @@ function onUseAnotherWay(): void {
 }
 </script>
 
-<section class="settings-group" aria-labelledby="sign-in-methods-title">
-  <h2 id="sign-in-methods-title">Sign-in methods</h2>
-  {#each SIGN_IN_METHOD_ORDER as provider (provider)}
-    {@const identity = bound.get(provider)}
-    <div class="settings-row" data-provider={provider}>
-      <p>{identityProviderDisplayName(provider)}</p>
-      {#if identity}
-        <div class="settings-identity-meta">
-          <span class="settings-identity-label">{identity.label}</span>
+{#each SIGN_IN_METHOD_ORDER as provider (provider)}
+  {@const identity = bound.get(provider)}
+  <div class="split-row" data-provider={provider}>
+    <div>
+      <div class="split-row-title">{identityProviderDisplayName(provider)}</div>
+      <div class="split-row-detail">{identity ? identity.label : "Not linked"}</div>
+    </div>
+    {#if identity}
+      {#if confirming === provider}
+        <div class="split-row-actions">
+          <span class="split-row-detail">You can link it again later.</span>
+          <button class="pill" type="button" onclick={() => (confirming = null)}>Cancel</button>
           <button
-            class="button button-secondary"
+            class="pill danger"
             type="button"
-            disabled={last || unlinking === provider}
-            aria-describedby={last ? "keep-one-signin" : undefined}
+            disabled={unlinking === provider}
+            aria-label="Unlink {identityProviderDisplayName(provider)}"
             onclick={() => void onUnlink(provider)}>Unlink</button
           >
         </div>
-      {:else if provider === "email"}
-        {#if sent}
-          <div class="email-sent" role="status">
-            <h3>Check your email</h3>
-            <p>A sign-in link is on its way. It expires in 15 minutes.</p>
-            <button class="button button-secondary" type="button" onclick={onUseAnotherWay}>
-              Use another way
-            </button>
-          </div>
-        {:else if emailOpen}
-          <form
-            class="email-sign-in"
-            method="post"
-            action="/api/auth/email/start"
-            onsubmit={(event) => {
-              event.preventDefault();
-              void onSendLink();
-            }}
-          >
-            <label class="email-label" for="link-email">Email</label>
-            <input
-              id="link-email"
-              class="email-input"
-              type="email"
-              name="email"
-              autocomplete="email"
-              inputmode="email"
-              maxlength="254"
-              required
-              bind:value={email}
-            />
-            <button class="button button-primary" type="submit" disabled={sending}>
-              Send sign-in link
-            </button>
-          </form>
-        {:else}
-          <button class="button button-secondary" type="button" onclick={() => (emailOpen = true)}>
-            Link
-          </button>
-        {/if}
       {:else}
-        <a class="button button-secondary" href={identityLinkHref(provider)} data-sveltekit-reload>
-          Link
-        </a>
+        <button
+          class="pill"
+          type="button"
+          disabled={last}
+          aria-describedby={last ? "keep-one-signin" : undefined}
+          onclick={() => (confirming = provider)}>Unlink</button
+        >
       {/if}
-    </div>
-    {#if provider === "email" && emailError}
-      <p class="notice" role="alert">{emailError}</p>
+    {:else if provider === "email"}
+      {#if sent}
+        <div class="email-sent" role="status">
+          <h3>Check your email</h3>
+          <p>A sign-in link is on its way. It expires in 15 minutes.</p>
+          <button class="pill" type="button" onclick={onUseAnotherWay}>Use another way</button>
+        </div>
+      {:else if emailOpen}
+        <form
+          class="email-link"
+          method="post"
+          action="/api/auth/email/start"
+          onsubmit={(event) => {
+            event.preventDefault();
+            void onSendLink();
+          }}
+        >
+          <label class="visually-hidden" for="link-email">Email</label>
+          <input
+            id="link-email"
+            class="input"
+            type="email"
+            name="email"
+            autocomplete="email"
+            inputmode="email"
+            maxlength="254"
+            placeholder="you@example.com"
+            required
+            bind:value={email}
+          />
+          <button class="pill primary" type="submit" disabled={sending}>Send sign-in link</button>
+        </form>
+      {:else}
+        <button class="pill" type="button" onclick={() => (emailOpen = true)}>Link</button>
+      {/if}
+    {:else}
+      <a class="pill" href={identityLinkHref(provider)} data-sveltekit-reload>Link</a>
     {/if}
-  {/each}
-  {#if last}
-    <p id="keep-one-signin" class="settings-note">{KEEP_ONE_SIGN_IN_COPY}</p>
+  </div>
+  {#if provider === "email" && emailError}
+    <p class="notice" role="alert">{emailError}</p>
   {/if}
-</section>
+{/each}
+{#if last}
+  <p id="keep-one-signin" class="split-note">{KEEP_ONE_SIGN_IN_COPY}</p>
+{/if}
 
 <style>
-.settings-identity-meta {
+.email-link {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 12px;
-  min-width: 0;
+  gap: 8px;
+  min-width: min(100%, 20rem);
 }
 
-.settings-identity-label {
-  color: var(--body);
-  font-size: var(--fs-body);
-  overflow-wrap: anywhere;
-}
-
-.email-sign-in {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  min-width: min(100%, 16rem);
-}
-
-.email-label {
-  color: var(--charcoal);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.email-input {
-  width: 100%;
-  min-height: 42px;
-  padding: 8px 12px;
-  border: 1px solid var(--hairline);
-  border-radius: 8px;
-  background: var(--surface-soft);
-  color: var(--ink);
-  font-family: inherit;
-  font-size: 14px;
-}
-
-.email-input:focus {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
+.email-link .input {
+  flex: 1;
+  min-width: 12rem;
 }
 
 .email-sent {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.5rem;
+  display: grid;
+  justify-items: start;
+  gap: 6px;
   max-width: 22rem;
-  text-align: left;
 }
 
 .email-sent h3 {
   margin: 0;
-  font-size: 1rem;
-  line-height: 1.3;
+  font-size: 14px;
+  font-weight: 600;
 }
 
 .email-sent p {
   margin: 0;
   color: var(--body);
-  line-height: 1.5;
+  font-size: 13px;
 }
 </style>
