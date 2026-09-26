@@ -115,7 +115,11 @@ pub fn tier(
             Some(QuotaRefreshTierReason::AgentActive),
         );
     }
-    if activity.low_remaining {
+    // A window running low only moves while the provider is in use, so it quickens reads only
+    // then: an exhausted weekly window on an unused provider stays exhausted until it resets.
+    if activity.low_remaining
+        && (within(activity.last_write, IDLE_AFTER) || within(activity.last_demand, IDLE_AFTER))
+    {
         return (
             QuotaRefreshTier::Active,
             Some(QuotaRefreshTierReason::LowRemaining),
@@ -467,6 +471,20 @@ mod tests {
         assert_eq!(
             tier(ProviderId::Codex, &asked, now).0,
             QuotaRefreshTier::Normal
+        );
+        // A low window on a provider nobody used for an hour does not move, so it is not read
+        // every minute.
+        assert_eq!(
+            tier(
+                ProviderId::Codex,
+                &Activity {
+                    low_remaining: true,
+                    ..quiet
+                },
+                now
+            )
+            .0,
+            QuotaRefreshTier::Idle
         );
         // A provider no local agent maps to stays normal whatever its windows say.
         assert_eq!(

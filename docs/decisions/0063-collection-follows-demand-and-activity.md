@@ -95,7 +95,7 @@ Automatic gives each provider a tier once a minute, and each provider runs on it
 
 | Tier | Condition | Interval |
 | --- | --- | --- |
-| Active | that provider's local agent wrote its logs in the last 5 minutes, or a window of this Mac's last reading has < 20 % remaining | 1 minute |
+| Active | that provider's local agent wrote its logs in the last 5 minutes, or a window of this Mac's last reading has < 20 % remaining while the provider was in use (a write or a collection request) in the last 60 minutes | 1 minute |
 | Normal | otherwise | 5 minutes |
 | Idle | no local write and no collection request in 60 minutes | 10 minutes |
 

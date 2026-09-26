@@ -451,12 +451,11 @@ impl NativeBackend {
         cancel: Arc<AtomicBool>,
         bypass_renewal_floor: bool,
     ) -> Result<QuotaPass, BackendError> {
-        let previous = self
-            .state
-            .component(crate::protocol::ComponentName::Quota)
-            .ok()
-            .flatten()
-            .and_then(|component| component.value);
+        // The fresh readings are folded into this report, so a report that could not be read is
+        // not an empty one: taking it as empty would drop every provider this pass did not ask.
+        let previous =
+            read_patiently(|| self.state.component(crate::protocol::ComponentName::Quota))?
+                .and_then(|component| component.value);
         let account = self
             .state
             .component(crate::protocol::ComponentName::Account)
@@ -471,11 +470,9 @@ impl NativeBackend {
             .and_then(|account| account.get("device_id"))
             .and_then(Value::as_str);
         let now = Utc::now();
-        let mut records: CadenceRecords = self
-            .state
-            .provider_cadence()
-            .ok()
-            .flatten()
+        // Written back whole after the pass, so an unread record would lose every other
+        // provider's last ask and backoff.
+        let mut records: CadenceRecords = read_patiently(|| self.state.provider_cadence())?
             .and_then(|raw| serde_json::from_str(&raw).ok())
             .unwrap_or_default();
         let collect = cadence::gate(candidates, manual, now, |provider| {
@@ -3046,6 +3043,25 @@ struct QuotaPass {
 ///
 /// A provider this pass did not ask keeps its result. One that answered 429 keeps its last
 /// reading too, so a backoff shows that reading with its age rather than an error.
+/// How long a quota pass waits for the cache before it gives up on a read: IPC readers get
+/// 150 ms, but a pass on the scheduler thread has nobody waiting on it.
+const PASS_READ_ATTEMPTS: u32 = 20;
+
+/// A cache read a background pass depends on, retried while another writer holds the cache.
+fn read_patiently<T>(
+    mut read: impl FnMut() -> Result<T, crate::state::StateError>,
+) -> Result<T, BackendError> {
+    for _ in 1..PASS_READ_ATTEMPTS {
+        match read() {
+            Err(crate::state::StateError::Unavailable) => {
+                thread::sleep(std::time::Duration::from_millis(100));
+            }
+            other => return other.map_err(|_| BackendError::unavailable()),
+        }
+    }
+    read().map_err(|_| BackendError::unavailable())
+}
+
 fn merge_quota_reports(previous: Option<&Value>, fresh: Option<&Value>) -> Value {
     fn result_for(report: Option<&Value>, provider: ProviderId) -> Option<&Value> {
         report
@@ -6919,6 +6935,73 @@ mod tests {
         drop(backend);
         drop(state);
         fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    /// A pass folds its readings into the report before it; a cache held past the reader's
+    /// deadline is waited for, never read as an empty report that drops the other providers.
+    #[test]
+    fn a_pass_that_waits_for_the_cache_keeps_the_providers_it_did_not_ask() {
+        let root = std::env::temp_dir().join(format!("quota-pass-wait-{}", uuid::Uuid::new_v4()));
+        let home = root.join("home");
+        fs::create_dir_all(&home).expect("home");
+        let previous = json!({
+            "captured_at": "2026-09-26T09:55:00Z",
+            "results": [{
+                "provider": "claude",
+                "outcome": "success",
+                "snapshots": [{
+                    "provider": "claude",
+                    "account": {"fingerprint": "fp-claude", "fingerprint_scope": "source"},
+                    "windows": [],
+                    "status": "available",
+                    "observed_at": "2026-09-26T09:55:00Z"
+                }],
+                "sources": [{"source_id": "claude_oauth", "outcome": "success", "category": "success"}]
+            }]
+        });
+        let state = Arc::new(StateStore::open(&root).expect("state"));
+        state
+            .set_component(
+                crate::protocol::ComponentName::Quota,
+                crate::protocol::ComponentStatus::Ready,
+                Some(previous.clone()),
+                None,
+                None,
+                false,
+            )
+            .expect("previous reading");
+        let relay = Arc::new(RelayClient::new().expect("relay"));
+        let mut backend = NativeBackend::new(state.clone(), relay, "QuotaTest", "test");
+        backend.home = home;
+        backend.environment = HashMap::new();
+        // A long write holds the cache past the 150 ms an IPC reader waits.
+        let (held, wait) = std::sync::mpsc::channel();
+        let writer = {
+            let state = state.clone();
+            thread::spawn(move || {
+                let _guard = state.hold_cache_for_test();
+                held.send(()).expect("held");
+                thread::sleep(std::time::Duration::from_millis(400));
+            })
+        };
+        wait.recv().expect("held");
+        let pass = backend
+            .collect_quota_pass(
+                &[ProviderId::Gemini],
+                false,
+                Arc::new(AtomicBool::new(false)),
+                false,
+            )
+            .expect("pass");
+        writer.join().expect("writer");
+        let claude = pass.merged["results"]
+            .as_array()
+            .expect("results")
+            .iter()
+            .find(|result| result["provider"] == "claude")
+            .expect("claude kept");
+        assert_eq!(claude, &previous["results"][0]);
+        let _ = fs::remove_dir_all(root);
     }
 
     /// A 429 keeps the reading before it, and the wait it earns — here the provider's own

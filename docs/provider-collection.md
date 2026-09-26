@@ -115,7 +115,8 @@ How often this Mac asks each provider is decided per provider
   fixed. A fixed interval applies to every provider.
 - **Automatic** gives each provider a tier once a minute. *Active*, every minute: the provider's
   own local agent wrote its logs in the last five minutes, or a window of this Mac's last reading
-  has less than 20 % left. *Idle*, every ten minutes: no such write for sixty minutes and no
+  has less than 20 % left while the provider is in use (a write or a collection request in the
+  last sixty minutes — a low window on an unused provider does not move until it resets). *Idle*, every ten minutes: no such write for sixty minutes and no
   collection request in that time. *Normal*, every five minutes, otherwise. Activity is the newest
   modification time under the agent's log roots (the same roots as
   [`usage-sources.md`](usage-sources.md)), a bounded walk of at most 5,000 entries that opens no
