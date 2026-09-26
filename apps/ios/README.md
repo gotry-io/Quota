@@ -106,7 +106,9 @@ A provider that answers 429 is backed off per provider session (provider + accou
 doubling to 30. The schedule is kept in the app's `UserDefaults` (`providers.backoff`, instants and
 session keys only), so a relaunch does not clear it. A backed-off session is not asked and keeps its
 last reading on screen and in `local-observations.json`. Pull to refresh and the refresh button may
-ask it anyway, once per session per minute; a reading clears the schedule
+ask it anyway, once per session per minute; a reading clears the schedule. A 429 also holds that
+session to one automatic read per five minutes for 24 hours from the latest 429, which a reading
+does not clear; pull to refresh and the refresh button are not held by it
 ([ADR 0063](../../docs/decisions/0063-collection-follows-demand-and-activity.md)).
 
 ## Launch

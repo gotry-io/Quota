@@ -524,6 +524,7 @@ impl NativeBackend {
                     limited.get("retry_after_seconds").and_then(Value::as_u64),
                     now,
                 ));
+                record.raised_floor = Some(cadence::raised_floor_after_429(&account, now));
             } else if result.get("outcome").and_then(Value::as_str) == Some("success") {
                 record.backoff = None;
             }
@@ -6921,7 +6922,7 @@ mod tests {
     }
 
     /// A 429 keeps the reading before it, and the wait it earns — here the provider's own
-    /// `Retry-After` — outlives the process that earned it.
+    /// `Retry-After` — and the day of a raised floor outlive the process that earned them.
     #[test]
     fn a_rate_limited_provider_keeps_its_reading_and_its_backoff_survives_a_restart() {
         use std::io::{Read as _, Write as _};
@@ -6999,6 +7000,12 @@ mod tests {
         assert_eq!(
             (backoff.until - record.last_attempt_at.expect("asked")).num_seconds(),
             120
+        );
+        let raised = record.raised_floor.as_ref().expect("raised floor");
+        assert_eq!(raised.account, "fp-litellm");
+        assert_eq!(
+            (raised.until - record.last_attempt_at.expect("asked")).num_hours(),
+            24
         );
         drop(reopened);
         fs::remove_dir_all(root).expect("cleanup");

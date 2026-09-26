@@ -7,6 +7,9 @@ import Foundation
 /// the wait starts at five minutes and doubles to thirty. It is kept per provider session — one
 /// provider and one account — and it outlives the process, so relaunching the app is not a way
 /// round it. A manual refresh may ask a held provider anyway, once a minute.
+///
+/// A 429 also holds that session to one read per five minutes for a day, even after it answers
+/// again; a manual refresh is not held by that floor.
 struct ProviderBackoff: Codable, Equatable, Sendable {
   struct Entry: Codable, Equatable, Sendable {
     /// No read before this instant, unless a manual refresh spends its bypass.
@@ -17,16 +20,39 @@ struct ProviderBackoff: Codable, Equatable, Sendable {
     var bypassedAt: Date?
   }
 
+  /// The day after a 429, and when the session was last asked in it.
+  struct RaisedFloor: Codable, Equatable, Sendable {
+    var until: Date
+    var lastAskedAt: Date
+  }
+
   static let firstDelaySeconds = 5 * 60
   static let maximumDelaySeconds = 30 * 60
   static let maximumRetryAfterSeconds = 60 * 60
   static let bypassInterval: TimeInterval = 60
+  static let raisedFloor: TimeInterval = 5 * 60
+  static let raisedFloorSpan: TimeInterval = 24 * 60 * 60
 
   private(set) var entries: [String: Entry] = [:]
+  private(set) var raisedFloors: [String: RaisedFloor] = [:]
+
+  var isEmpty: Bool { entries.isEmpty && raisedFloors.isEmpty }
 
   /// Whether a session may be read at `now`. A held session admits a manual read when it has
   /// not had one in the last minute, and that read is the minute's bypass.
   mutating func admits(_ key: String, now: Date, manual: Bool) -> Bool {
+    if let floor = raisedFloors[key], now >= floor.until { raisedFloors[key] = nil }
+    guard admitsPastBackoff(key, now: now, manual: manual) else { return false }
+    guard var floor = raisedFloors[key] else { return true }
+    guard manual || now.timeIntervalSince(floor.lastAskedAt) >= Self.raisedFloor else {
+      return false
+    }
+    floor.lastAskedAt = now
+    raisedFloors[key] = floor
+    return true
+  }
+
+  private mutating func admitsPastBackoff(_ key: String, now: Date, manual: Bool) -> Bool {
     guard var entry = entries[key], now < entry.until else { return true }
     guard manual else { return false }
     if let bypassedAt = entry.bypassedAt,
@@ -56,9 +82,12 @@ struct ProviderBackoff: Codable, Equatable, Sendable {
       delaySeconds: delay,
       bypassedAt: previous?.bypassedAt
     )
+    raisedFloors[key] = RaisedFloor(
+      until: now.addingTimeInterval(Self.raisedFloorSpan), lastAskedAt: now)
   }
 
-  /// The provider answered with a reading, so the next 429 starts the schedule again.
+  /// The provider answered with a reading, so the next 429 starts the schedule again. The raised
+  /// floor stays until its day is over.
   mutating func answered(_ key: String) {
     entries[key] = nil
   }
@@ -87,7 +116,7 @@ final class UserDefaultsProviderBackoffStore: ProviderBackoffStoring, @unchecked
   }
 
   func save(_ backoff: ProviderBackoff) {
-    if backoff.entries.isEmpty {
+    if backoff.isEmpty {
       defaults.removeObject(forKey: Self.storageKey)
     } else if let data = try? JSONEncoder().encode(backoff) {
       defaults.set(data, forKey: Self.storageKey)

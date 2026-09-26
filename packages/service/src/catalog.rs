@@ -142,7 +142,7 @@ pub const PROVIDER_CATALOG: &[ProviderCatalogEntry] = &[
             kind: StatusPageKind::StatuspageV2,
             url: Some("https://status.claude.com/api/v2/status.json"),
         }),
-        min_interval_seconds: 300,
+        min_interval_seconds: 180,
     },
     ProviderCatalogEntry {
         id: ProviderId::Grok,

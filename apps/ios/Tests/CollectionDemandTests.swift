@@ -14,13 +14,18 @@ private let requestedAt = Fixtures.date("2026-08-14T16:00:05Z")
 private let macID = "device_mac_1"
 private let phoneID = "device_phone_1"
 
-/// The Macs are asked only about what they last sent, and only when it is old.
+/// The Macs are asked only about what they last sent, and only when it is older than two
+/// minutes or the provider's floor, whichever is longer.
 struct CollectionDemandRuleTests {
   @Test
-  func onlyAMacReadingOlderThanTwoMinutesIsWorthAsking() throws {
+  func onlyAMacReadingOlderThanTwoMinutesOrItsProvidersFloorIsWorthAsking() throws {
     let summary = try accountSummary(subscriptions: [
-      subscription("fresh", sources: [(macID, now.addingTimeInterval(-60))]),
-      subscription("stale", sources: [(macID, now.addingTimeInterval(-121))]),
+      subscription("fresh", provider: .codex, sources: [(macID, now.addingTimeInterval(-60))]),
+      subscription("stale", provider: .codex, sources: [(macID, now.addingTimeInterval(-121))]),
+      // Claude's floor is three minutes: a Mac would not ask it again any sooner.
+      subscription(
+        "claude_inside_floor", sources: [(macID, now.addingTimeInterval(-179))]),
+      subscription("claude_stale", sources: [(macID, now.addingTimeInterval(-181))]),
       // This phone's own reading is old, but a Mac is what answers a request.
       subscription("phone", sources: [(phoneID, now.addingTimeInterval(-600))]),
       // A second Mac read the same account recently, so nothing is waiting on the first.
@@ -31,7 +36,7 @@ struct CollectionDemandRuleTests {
 
     let demand = try #require(
       CollectionDemand.stale(in: summary, selfDeviceID: phoneID, now: now))
-    #expect(demand.subscriptionKeys == ["stale"])
+    #expect(demand.subscriptionKeys == ["stale", "claude_stale"])
     #expect(demand.macCount == 1)
 
     let fresh = try accountSummary(subscriptions: [
@@ -42,7 +47,8 @@ struct CollectionDemandRuleTests {
 }
 
 /// Retry-After is honoured up to an hour; without one the wait is 5, 10, 20, then 30 minutes. A
-/// manual refresh passes a held provider once a minute, and a reading starts the schedule over.
+/// manual refresh passes a held provider once a minute, and a reading starts the schedule over,
+/// though the five-minute floor a 429 raises lasts its day.
 struct ProviderBackoffTests {
   @Test
   func retryAfterIsHonouredAndOtherwiseTheWaitDoublesToThirtyMinutes() {
@@ -66,10 +72,24 @@ struct ProviderBackoffTests {
   func aManualRefreshPassesAHeldProviderOnceAMinute() {
     var backoff = ProviderBackoff()
     backoff.rateLimited("claude:a", retryAfterSeconds: nil, now: now)
-    let answers = [(10, false), (10, true), (40, true), (71, true), (301, false)].map {
+    let answers = [(10, false), (10, true), (40, true), (71, true), (371, false)].map {
       backoff.admits("claude:a", now: now.addingTimeInterval(TimeInterval($0.0)), manual: $0.1)
     }
     #expect(answers == [false, true, false, true, true])
+  }
+
+  @Test
+  func aRateLimitedSessionIsReadAtMostEveryFiveMinutesForADayAfterItAnswers() {
+    var backoff = ProviderBackoff()
+    backoff.rateLimited("claude:a", retryAfterSeconds: 60, now: now)
+    backoff.answered("claude:a")
+    let asks = [
+      (120, false), (300, false), (420, false), (420, true), (86_300, false), (86_400, false),
+    ].map {
+      backoff.admits("claude:a", now: now.addingTimeInterval(TimeInterval($0.0)), manual: $0.1)
+    }
+    // A manual refresh is not held by the floor, and the floor ends with its day.
+    #expect(asks == [false, true, false, true, true, true])
   }
 }
 
@@ -282,7 +302,7 @@ private func requestAnswer() -> Data {
 private func stale() throws -> Data {
   try WireCodec.encode(
     accountSummary(subscriptions: [
-      subscription("claude_sub", sources: [(macID, now.addingTimeInterval(-300))])
+      subscription("claude_sub", sources: [(macID, now.addingTimeInterval(-600))])
     ]))
 }
 
@@ -315,12 +335,14 @@ private func accountSummary(subscriptions: [QuotaSubscription]) throws -> Accoun
   )
 }
 
-private func subscription(_ key: String, sources: [(String, Date)]) -> QuotaSubscription {
+private func subscription(
+  _ key: String, provider: ProviderID = .claude, sources: [(String, Date)]
+) -> QuotaSubscription {
   let newest = sources.map(\.1).max() ?? now
-  let reading = snapshot(provider: .claude, fingerprint: key, observedAt: newest)
+  let reading = snapshot(provider: provider, fingerprint: key, observedAt: newest)
   return QuotaSubscription(
     key: key,
-    provider: .claude,
+    provider: provider,
     snapshot: reading,
     sources: sources.map {
       QuotaSubscriptionSource(deviceID: $0.0, observedAt: $0.1, snapshot: reading)

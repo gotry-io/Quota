@@ -146,7 +146,7 @@
         "url": "https://status.claude.com/api/v2/status.json"
       },
       "collection": {
-        "min_interval_seconds": 300
+        "min_interval_seconds": 180
       },
       "capabilities": {
         "tier": "first_class",

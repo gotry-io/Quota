@@ -1,4 +1,8 @@
-import { type IdentityProvider, MANAGED_DATA_PROTOCOL_VERSION } from "@gotry-io/quota-protocol";
+import {
+  CollectionRequestResponseReadSchema,
+  type IdentityProvider,
+  MANAGED_DATA_PROTOCOL_VERSION,
+} from "@gotry-io/quota-protocol";
 import { type AccountError, classifyAccountError } from "./account-errors.ts";
 import {
   ACTIVITY_DAYS,
@@ -200,13 +204,8 @@ export async function requestCollection(): Promise<number | null> {
       body: JSON.stringify({ protocol_version: MANAGED_DATA_PROTOCOL_VERSION }),
     });
     if (!response.ok) return null;
-    const body: unknown = await response.json();
-    const requestedAt =
-      typeof body === "object" && body !== null && "requested_at" in body
-        ? body.requested_at
-        : null;
-    const ms = typeof requestedAt === "string" ? Date.parse(requestedAt) : Number.NaN;
-    return Number.isFinite(ms) ? ms : null;
+    const parsed = CollectionRequestResponseReadSchema.safeParse(await response.json());
+    return parsed.success ? Date.parse(parsed.data.requested_at) : null;
   } catch {
     return null;
   }

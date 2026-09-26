@@ -1,17 +1,26 @@
-import type { AccountSummaryRead } from "@gotry-io/quota-protocol";
+import {
+  type AccountSummaryRead,
+  providerMinCollectionIntervalSeconds,
+} from "@gotry-io/quota-protocol";
 
 /**
  * When the dashboard asks the Account's Macs for a fresh reading, and when it stops waiting
  * (ADR 0063).
  *
  * Someone looking at the dashboard is the demand: when it opens, or its tab becomes visible
- * again, a subscription whose newest Mac reading is more than two minutes old is worth one
+ * again, a subscription whose newest Mac reading is older than `staleAfterMs` is worth one
  * `POST /api/v6/account/collection-request`. Only a Mac answers one, so only a Mac's reading is
  * judged. The summary is then re-read every 30 seconds for up to three minutes, and the wait ends
  * as soon as every subscription asked about has a Mac reading at or after the instant Relay
  * stored, or the tab is hidden.
  */
-export const STALE_AFTER_MS = 2 * 60_000;
+/**
+ * Two minutes, or the provider's catalog floor when that is longer: a Mac does not ask a provider
+ * again inside its floor, so a younger reading is as fresh as a request could make it.
+ */
+export function staleAfterMs(provider: string): number {
+  return Math.max(2 * 60, providerMinCollectionIntervalSeconds(provider)) * 1_000;
+}
 export const FOLLOW_UP_INTERVAL_MS = 30_000;
 /** Three minutes of 30-second reads. */
 export const FOLLOW_UP_READS = 6;
@@ -50,7 +59,11 @@ export function staleDemand(summary: AccountSummaryRead, nowMs: number): Collect
   const devices = new Set<string>();
   for (const subscription of summary.subscriptions) {
     const newest = newestMacSource(subscription, macs);
-    if (newest === null || nowMs - Date.parse(newest.observed_at) <= STALE_AFTER_MS) continue;
+    if (
+      newest === null ||
+      nowMs - Date.parse(newest.observed_at) <= staleAfterMs(subscription.provider)
+    )
+      continue;
     keys.add(subscription.key);
     devices.add(newest.device_id);
   }

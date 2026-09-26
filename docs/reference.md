@@ -17,7 +17,7 @@ the generated [provider capability matrix](providers/README.md). Strategy for ea
 | Order | Id | Display name | Account sync | Default visible | Setup | Credential | Browser session | Status page | Min interval | Environment keys | Default base URL |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 0 | [`codex`](providers/codex.md) | Codex | true | true | codex login | — | yes | statuspage_v2 | 60 s | CODEX_HOME | — |
-| 1 | [`claude`](providers/claude.md) | Claude Code | true | true | claude auth login | — | yes | statuspage_v2 | 300 s | CLAUDE_CONFIG_DIR | — |
+| 1 | [`claude`](providers/claude.md) | Claude Code | true | true | claude auth login | — | yes | statuspage_v2 | 180 s | CLAUDE_CONFIG_DIR | — |
 | 2 | [`grok`](providers/grok.md) | Grok | true | true | grok login | — | yes | none | 120 s | GROK_HOME | — |
 | 3 | [`openrouter`](providers/openrouter.md) | OpenRouter | true | false | Configure in QuotaBar | api_key | — | none | 60 s | OPENROUTER_API_KEY | https://openrouter.ai/api/v1 |
 | 4 | [`deepseek`](providers/deepseek.md) | DeepSeek | true | false | Configure in QuotaBar | api_key | — | none | 60 s | DEEPSEEK_API_KEY, DEEPSEEK_KEY | https://api.deepseek.com |

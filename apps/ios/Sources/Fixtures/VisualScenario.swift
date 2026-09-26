@@ -182,7 +182,7 @@ import QuotaWire
           })
         scenario.refreshReads = 3
       case .askingMac:
-        // Opened on readings older than two minutes: the Macs were asked twenty seconds ago.
+        // Opened on stale Mac readings: the Macs were asked twenty seconds ago.
         signedInContent(fromCache: false, fetchedOffset: -20, banner: nil)
         scenario.collectionDemand = CollectionDemand.stale(
           in: populated, selfDeviceID: phoneID, now: now

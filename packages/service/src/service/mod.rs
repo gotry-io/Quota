@@ -472,6 +472,27 @@ struct CadenceState {
 /// One provider's periodic clock: the pass that last included it, and the jitter its next tick
 /// carries.
 #[derive(Clone, Copy)]
+/// What the scheduler plans for one provider.
+struct ProviderPlan {
+    interval: Duration,
+    /// Nothing but a manual refresh asks it before this ([`cadence::not_before`]).
+    not_before: Option<DateTime<Utc>>,
+}
+
+fn earliest_asks(
+    plans: &BTreeMap<ProviderId, ProviderPlan>,
+    now_utc: DateTime<Utc>,
+    now: Instant,
+) -> BTreeMap<ProviderId, Instant> {
+    plans
+        .iter()
+        .filter_map(|(provider, plan)| {
+            let at = schedule::instant_from_utc(plan.not_before?, now_utc, now)?;
+            Some((*provider, at))
+        })
+        .collect()
+}
+
 struct ProviderClock {
     last: Instant,
     jitter: f64,
@@ -684,17 +705,18 @@ impl LocalService {
                 }
                 next_probe = now + schedule::account_sync_interval();
             }
-            let intervals = self.plan_intervals(mode, fixed, &writes, now_utc);
+            let plans = self.plan_intervals(mode, fixed, &writes, now_utc);
+            let earliest = earliest_asks(&plans, now_utc, now);
             let next_due: BTreeMap<ProviderId, Instant> = clocks
                 .iter()
                 .map(|(provider, clock)| {
-                    let interval = intervals
+                    let interval = plans
                         .get(provider)
-                        .copied()
-                        .unwrap_or(cadence::NORMAL_INTERVAL);
+                        .map_or(cadence::NORMAL_INTERVAL, |plan| plan.interval);
+                    let due = clock.last + cadence::jittered(interval, clock.jitter);
                     (
                         *provider,
-                        clock.last + cadence::jittered(interval, clock.jitter),
+                        earliest.get(provider).map_or(due, |at| due.max(*at)),
                     )
                 })
                 .collect();
@@ -750,11 +772,23 @@ impl LocalService {
                     self.request_account_sync();
                 }
                 schedule::SchedulerWake::Quota => {
-                    let due = schedule::due_providers(&next_due, now);
+                    let mut due = schedule::due_providers(&next_due, now);
+                    // A provider a shared pass would take early, inside its floor, waits for its
+                    // own tick. Read again now: a pass that finished while this thread slept moved
+                    // its provider's last ask.
+                    let now_utc = Utc::now();
+                    let earliest = earliest_asks(
+                        &self.plan_intervals(mode, fixed, &writes, now_utc),
+                        now_utc,
+                        now,
+                    );
+                    due.retain(|provider| earliest.get(provider).is_none_or(|at| *at <= now));
                     for provider in &due {
                         clocks.insert(*provider, ProviderClock::restart(now));
                     }
-                    next_account = now + schedule::account_sync_interval();
+                    if !due.is_empty() {
+                        next_account = now + schedule::account_sync_interval();
+                    }
                     let usage_interval = match mode {
                         QuotaRefreshMode::Fixed => fixed,
                         QuotaRefreshMode::Automatic => cadence::NORMAL_INTERVAL,
@@ -804,7 +838,7 @@ impl LocalService {
         fixed: Duration,
         writes: &BTreeMap<ProviderId, DateTime<Utc>>,
         now: DateTime<Utc>,
-    ) -> BTreeMap<ProviderId, Duration> {
+    ) -> BTreeMap<ProviderId, ProviderPlan> {
         let quota = self
             .inner
             .state
@@ -818,6 +852,14 @@ impl LocalService {
             .lock()
             .ok()
             .and_then(|cadence| cadence.last_demand);
+        let records: cadence::CadenceRecords = self
+            .inner
+            .state
+            .provider_cadence()
+            .ok()
+            .flatten()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default();
         let mut hint: Option<(Duration, QuotaRefreshTierHint)> = None;
         let intervals = ProviderId::ALL
             .iter()
@@ -828,7 +870,12 @@ impl LocalService {
                     last_demand,
                 };
                 let (tier, reason) = cadence::tier(*provider, &activity, now);
-                let interval = cadence::interval(*provider, mode, fixed, tier);
+                let record = records.get(provider.as_str());
+                let account =
+                    cadence::backoff_account(&cadence::accounts(quota.as_ref(), *provider));
+                let floor = cadence::floor(*provider, record, &account, now);
+                let interval = cadence::interval(floor, mode, fixed, tier);
+                let not_before = cadence::not_before(*provider, record, &account, now);
                 let rank = |tier| match tier {
                     QuotaRefreshTier::Active => 0,
                     QuotaRefreshTier::Normal => 1,
@@ -849,7 +896,13 @@ impl LocalService {
                         },
                     ));
                 }
-                (*provider, interval)
+                (
+                    *provider,
+                    ProviderPlan {
+                        interval,
+                        not_before,
+                    },
+                )
             })
             .collect();
         let hint = (mode == QuotaRefreshMode::Automatic)

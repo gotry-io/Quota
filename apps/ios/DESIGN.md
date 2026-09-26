@@ -143,8 +143,9 @@ Header:
   (`QuotaFormat.updated`). Nothing is said before anything has been read.
 - Collection request ([ADR 0063](../../docs/decisions/0063-collection-follows-demand-and-activity.md)):
   on a cold launch, a return to the foreground, or a pull to refresh / the refresh button, a
-  signed-in phone whose summary shows a subscription with its newest Mac reading more than two
-  minutes old sends one `POST /api/v6/account/collection-request`. It then re-reads the summary
+  signed-in phone whose summary shows a subscription with its newest Mac reading older than two
+  minutes or its provider's catalog floor (`collection.min_interval_seconds`, generated into
+  `ProviderID.minCollectionInterval`), whichever is longer, sends one `POST /api/v6/account/collection-request`. It then re-reads the summary
   (conditional GET) every 20 seconds for up to three minutes, and stops as soon as every
   subscription it asked about has a Mac reading at or after the `requested_at` Relay answered,
   when the app goes to the background, or on sign-out. One wait at a time. Only a Mac's reading

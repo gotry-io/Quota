@@ -59,3 +59,25 @@ export const PROVIDER_DISPLAY_NAMES: Readonly<Record<LocalProviderId, string>> =
 export function providerDisplayName(provider: string): string {
   return PROVIDER_DISPLAY_NAMES[provider as LocalProviderId] ?? "Unknown provider";
 }
+
+// The shortest time one Mac waits between two collections of a provider (catalog
+// `collection.min_interval_seconds`, ADR 0063). A viewer judges a Mac reading stale against it.
+export const PROVIDER_MIN_COLLECTION_INTERVAL_SECONDS: Readonly<Record<LocalProviderId, number>> = {
+  codex: 60,
+  claude: 180,
+  grok: 120,
+  openrouter: 60,
+  deepseek: 60,
+  kimi: 120,
+  litellm: 120,
+  cursor: 120,
+  gemini: 120,
+  copilot: 120,
+  antigravity: 120,
+  opencode_go: 120,
+};
+
+/** A provider this build has never heard of names no floor. */
+export function providerMinCollectionIntervalSeconds(provider: string): number {
+  return PROVIDER_MIN_COLLECTION_INTERVAL_SECONDS[provider as LocalProviderId] ?? 0;
+}

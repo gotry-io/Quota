@@ -20,6 +20,7 @@ function summary(sources: Record<string, Array<[string, number]>>): AccountSumma
     ],
     subscriptions: Object.entries(sources).map(([key, rows]) => ({
       key,
+      provider: key.split(":")[0],
       sources: rows.map(([device_id, ms]) => ({
         device_id,
         observed_at: new Date(ms).toISOString(),
@@ -28,7 +29,7 @@ function summary(sources: Record<string, Array<[string, number]>>): AccountSumma
   } as unknown as AccountSummaryRead;
 }
 
-const stale = summary({ claude: [["mac_1", NOW - 300_000]] });
+const stale = summary({ claude: [["mac_1", NOW - 600_000]] });
 const answered = summary({ claude: [["mac_1", REQUESTED_AT + 20_000]] });
 
 function relay(reads: AccountSummaryRead[], requestedAt: number | null) {
@@ -51,22 +52,24 @@ function relay(reads: AccountSummaryRead[], requestedAt: number | null) {
   return { deps, calls };
 }
 
-it("asks only about a Mac reading older than two minutes, never another device's", () => {
+it("asks about a Mac reading older than two minutes or its provider's floor, never another device's", () => {
   const demand = staleDemand(
     summary({
-      fresh: [["mac_1", NOW - 60_000]],
-      old: [["mac_2", NOW - 121_000]],
-      phone: [["phone_1", NOW - 600_000]],
-      covered: [
+      "codex:fresh": [["mac_1", NOW - 60_000]],
+      "codex:old": [["mac_2", NOW - 121_000]],
+      "claude:inside-floor": [["mac_1", NOW - 179_000]],
+      "claude:old": [["mac_1", NOW - 181_000]],
+      "codex:phone": [["phone_1", NOW - 600_000]],
+      "codex:covered": [
         ["mac_1", NOW - 600_000],
         ["mac_2", NOW],
       ],
     }),
     NOW,
   );
-  expect(demand && [...demand.keys]).toEqual(["old"]);
-  expect(demand?.macCount).toBe(1);
-  expect(staleDemand(summary({ fresh: [["mac_1", NOW - 60_000]] }), NOW)).toBeNull();
+  expect(demand && [...demand.keys]).toEqual(["codex:old", "claude:old"]);
+  expect(demand?.macCount).toBe(2);
+  expect(staleDemand(summary({ "codex:fresh": [["mac_1", NOW - 60_000]] }), NOW)).toBeNull();
   expect(askingCopy(1)).toBe("Asking your Mac…");
   expect(askingCopy(2)).toBe("Asking your Macs…");
 });

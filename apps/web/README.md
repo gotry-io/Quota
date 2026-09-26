@@ -74,7 +74,8 @@ request. Switching the Usage period recomputes from the summary and does not ref
 Overview asks the Account's Macs for a fresh reading
 ([ADR 0063](../../docs/decisions/0063-collection-follows-demand-and-activity.md)): when it opens, and
 when its tab becomes visible again (after re-reading the summary), a subscription whose newest Mac
-reading is more than two minutes old sends one `POST /api/v6/account/collection-request`
+reading is older than two minutes or its provider's catalog floor
+(`collection.min_interval_seconds`), whichever is longer, sends one `POST /api/v6/account/collection-request`
 (`{"protocol_version":6}`, the cookie session and the browser's same-origin `Origin`). The summary is
 then re-read (conditional GET) every 30 seconds for up to three minutes, stopping once every
 subscription asked about has a Mac reading at or after the `requested_at` Relay answered, when the

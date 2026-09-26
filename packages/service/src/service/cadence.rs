@@ -35,6 +35,10 @@ pub const BACKOFF_START: Duration = Duration::from_secs(5 * 60);
 pub const BACKOFF_CAP: Duration = Duration::from_secs(30 * 60);
 /// The longest `Retry-After` honoured.
 pub const RETRY_AFTER_CAP: Duration = Duration::from_secs(60 * 60);
+/// After a 429, the account it was earned on is asked no more often than this…
+pub const RATE_LIMITED_FLOOR: Duration = Duration::from_secs(5 * 60);
+/// …for this long after the latest 429, whatever it answers in between.
+pub const RATE_LIMITED_FLOOR_SPAN: Duration = Duration::from_secs(24 * 60 * 60);
 /// Periodic ticks move by up to this share of their interval either way.
 pub const JITTER: f64 = 0.1;
 
@@ -43,9 +47,28 @@ pub const fn min_interval(provider: ProviderId) -> Duration {
     Duration::from_secs(provider.metadata().min_interval_seconds)
 }
 
-/// The local agent whose logs say its provider is in use. Only these map one to one; an agent
-/// that can talk to any provider (OpenCode, Pi) would need its logs parsed to say which, and
-/// activity is an mtime check, so they do not take part.
+/// The floor this Mac holds `provider` to for `account`: the catalog's, raised to
+/// [`RATE_LIMITED_FLOOR`] while a 429 on that account is less than [`RATE_LIMITED_FLOOR_SPAN`]
+/// old.
+pub fn floor(
+    provider: ProviderId,
+    record: Option<&CadenceRecord>,
+    account: &str,
+    now: DateTime<Utc>,
+) -> Duration {
+    let raised = record
+        .and_then(|record| record.raised_floor.as_ref())
+        .is_some_and(|raised| raised.account == account && raised.until > now);
+    if raised {
+        min_interval(provider).max(RATE_LIMITED_FLOOR)
+    } else {
+        min_interval(provider)
+    }
+}
+
+/// The local agent whose logs say its provider is in use, read from the Usage scanner's roots.
+/// Only these map one to one; an agent that can talk to any provider (OpenCode, Pi, Kilo) would
+/// need its logs parsed to say which, and activity is an mtime check, so they do not take part.
 pub const fn activity_agent(provider: ProviderId) -> Option<crate::usage::UsageAgent> {
     use crate::usage::UsageAgent;
     match provider {
@@ -53,6 +76,9 @@ pub const fn activity_agent(provider: ProviderId) -> Option<crate::usage::UsageA
         ProviderId::Codex => Some(UsageAgent::Codex),
         ProviderId::Gemini => Some(UsageAgent::Gemini),
         ProviderId::Cursor => Some(UsageAgent::Cursor),
+        ProviderId::Grok => Some(UsageAgent::Grok),
+        ProviderId::Copilot => Some(UsageAgent::Copilot),
+        ProviderId::Antigravity => Some(UsageAgent::Antigravity),
         _ => None,
     }
 }
@@ -101,9 +127,32 @@ pub fn tier(
     (QuotaRefreshTier::Normal, None)
 }
 
-/// How long this provider waits between periodic collections, before jitter.
-pub fn interval(
+/// The first instant anything but a manual refresh may ask `provider` for `account`: its floor
+/// after the last ask, or the end of a backoff on that account when that is later. The scheduler
+/// waits for it, so a tick that jitter or a shared pass brings early is not spent on a provider
+/// the gate would refuse.
+pub fn not_before(
     provider: ProviderId,
+    record: Option<&CadenceRecord>,
+    account: &str,
+    now: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    let record = record?;
+    let floor_ends = record.last_attempt_at.map(|last| {
+        last + chrono::Duration::from_std(floor(provider, Some(record), account, now))
+            .unwrap_or_default()
+    });
+    let backoff_ends = record
+        .backoff
+        .as_ref()
+        .filter(|backoff| backoff.account == account)
+        .map(|backoff| backoff.until);
+    floor_ends.max(backoff_ends)
+}
+
+/// How long a provider held to `floor` waits between periodic collections, before jitter.
+pub fn interval(
+    floor: Duration,
     mode: QuotaRefreshMode,
     fixed: Duration,
     tier: QuotaRefreshTier,
@@ -116,7 +165,7 @@ pub fn interval(
             QuotaRefreshTier::Idle => IDLE_INTERVAL,
         },
     };
-    base.max(min_interval(provider))
+    base.max(floor)
 }
 
 /// `interval` moved by `unit` (in `[-1, 1]`) times [`JITTER`].
@@ -189,6 +238,16 @@ pub struct CadenceRecord {
     pub last_attempt_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backoff: Option<Backoff>,
+    /// The raised floor the latest 429 earned. Unlike `backoff`, a success does not clear it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raised_floor: Option<RaisedFloor>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RaisedFloor {
+    /// The account the 429 was earned on, or empty when this Mac had no reading yet.
+    pub account: String,
+    pub until: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -223,6 +282,14 @@ pub fn backoff_after_429(
         account: account.to_owned(),
         until: now + chrono::Duration::from_std(wait).unwrap_or_default(),
         strikes,
+    }
+}
+
+/// What a 429 on `account` at `now` raises the floor to, and for how long.
+pub fn raised_floor_after_429(account: &str, now: DateTime<Utc>) -> RaisedFloor {
+    RaisedFloor {
+        account: account.to_owned(),
+        until: now + chrono::Duration::from_std(RATE_LIMITED_FLOOR_SPAN).unwrap_or_default(),
     }
 }
 
@@ -270,7 +337,9 @@ pub fn gate<'a>(
             if manual {
                 return since_last.is_none_or(|age| age >= MANUAL_FLOOR);
             }
-            if since_last.is_some_and(|age| age < min_interval(*provider)) {
+            if since_last
+                .is_some_and(|age| age < floor(*provider, input.record, &input.account, now))
+            {
                 return false;
             }
             let backing_off = input
@@ -407,18 +476,24 @@ mod tests {
     }
 
     /// The catalog floor wins over every tier and every fixed interval: an active Claude is
-    /// still asked every five minutes, and a one-minute fixed cadence asks it no faster.
+    /// still asked every three minutes, and a one-minute fixed cadence asks it no faster.
     #[test]
     fn the_catalog_floor_bounds_every_tier_and_fixed_interval() {
-        let automatic =
-            |provider, tier| interval(provider, QuotaRefreshMode::Automatic, Duration::ZERO, tier);
+        let automatic = |provider, tier| {
+            interval(
+                min_interval(provider),
+                QuotaRefreshMode::Automatic,
+                Duration::ZERO,
+                tier,
+            )
+        };
         assert_eq!(
             automatic(ProviderId::Codex, QuotaRefreshTier::Active),
             Duration::from_secs(60)
         );
         assert_eq!(
             automatic(ProviderId::Claude, QuotaRefreshTier::Active),
-            Duration::from_secs(300)
+            Duration::from_secs(180)
         );
         assert_eq!(
             automatic(ProviderId::Gemini, QuotaRefreshTier::Active),
@@ -426,12 +501,12 @@ mod tests {
         );
         assert_eq!(
             interval(
-                ProviderId::Claude,
+                min_interval(ProviderId::Claude),
                 QuotaRefreshMode::Fixed,
                 Duration::from_secs(60),
                 QuotaRefreshTier::Active
             ),
-            Duration::from_secs(300)
+            Duration::from_secs(180)
         );
     }
 
@@ -442,10 +517,10 @@ mod tests {
         let now = utc(1_000_000);
         let asked = |seconds_ago: i64| CadenceRecord {
             last_attempt_at: Some(now - chrono::Duration::seconds(seconds_ago)),
-            backoff: None,
+            ..CadenceRecord::default()
         };
         let records = BTreeMap::from([
-            ("claude", asked(200)),
+            ("claude", asked(170)),
             ("codex", asked(61)),
             (
                 "gemini",
@@ -456,6 +531,7 @@ mod tests {
                         until: now + chrono::Duration::seconds(10),
                         strikes: 1,
                     }),
+                    ..CadenceRecord::default()
                 },
             ),
             ("cursor", asked(3_000)),
@@ -513,6 +589,40 @@ mod tests {
         );
     }
 
+    /// A 429 holds that account to five minutes for a day, even once it answers again; another
+    /// account of the provider, and the same one a day later, are back on the catalog floor.
+    #[test]
+    fn a_429_raises_the_accounts_floor_to_five_minutes_for_a_day() {
+        let now = utc(1_000_000);
+        let record = CadenceRecord {
+            last_attempt_at: Some(now - chrono::Duration::seconds(120)),
+            backoff: None,
+            raised_floor: Some(raised_floor_after_429(
+                "acct",
+                now - chrono::Duration::hours(23),
+            )),
+        };
+        let asks = |account: &str, at: DateTime<Utc>| {
+            !gate(&[ProviderId::Codex], false, at, |_| GateInput {
+                record: Some(&record),
+                account: account.to_owned(),
+                read_elsewhere: false,
+            })
+            .is_empty()
+        };
+        assert!(
+            !asks("acct", now),
+            "120 s is past Codex's 60 s but inside five minutes"
+        );
+        assert!(asks("other", now));
+        assert!(asks("acct", now + chrono::Duration::hours(1)));
+        assert_eq!(
+            not_before(ProviderId::Codex, Some(&record), "acct", now),
+            Some(now + chrono::Duration::seconds(180)),
+            "the scheduler waits for the raised floor"
+        );
+    }
+
     #[test]
     fn a_fresh_reading_from_another_mac_skips_the_provider_and_this_macs_own_does_not() {
         let now = utc(10_000);
@@ -538,8 +648,8 @@ mod tests {
         };
         assert!(skip(summary("other", 120)));
         assert!(
-            !skip(summary("other", 301)),
-            "outside Claude's five-minute floor"
+            !skip(summary("other", 181)),
+            "outside Claude's three-minute floor"
         );
         assert!(!skip(summary("mine", 10)), "this Mac's own reading");
         assert!(
