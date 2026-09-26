@@ -59,6 +59,13 @@ each entry on top of main and the entries ahead of it, and only what passed ther
 request is not re-synced and re-run because something else landed first. Queue with
 `gh pr merge --auto` when checks pass.
 
+The macOS work — Rust and Swift (`verify`) and iOS (`verify-ios`, `verify-ios-ui`) — runs once, in
+the queue, where it decides the merge. A pull request's own `ci` run answers those required checks
+as *deferred* from Ubuntu and runs only the Linux jobs; the pre-push hook has already run the tiers a
+change touches, so a macOS failure first seen in the queue drops the entry and is fixed and
+re-queued like any other. The push to main repeats `verify`, because only main writes the Rust
+cache, but not the iOS jobs, which the queue ran on that same commit.
+
 main carries the version being developed, not the one last released: after a stable `menubar-v*`
 release publishes, `release-menubar` opens the patch bump for the next one and lets it auto-merge,
 and `release-ios` does the same after an `ios-v*` upload, so a tag never waits on a version commit.

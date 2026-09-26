@@ -31,8 +31,8 @@ jobs:
   changes:
     runs-on: ubuntu-24.04
     outputs:
-      swift: ${{ steps.swift.outputs.run }}
-      ios: ${{ steps.ios.outputs.run }}
+      swift: ${{ steps.decide.outputs.swift }}
+      ios: ${{ steps.decide.outputs.ios }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -64,6 +64,29 @@ jobs:
         run: >-
           ./scripts/ci-changed-paths.sh any
           '^(apps/ios(/|$)|packages/apple-client(/|$)|packages/apple-shared(/|$)|packages/protocol(/|$)|packages/provider(/|$)|packages/design-tokens(/|$)|scripts/[^/]*ios[^/]*$|scripts/generate-(design-tokens|provider-catalog|plan-display)\.mjs$|scripts/ci-changed-paths\.sh$|\.github/workflows/ci\.yml$)'
+
+      # Rust, Swift and iOS work runs where it decides a merge: in the merge queue, which builds
+      # each entry on top of main. A pull request's own run (and a `workflow_dispatch` kick of one)
+      # leaves that work to the queue and answers the required checks as `deferred`; pre-push has
+      # already run the tiers the change touched. The push to main repeats Rust and Swift, whose
+      # cache only main may write, but not iOS, which the queue ran on this very commit.
+      - name: Decide where the macOS work runs
+        id: decide
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SWIFT: ${{ steps.swift.outputs.run }}
+          IOS: ${{ steps.ios.outputs.run }}
+        run: |
+          set -euo pipefail
+          defer() { if [ "$1" = true ]; then echo deferred; else echo "$1"; fi; }
+          case "$EVENT_NAME" in
+            merge_group) swift="$SWIFT"; ios="$IOS" ;;
+            push) swift="$SWIFT"; ios="$(defer "$IOS")" ;;
+            *) swift="$(defer "$SWIFT")"; ios="$(defer "$IOS")" ;;
+          esac
+          echo "Rust and Swift: $swift; iOS: $ios ($EVENT_NAME)" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "swift=$swift" >> "$GITHUB_OUTPUT"
+          echo "ios=$ios" >> "$GITHUB_OUTPUT"
 
   # TypeScript, the provider catalog, and Biome formatting need no macOS toolchain, so they
   # run here and leave `verify` carrying only Swift and macOS-gated Rust.
@@ -159,6 +182,10 @@ jobs:
             false)
               echo "Rust and Swift: nothing they depend on changed; answered on $RUNNER_OS." \
                 | tee -a "$GITHUB_STEP_SUMMARY" ;;
+            deferred)
+              echo "Rust and Swift: changed; the merge queue runs them on top of main, so this" \
+                "${{ github.event_name }} run does not repeat them." \
+                | tee -a "$GITHUB_STEP_SUMMARY" ;;
             *)
               # Neither answer means the selection did not reach this job, which is not a reason to
               # call a required check green.
@@ -246,6 +273,10 @@ jobs:
             false)
               echo "iOS unit tests: nothing they depend on changed; answered on $RUNNER_OS." \
                 | tee -a "$GITHUB_STEP_SUMMARY" ;;
+            deferred)
+              echo "iOS unit tests: changed; the merge queue runs them on top of main, so this" \
+                "${{ github.event_name }} run does not repeat them." \
+                | tee -a "$GITHUB_STEP_SUMMARY" ;;
             *)
               # Neither answer means the selection did not reach this job, which is not a reason to
               # call a required check green.
@@ -332,6 +363,10 @@ jobs:
                 | tee -a "$GITHUB_STEP_SUMMARY" ;;
             false)
               echo "iOS journeys: nothing they depend on changed; answered on $RUNNER_OS." \
+                | tee -a "$GITHUB_STEP_SUMMARY" ;;
+            deferred)
+              echo "iOS journeys: changed; the merge queue runs them on top of main, so this" \
+                "${{ github.event_name }} run does not repeat them." \
                 | tee -a "$GITHUB_STEP_SUMMARY" ;;
             *)
               # Neither answer means the selection did not reach this job, which is not a reason to
