@@ -1169,6 +1169,207 @@ public struct UsagePeriodBounds: Codable, Equatable, Sendable {
   }
 }
 
+/// One model of a period's `model_series` legend.
+///
+/// `provider` is the inference provider the Account's agent tree files the model under, so a
+/// series and a tree leaf take the same colour. Only the folded ``UsageModelSeries/otherModel``
+/// names none; a provider this build has never heard of reads as `.unknown`.
+public struct UsageModelSeriesEntry: Codable, Equatable, Sendable {
+  public let model: String
+  public let provider: InferenceProvider?
+
+  public init(model: String, provider: InferenceProvider?) {
+    self.model = model
+    self.provider = provider
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    model = try container.decode(String.self, forKey: .model)
+    provider = try container.decode(InferenceProvider?.self, forKey: .provider)
+    guard WireValidation.isModel(model) else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .model,
+        in: container,
+        debugDescription: "Invalid Usage model series entry."
+      )
+    }
+  }
+
+  /// The folded rest of the period, which spans providers.
+  public var isOther: Bool { model == UsageModelSeries.otherModel }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(model, forKey: .model)
+    try container.encode(provider, forKey: .provider)
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case model
+    case provider
+  }
+}
+
+/// One model's Usage on one local date. Fresh input is `inputTokens` less both cache subsets.
+///
+/// `costMicrousd` is null when any row behind the cell could not be priced: a cell carries no
+/// partial sum, because a chart would draw it as the whole.
+public struct UsageModelSeriesCell: Codable, Equatable, Sendable {
+  public let model: String
+  public let totalTokens: Int
+  public let inputTokens: Int
+  public let outputTokens: Int
+  public let cacheReadInputTokens: Int
+  public let cacheWriteInputTokens: Int
+  public let costMicrousd: String?
+
+  public init(
+    model: String,
+    totalTokens: Int,
+    inputTokens: Int,
+    outputTokens: Int,
+    cacheReadInputTokens: Int,
+    cacheWriteInputTokens: Int,
+    costMicrousd: String?
+  ) {
+    self.model = model
+    self.totalTokens = totalTokens
+    self.inputTokens = inputTokens
+    self.outputTokens = outputTokens
+    self.cacheReadInputTokens = cacheReadInputTokens
+    self.cacheWriteInputTokens = cacheWriteInputTokens
+    self.costMicrousd = costMicrousd
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    model = try container.decode(String.self, forKey: .model)
+    totalTokens = try container.decode(Int.self, forKey: .totalTokens)
+    inputTokens = try container.decode(Int.self, forKey: .inputTokens)
+    outputTokens = try container.decode(Int.self, forKey: .outputTokens)
+    cacheReadInputTokens = try container.decode(Int.self, forKey: .cacheReadInputTokens)
+    cacheWriteInputTokens = try container.decode(Int.self, forKey: .cacheWriteInputTokens)
+    costMicrousd = try container.decode(String?.self, forKey: .costMicrousd)
+    guard isValid else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .model,
+        in: container,
+        debugDescription: "Invalid Usage model series cell."
+      )
+    }
+  }
+
+  /// The fields the read schema names, each on its own; the sums between them are the
+  /// writer's promise, not a reason to refuse a read.
+  public var isValid: Bool {
+    WireValidation.isModel(model)
+      && [totalTokens, inputTokens, outputTokens, cacheReadInputTokens, cacheWriteInputTokens]
+        .allSatisfy(WireValidation.isSafeNonnegative)
+      && (costMicrousd.map(WireValidation.isNonnegativeInteger) ?? true)
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(model, forKey: .model)
+    try container.encode(totalTokens, forKey: .totalTokens)
+    try container.encode(inputTokens, forKey: .inputTokens)
+    try container.encode(outputTokens, forKey: .outputTokens)
+    try container.encode(cacheReadInputTokens, forKey: .cacheReadInputTokens)
+    try container.encode(cacheWriteInputTokens, forKey: .cacheWriteInputTokens)
+    try container.encode(costMicrousd, forKey: .costMicrousd)
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case model
+    case totalTokens
+    case inputTokens
+    case outputTokens
+    case cacheReadInputTokens
+    case cacheWriteInputTokens
+    case costMicrousd
+  }
+}
+
+/// One local date of a period's series: a cell per legend model with Usage that date, in legend
+/// order. An absent cell is no Usage, never a stated zero.
+public struct UsageModelSeriesDay: Codable, Equatable, Sendable {
+  public let date: String
+  public let partial: Bool
+  public let models: [UsageModelSeriesCell]
+
+  public init(date: String, partial: Bool, models: [UsageModelSeriesCell]) {
+    self.date = date
+    self.partial = partial
+    self.models = models
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    date = try container.decode(String.self, forKey: .date)
+    partial = try container.decode(Bool.self, forKey: .partial)
+    models = try container.decode([UsageModelSeriesCell].self, forKey: .models)
+    guard WireValidation.isCalendarDate(date),
+      models.count <= WireCodec.maximumUsagePeriodLeaves
+    else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .date,
+        in: container,
+        debugDescription: "Invalid Usage model series day."
+      )
+    }
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case date
+    case partial
+    case models
+  }
+}
+
+/// A period's Usage by local date and model, merged across agents, answered when the read asks
+/// `series=model`.
+///
+/// `models` is the legend: the period's largest models by total tokens, largest first, then
+/// ``otherModel`` when anything else remains. `days` names the dates the period's `days` does.
+/// A reader takes the legend as it comes; the writer's cap (``UsageModelSeries/limit``) is not
+/// held against it, only the wire's leaf cap.
+public struct UsageModelSeries: Codable, Equatable, Sendable {
+  /// The protocol's `USAGE_MODEL_SERIES_LIMIT`: how many models Relay names before the rest
+  /// fold into ``otherModel``.
+  public static let limit = 8
+  /// The protocol's `USAGE_OTHER_MODEL`.
+  public static let otherModel = "other"
+
+  public let models: [UsageModelSeriesEntry]
+  public let days: [UsageModelSeriesDay]
+
+  public init(models: [UsageModelSeriesEntry], days: [UsageModelSeriesDay]) {
+    self.models = models
+    self.days = days
+  }
+
+  public init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    models = try container.decode([UsageModelSeriesEntry].self, forKey: .models)
+    days = try container.decode([UsageModelSeriesDay].self, forKey: .days)
+    guard models.count <= WireCodec.maximumUsagePeriodLeaves,
+      days.count <= WireCodec.maximumUsagePeriodDays
+    else {
+      throw DecodingError.dataCorruptedError(
+        forKey: .models,
+        in: container,
+        debugDescription: "Invalid Usage model series."
+      )
+    }
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case models
+    case days
+  }
+}
+
 /// `GET /api/v6/account/usage/period` body: local `days[]`, coverage, bounds, and revision.
 public struct AccountUsagePeriodResponse: Codable, Equatable, Sendable {
   public let protocolVersion: Int
@@ -1179,6 +1380,8 @@ public struct AccountUsagePeriodResponse: Codable, Equatable, Sendable {
   public let cacheSaved: UsageCacheSaved
   public let days: [UsagePeriodDayBucket]
   public let agents: [UsageAgentUsage]?
+  /// Present exactly when the read asked `series=model`.
+  public let modelSeries: UsageModelSeries?
   public let coverage: UsagePeriodCoverage
   public let revision: UsagePeriodRevision
 
@@ -1190,6 +1393,7 @@ public struct AccountUsagePeriodResponse: Codable, Equatable, Sendable {
     cacheSaved: UsageCacheSaved,
     days: [UsagePeriodDayBucket],
     agents: [UsageAgentUsage]? = nil,
+    modelSeries: UsageModelSeries? = nil,
     coverage: UsagePeriodCoverage,
     revision: UsagePeriodRevision
   ) {
@@ -1201,6 +1405,7 @@ public struct AccountUsagePeriodResponse: Codable, Equatable, Sendable {
     self.cacheSaved = cacheSaved
     self.days = days
     self.agents = agents
+    self.modelSeries = modelSeries
     self.coverage = coverage
     self.revision = revision
   }
@@ -1219,6 +1424,7 @@ public struct AccountUsagePeriodResponse: Codable, Equatable, Sendable {
     } else {
       agents = nil
     }
+    modelSeries = try container.decodeIfPresent(UsageModelSeries.self, forKey: .modelSeries)
     coverage = try container.decode(UsagePeriodCoverage.self, forKey: .coverage)
     revision = try container.decode(UsagePeriodRevision.self, forKey: .revision)
     guard isValid else {
@@ -1273,6 +1479,7 @@ public struct AccountUsagePeriodResponse: Codable, Equatable, Sendable {
     case cacheSaved
     case days
     case agents
+    case modelSeries
     case coverage
     case revision
   }

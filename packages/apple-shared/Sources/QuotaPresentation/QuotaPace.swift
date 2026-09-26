@@ -62,14 +62,8 @@ public enum QuotaPace: Equatable, Sendable {
 
   /// The pace of one window.
   public static func evaluate(_ reading: QuotaPaceReading, now: Date) -> QuotaPace {
-    guard let resetsAt = reading.resetsAt, let seconds = reading.cadenceSeconds,
-      seconds > 0, !reading.isBalanceOnly
-    else {
-      return .none
-    }
-    let cadence = Double(seconds)
-    let windowStart = resetsAt.addingTimeInterval(-cadence)
-    let elapsed = min(max(now.timeIntervalSince(windowStart) / cadence, 0), 1)
+    guard let running = reading.runningWindow(now: now) else { return .none }
+    let (windowStart, cadence, elapsed) = (running.start, running.cadence, running.elapsed)
     let used = reading.usedPercent
     guard elapsed >= minimumElapsedFraction, used >= minimumUsedPercent else { return .none }
     let projected = min(used / elapsed, maximumProjectionPercent)
@@ -102,6 +96,16 @@ public struct QuotaPaceReading: Equatable, Sendable {
     self.resetsAt = resetsAt
     self.cadenceSeconds = cadenceSeconds
     self.isBalanceOnly = isBalanceOnly
+  }
+
+  /// The running window: when it started, how long it is, and how much of it is behind `now`
+  /// (0…1). Nil for a window with no reset or cadence, and for a balance. The one statement of
+  /// elapsed time that ``QuotaPace`` and ``EvenPacePosition`` both read.
+  func runningWindow(now: Date) -> (start: Date, cadence: TimeInterval, elapsed: Double)? {
+    guard let resetsAt, let cadenceSeconds, cadenceSeconds > 0, !isBalanceOnly else { return nil }
+    let cadence = TimeInterval(cadenceSeconds)
+    let start = resetsAt.addingTimeInterval(-cadence)
+    return (start, cadence, min(max(now.timeIntervalSince(start) / cadence, 0), 1))
   }
 }
 

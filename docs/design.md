@@ -74,12 +74,14 @@ Colour never carries status alone. Every state also has a text label.
 `openai`, `google`, `xai`, `moonshot`, `deepseek`, `cursor`, `unknown`) and its rank by tokens
 inside that provider over the Account's `all` period: ranks 1–4 take shades 1–4, anything lower is
 `model.other`. The rank is over all history, not the period on screen, so switching period, page,
-or device never recolours a model. Each platform writes one pure function for that assignment and
-every chart on the surface uses it. Never assign colour by rank across providers, and never make a
-model mint. Amber and red appear only for risk. Model fills are chart fills that always sit beside a
-name, a ledger row, or a label, so they are not held to 3:1 against the canvas (WCAG 1.4.11 applies
-where a fill is the only carrier, which no Quota chart allows); inside a family, shade 1 stands out
-most from the canvas and each later rank less.
+or device never recolours a model. A tie inside a provider goes to the model name in ascending
+order, so every device agrees. Each platform writes one pure function for that assignment
+(`ModelColorAssignment` in `packages/apple-shared` on Apple) and every chart on the surface uses
+it. Never assign colour by rank across providers, and never make a model mint. Amber and red
+appear only for risk. Model fills are chart fills that always sit beside a name, a ledger row, or a
+label, so they are not held to 3:1 against the canvas (WCAG 1.4.11 applies where a fill is the only
+carrier, which no Quota chart allows); inside a family, shade 1 stands out most from the canvas and
+each later rank less.
 
 ### Apple overrides
 
@@ -165,7 +167,7 @@ provider-mark catalog.
 | Even-pace tick | A thin tick on a meter where remaining would stand now at an even burn rate. A fill ending short of the tick is burning faster than an even pace. Only where the pace rule answers; hidden from assistive tech, because the pace line says it in words. |
 | Quota band | On analysis pages, one row under the header: per subscription an 18-point ring of its tightest window's remaining in the band colour, provider name, remaining percent, window title; a stale reading shows its status word, a balance its amount. Each item links to the subscription; the row ends with **Quota →** and scrolls sideways when narrow. |
 | Tightest-window gauge | The Quota mark's ring at size, remaining as the arc in the band colour, the percent inside. Only for the single tightest window at the head of a quota page; every other window is a linear meter. |
-| Next resets | The next seven days in local time, one lane per current subscription, a ring per reset instant in the band colour of the window it refills (the lowest when several coincide), labelled with window titles. Its text alternative is each window's **Resets** line. |
+| Next resets | The next seven days in local time, one lane per current subscription, a ring per reset instant in the band colour of the window it refills (the lowest when several coincide, which is resetting in the same minute), labelled with window titles. Its text alternative is each window's **Resets** line. |
 | Pace line | Optional explanatory projection, never a second unlabeled headline. Solid observations, dashed estimate, reset endpoint. The dashed end agrees with the pace sentence. |
 | List row | Leading identity, main text, trailing value or action. The full target is only a control when it navigates or acts. |
 | Capsule | Short plan or scope descriptor; neutral unless it truly signals state. Never a fake button. |

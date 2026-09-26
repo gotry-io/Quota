@@ -478,28 +478,23 @@ struct MenuBarLabelModel: Equatable, Hashable, Sendable {
     var provider: ProviderID { item.identity.provider }
   }
 
-  /// The smallest remaining percent any window of any current reading reports, among the
-  /// readings `allowed` names — or every current reading when `allowed` is nil.
+  /// The shared ``TightestWindow`` rule over the current readings `allowed` names — or every
+  /// current reading when `allowed` is nil.
   ///
-  /// Balance-only windows carry no budget to be a percent of, so they cannot be the
-  /// constraint; every other window can. The provider this returns is whose cadence pair a
-  /// lone item then shows; extras can win the choice without occupying the pair.
+  /// The provider this returns is whose cadence pair a lone item then shows; extras can win the
+  /// choice without occupying the pair.
   private static func tightestReading(
     in overview: [LocalServiceOverviewItem],
     allowed: Set<ProviderID>?,
     now: Date
   ) -> Reading? {
-    var tightest: Reading?
-    for item in overview where isCurrent(item, now: now) {
-      if let allowed, !allowed.contains(item.identity.provider) { continue }
-      for window in item.snapshot.windows where window.showsPercentMeter {
-        guard tightest.map({ window.remainingPercent < $0.remainingPercent }) ?? true else {
-          continue
-        }
-        tightest = Reading(item: item, remainingPercent: window.remainingPercent)
-      }
-    }
-    return tightest
+    TightestWindow.choose(
+      in: overview,
+      isCurrent: { item in
+        isCurrent(item, now: now) && (allowed.map { $0.contains(item.identity.provider) } ?? true)
+      },
+      windows: { $0.snapshot.windows }
+    ).map { Reading(item: $0.subscription, remainingPercent: $0.remainingPercent) }
   }
 
   /// Which Overview readings still describe live quota, in Overview's order.
