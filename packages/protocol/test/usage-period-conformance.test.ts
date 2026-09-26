@@ -4,6 +4,7 @@ import {
   IanaTimezoneSchema,
   MAXIMUM_USAGE_PERIOD_DAYS,
   USAGE_HOUR_GRID_RULE,
+  USAGE_MODEL_SERIES_LIMIT,
   UsagePeriodRangeSchema,
 } from "../src/index.ts";
 
@@ -28,6 +29,7 @@ type Case = {
 const conformance = conformanceJson as unknown as {
   hour_grid_rule: string;
   maximum_local_days: number;
+  model_series_limit: number;
   cases: Case[];
 };
 
@@ -42,6 +44,10 @@ const required = [
   "offset_minus_0330",
   "deletion",
   "retention_edge",
+  "series_top_n_and_other",
+  "series_merges_agents",
+  "series_agent_scoped_alias",
+  "series_dst_back",
 ] as const;
 
 /**
@@ -52,6 +58,7 @@ describe("usage period conformance", () => {
   it("names the hour-grid rule and every required case", () => {
     expect(conformance.hour_grid_rule).toBe(USAGE_HOUR_GRID_RULE);
     expect(conformance.maximum_local_days).toBe(MAXIMUM_USAGE_PERIOD_DAYS);
+    expect(conformance.model_series_limit).toBe(USAGE_MODEL_SERIES_LIMIT);
     expect(conformance.cases.map((testCase) => testCase.name)).toEqual([...required]);
   });
 

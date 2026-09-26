@@ -325,7 +325,8 @@ report shape, folded against the catalogs this device already holds; it collects
 reaches no network. Account (`source: account`) is Relay's
 `GET /api/v6/account/usage/period` in the caller's IANA timezone, mapped to that same detail
 shape plus coverage
-([ADR 0055](decisions/0055-an-account-period-is-a-local-date-range.md)). A state change discards the
+([ADR 0055](decisions/0055-an-account-period-is-a-local-date-range.md)). With `series=model` that
+read also answers `model_series`, the range by local date and model, merged across agents. A state change discards the
 folds QuotaBar asked for, because the hours behind them moved. The website and Quota iOS read that
 route for every Usage selection except `all`, and for the budget month. QuotaBar Account reads it
 for week / month / custom. The year Activity heatmap still reads UTC activity days.
@@ -434,7 +435,7 @@ and model catalog revisions, and — for the summary — the caller's local date
 moves `today` with no write behind it. The summary stamp is a handful of aggregates over the devices
 and observation rows the response projects, plus the Account's `collection_requested_at`; the activity and period stamps are usage-only (device count, usage
 revision, generation, and the Account's `updated_at`). Activity includes `detail` in the query string it
-keys on; the period read includes `from`, `to`, `timezone`, and `breakdown`. A matching `If-None-Match` returns 304 before any Usage query runs. `detail=hours`
+keys on; the period read includes `from`, `to`, `timezone`, `breakdown`, and `series`. A matching `If-None-Match` returns 304 before any Usage query runs. `detail=hours`
 is the same rule: `tz` is in the query string, so a different clock is a different validator.
 The period read is inclusive local dates in a required IANA timezone, at most 366 days, on the hour
 grid ([ADR 0055](decisions/0055-an-account-period-is-a-local-date-range.md)): a local day begins at

@@ -65,7 +65,7 @@ instructions. Stable ADR URLs stay.
 | [0052](./0052-quotabar-is-the-app-and-the-menu-bar-is-part-of-it.md) | QuotaBar is the app, and the menu bar is part of it | Accepted |  | 2026-09-18, 2026-09-21 |
 | [0053](./0053-one-alert-delivery-package-for-both-apps.md) | One alert delivery package for both Apple apps | Accepted |  | 2026-09-21 |
 | [0054](./0054-quotabar-is-resident-in-the-menu-bar.md) | QuotaBar is resident in the menu bar | Accepted |  |  |
-| [0055](./0055-an-account-period-is-a-local-date-range.md) | An Account period is a local-date range on the hour grid | Accepted |  |  |
+| [0055](./0055-an-account-period-is-a-local-date-range.md) | An Account period is a local-date range on the hour grid | Accepted |  | 2026-09-26 |
 | [0056](./0056-a-period-export-is-the-period-on-screen.md) | A period export is the period on screen | Accepted |  |  |
 | [0057](./0057-content-is-opaque-glass-is-chrome.md) | Content is opaque; glass is chrome | Accepted |  |  |
 | [0058](./0058-relay-runs-on-node-only.md) | Relay runs on Node only | Accepted |  |  |

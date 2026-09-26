@@ -1,4 +1,8 @@
-import { MODEL_CATALOG } from "@gotry-io/quota-protocol";
+import {
+  MODEL_CATALOG,
+  USAGE_MODEL_SERIES_LIMIT,
+  USAGE_OTHER_MODEL,
+} from "@gotry-io/quota-protocol";
 import type { StoredUsageDailyRow } from "@gotry-io/relay-core";
 import { describe, expect, it } from "vitest";
 import { PRICING_CATALOG } from "../src/pricing-catalog.ts";
@@ -6,6 +10,7 @@ import {
   type AccountUsageBoundary,
   buildAccountUsage,
   buildActivityDays,
+  buildLocalPeriodDays,
   UsageSummaryLimitError,
 } from "../src/usage-summary.ts";
 
@@ -198,6 +203,35 @@ describe("Account Usage activity", () => {
     expect(days[0]?.totals.messages).toBe(2);
     expect(days[1]?.totals.messages).toBe(1);
     expect(days.every((day) => day.partial === false)).toBe(true);
+  });
+});
+
+describe("Account Usage model series", () => {
+  it("folds a reported model named other into the other series instead of naming it twice", () => {
+    const { device_id: _device, ...base } = { ...usageRow(null, 0), date: today };
+    const rows = [
+      ...Array.from({ length: USAGE_MODEL_SERIES_LIMIT }, (_, index) => ({
+        ...base,
+        model: `model-${index}`,
+        input_tokens: 1_000 - index,
+      })),
+      { ...base, model: USAGE_OTHER_MODEL, input_tokens: 5_000 },
+      { ...base, model: "model-tail", input_tokens: 1 },
+    ];
+    const series = buildLocalPeriodDays({
+      rows,
+      catalog: PRICING_CATALOG,
+      modelCatalog: MODEL_CATALOG,
+    }).model_series;
+
+    expect(series?.models.map((entry) => entry.model)).toEqual([
+      ...Array.from({ length: USAGE_MODEL_SERIES_LIMIT }, (_, index) => `model-${index}`),
+      USAGE_OTHER_MODEL,
+    ]);
+    expect(series?.days[0]?.models.at(-1)).toMatchObject({
+      model: USAGE_OTHER_MODEL,
+      input_tokens: 5_001,
+    });
   });
 });
 

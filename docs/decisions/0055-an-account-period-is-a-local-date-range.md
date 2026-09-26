@@ -5,6 +5,8 @@
 - Extends [ADR 0024](0024-hour-versioned-usage-and-daily-rollups.md) and
   [ADR 0040](0040-a-period-is-folded-where-its-days-already-are.md)
 - Supersedes the sentence in ADR 0040 that Relay gains no period route
+- Amended: 2026-09-26 — optional `series=model` adds `model_series`, the period by local date and
+  model, merged across agents (additive; no protocol version)
 
 ## Context
 
@@ -35,6 +37,17 @@ repeat counts both copies.**
 `last_30_days` is `from=localDate-29`. `all` stays the existing 730 UTC-day summary window.
 Optional `breakdown=1` carries the agent tree, bounded like the summary.
 
+**Amended 2026-09-26: `series=model` adds the period by day and model.** `model_series.models` is
+the legend: the `USAGE_MODEL_SERIES_LIMIT` (8) largest models of the range by total tokens, then
+`other` (no provider) when anything else remains. `model_series.days` names exactly the dates
+`days[]` does, and a cell exists only for a model with Usage that date. The local-day query then
+keeps agent as a grouping dimension, because an alias may be scoped to one agent: each row
+resolves its model with its own agent and local date, and only then are agents merged — never
+`MIN(agent)`. When the series is asked, `days[]` folds those same agent-kept rows, so a day's
+cells and its bucket come from one set of prices. A cell's `cost_microusd` is null when any row
+behind it is unpriced. The field is additive; a read without `series` is unchanged, and `series`
+is part of the query string the ETag already keys on. Any other `series` value is 400.
+
 **Missing ≠ zero.** A local day with no stored hour is omitted from `days[]`. Totals do not gain a
 synthetic $0 / 0-token day. Unpriced cost stays unpriced, never `"0"`.
 
@@ -44,7 +57,7 @@ when that cutoff cuts this range. Totals are only over what remains. Deleted dev
 (`deleted_at IS NULL` on every usage read) do not linger.
 
 **The cache is the ETag we already have.** Keyed by account, path, query (`from`, `to`, `timezone`,
-`breakdown`), usage version stamp, catalog revisions, fold version, and a retention cutoff only
+`breakdown`, `series`), usage version stamp, catalog revisions, fold version, and a retention cutoff only
 when it cuts the range. Explicit `{from,to}` does not roll over with the wall clock. A matching
 `If-None-Match` returns 304 before any Usage SQL. There is no local-day rollup table.
 

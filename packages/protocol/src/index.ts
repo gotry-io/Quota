@@ -120,6 +120,11 @@ export const USAGE_HOUR_GRID_RULE =
 export const MAXIMUM_USAGE_PERIOD_LEAVES = 200;
 /** The model that every leaf past {@link MAXIMUM_USAGE_PERIOD_LEAVES} folds into. */
 export const USAGE_OTHER_MODEL = "other";
+/**
+ * How many models a period's `model_series` names before the rest fold into
+ * {@link USAGE_OTHER_MODEL}: the legend a chart can still tell apart.
+ */
+export const USAGE_MODEL_SERIES_LIMIT = 8;
 const MAXIMUM_USAGE_BREAKDOWNS = 1_000;
 /**
  * The most local days one bounded local period can name.
@@ -1745,6 +1750,134 @@ export const UsagePeriodDayBucketSchema = z
 export type UsagePeriodDayBucket = z.infer<typeof UsagePeriodDayBucketSchema>;
 
 /**
+ * One model of a period's series: which model, and the company whose model it is.
+ *
+ * `provider` is the inference provider the Account's agent tree files the model under, so a
+ * client colors a series and a tree leaf the same way. The folded {@link USAGE_OTHER_MODEL}
+ * series spans providers and names none.
+ */
+export const UsageModelSeriesEntrySchema = z
+  .object({
+    model: ModelSchema,
+    provider: InferenceProviderSchema.nullable(),
+  })
+  .strict();
+export type UsageModelSeriesEntry = z.infer<typeof UsageModelSeriesEntrySchema>;
+
+/**
+ * One model's share of one local date. The token fields are the ones a stacked chart and the
+ * token-mix roles read; fresh input is `input_tokens` less both cache subsets.
+ *
+ * `cost_microusd` is the priced amount, or null when any row behind the cell could not be
+ * priced — a cell carries no partial sum, because a chart would draw it as the whole.
+ */
+export const UsageModelSeriesCellSchema = z
+  .object({
+    model: ModelSchema,
+    total_tokens: SafeNonnegativeIntegerSchema,
+    input_tokens: SafeNonnegativeIntegerSchema,
+    output_tokens: SafeNonnegativeIntegerSchema,
+    cache_read_input_tokens: SafeNonnegativeIntegerSchema,
+    cache_write_input_tokens: SafeNonnegativeIntegerSchema,
+    cost_microusd: z.string().max(32).regex(NONNEGATIVE_INTEGER_PATTERN).nullable(),
+  })
+  .strict()
+  .superRefine((cell, context) => {
+    const totalTokens = cell.input_tokens + cell.output_tokens;
+    if (!Number.isSafeInteger(totalTokens) || cell.total_tokens !== totalTokens) {
+      context.addIssue({
+        code: "custom",
+        path: ["total_tokens"],
+        message: "total_tokens must equal input_tokens plus output_tokens.",
+      });
+    }
+    const cachedInput = cell.cache_read_input_tokens + cell.cache_write_input_tokens;
+    if (!Number.isSafeInteger(cachedInput) || cachedInput > cell.input_tokens) {
+      context.addIssue({
+        code: "custom",
+        path: ["input_tokens"],
+        message: "Cache token subsets must not exceed input_tokens.",
+      });
+    }
+  });
+export type UsageModelSeriesCell = z.infer<typeof UsageModelSeriesCellSchema>;
+
+const UsageModelSeriesDaySchema = z
+  .object({
+    date: UsageDateSchema,
+    partial: z.boolean(),
+    models: z.array(UsageModelSeriesCellSchema).max(USAGE_MODEL_SERIES_LIMIT + 1),
+  })
+  .strict();
+export type UsageModelSeriesDay = z.infer<typeof UsageModelSeriesDaySchema>;
+
+/**
+ * A period's usage by day and model, merged across agents (`series=model`).
+ *
+ * `models` is the legend: the {@link USAGE_MODEL_SERIES_LIMIT} largest models of the period by
+ * total tokens, largest first, then {@link USAGE_OTHER_MODEL} when anything else remains. `days`
+ * names exactly the dates the period's `days[]` does. A cell appears only for a model that has
+ * Usage that date, in legend order: an absent cell is no Usage, never a stated zero.
+ */
+export const UsageModelSeriesSchema = z
+  .object({
+    models: z.array(UsageModelSeriesEntrySchema).max(USAGE_MODEL_SERIES_LIMIT + 1),
+    days: z.array(UsageModelSeriesDaySchema).max(MAXIMUM_USAGE_PERIOD_DAYS),
+  })
+  .strict()
+  .superRefine((series, context) => {
+    const order = new Map<string, number>();
+    for (const [index, entry] of series.models.entries()) {
+      const other = entry.model === USAGE_OTHER_MODEL;
+      if (order.has(entry.model)) {
+        context.addIssue({
+          code: "custom",
+          path: ["models", index, "model"],
+          message: "models must be unique.",
+        });
+      }
+      order.set(entry.model, index);
+      if (other !== (entry.provider === null)) {
+        context.addIssue({
+          code: "custom",
+          path: ["models", index, "provider"],
+          message: "Only the other series names no provider.",
+        });
+      }
+      if (other ? index !== series.models.length - 1 : index >= USAGE_MODEL_SERIES_LIMIT) {
+        context.addIssue({
+          code: "custom",
+          path: ["models", index, "model"],
+          message: `At most ${USAGE_MODEL_SERIES_LIMIT} models, then other last.`,
+        });
+      }
+    }
+    for (const [dayIndex, day] of series.days.entries()) {
+      const previous = series.days[dayIndex - 1];
+      if (previous !== undefined && day.date <= previous.date) {
+        context.addIssue({
+          code: "custom",
+          path: ["days", dayIndex, "date"],
+          message: "days must be unique local dates in ascending order.",
+        });
+      }
+      let last = -1;
+      for (const [cellIndex, cell] of day.models.entries()) {
+        const position = order.get(cell.model);
+        if (position === undefined || position <= last) {
+          context.addIssue({
+            code: "custom",
+            path: ["days", dayIndex, "models", cellIndex, "model"],
+            message: "A cell names a model of the legend, once, in legend order.",
+          });
+        }
+        last = position ?? last;
+      }
+    }
+  });
+export type UsageModelSeries = z.infer<typeof UsageModelSeriesSchema>;
+
+/**
  * How much of the asked local range is still inside retention, and whether any stored hour was
  * scanned incompletely.
  *
@@ -1796,6 +1929,8 @@ const AccountUsagePeriodResponseObjectSchema = z
     cache_saved: UsageCacheSavedSchema,
     days: z.array(UsagePeriodDayBucketSchema).max(MAXIMUM_USAGE_PERIOD_DAYS),
     agents: z.array(UsageAgentUsageSchema).max(BillingAgentSchema.options.length).optional(),
+    /** Present exactly when the read asked `series=model`. */
+    model_series: UsageModelSeriesSchema.optional(),
     coverage: UsagePeriodCoverageSchema,
     revision: UsagePeriodRevisionSchema,
   })
@@ -1820,6 +1955,14 @@ export const AccountUsagePeriodResponseSchema = AccountUsagePeriodResponseObject
           message: "days must be unique local dates in ascending order.",
         });
       }
+    }
+    const seriesDates = response.model_series?.days.map((day) => day.date).join();
+    if (seriesDates !== undefined && seriesDates !== response.days.map((day) => day.date).join()) {
+      context.addIssue({
+        code: "custom",
+        path: ["model_series", "days"],
+        message: "model_series names exactly the dates days[] does.",
+      });
     }
   },
 );
@@ -2428,9 +2571,26 @@ const UsagePeriodDayBucketReadSchema = UsagePeriodDayBucketSchema.extend({
   cost: UsageCostOutcomeReadSchema,
 }).loose();
 
+const UsageModelSeriesReadSchema = z.looseObject({
+  models: z
+    .array(UsageModelSeriesEntrySchema.extend({ provider: ReadEnumSchema.nullable() }).loose())
+    .max(MAXIMUM_USAGE_PERIOD_LEAVES),
+  days: z
+    .array(
+      UsageModelSeriesDaySchema.extend({
+        models: z
+          .array(z.looseObject({ ...UsageModelSeriesCellSchema.shape }))
+          .max(MAXIMUM_USAGE_PERIOD_LEAVES),
+      }).loose(),
+    )
+    .max(MAXIMUM_USAGE_PERIOD_DAYS),
+});
+export type UsageModelSeriesRead = z.infer<typeof UsageModelSeriesReadSchema>;
+
 export const AccountUsagePeriodResponseReadSchema = AccountUsagePeriodResponseObjectSchema.extend({
   days: z.array(UsagePeriodDayBucketReadSchema).max(MAXIMUM_USAGE_PERIOD_DAYS),
   agents: z.array(UsageAgentUsageReadSchema).max(MAXIMUM_USAGE_PERIOD_LEAVES).optional(),
+  model_series: UsageModelSeriesReadSchema.optional(),
   coverage: UsagePeriodCoverageSchema.loose(),
   revision: UsagePeriodRevisionSchema.loose(),
 }).loose();
