@@ -668,7 +668,50 @@ pub struct LocalHourUsage {
     pub date: String,
     /// The local hour of that date, 0 through 23.
     pub hour: u8,
+    /// Whether the scan behind this hour came up short.
+    pub partial: bool,
     pub row: DatedUsageRow,
+}
+
+/// How many models a period's `model_series` names before the rest fold into
+/// [`USAGE_OTHER_MODEL`] — the protocol's `USAGE_MODEL_SERIES_LIMIT`.
+pub const USAGE_MODEL_SERIES_LIMIT: usize = 8;
+
+/// One model of a period's series legend. Only the folded [`USAGE_OTHER_MODEL`] names no
+/// provider, because it spans them.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct UsageModelSeriesEntry {
+    pub model: String,
+    pub provider: Option<InferenceProvider>,
+}
+
+/// One legend model's Usage on one local date. The cost is null when any row behind the cell
+/// could not be priced: a cell carries no partial sum, because a chart would draw it as the whole.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct UsageModelSeriesCell {
+    pub model: String,
+    pub total_tokens: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_input_tokens: u64,
+    pub cache_write_input_tokens: u64,
+    pub cost_microusd: Option<String>,
+}
+
+/// One local date of a series: a cell per legend model with Usage that date, in legend order.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct UsageModelSeriesDay {
+    pub date: String,
+    pub partial: bool,
+    pub models: Vec<UsageModelSeriesCell>,
+}
+
+/// A period's Usage by local date and model, merged across agents — the shape Relay's period
+/// read answers with `series=model`, so This Mac and the Account draw one chart.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct UsageModelSeries {
+    pub models: Vec<UsageModelSeriesEntry>,
+    pub days: Vec<UsageModelSeriesDay>,
 }
 
 /// A day has 24 hours, and a rhythm names every one of them.
@@ -705,6 +748,9 @@ pub struct LocalUsagePeriodSummary {
     pub days: Option<Vec<LocalUsageDay>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hours_of_day: Option<Vec<LocalUsageHourOfDay>>,
+    /// The period by local date and model, for periods bounded by two local midnights.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_series: Option<UsageModelSeries>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub models_truncated: bool,
 }
@@ -975,6 +1021,7 @@ pub fn build_local_usage_summary_with_projects(
         },
         days: None,
         hours_of_day: None,
+        model_series: None,
         models_truncated,
     })
 }
@@ -1099,6 +1146,128 @@ pub fn build_local_usage_rhythm(
     }
     let rhythm = fold_usage_rhythm(&facts)?;
     Ok((days, rhythm.hours_of_day))
+}
+
+/// A period's legend and per-date cells, from the facts its days fold.
+///
+/// Each fact is resolved with its own agent and the date that prices it — an alias may be
+/// scoped to one agent — and only then merged across agents, so a model is the key this Mac's
+/// agent tree files a leaf under. The largest [`USAGE_MODEL_SERIES_LIMIT`] models by tokens (ties by name) are
+/// named; everything else, and a reported model that is literally [`USAGE_OTHER_MODEL`], is the
+/// folded `other`. A model's provider is the one its rows resolve to, the larger when a catalog
+/// ever files one model under two. This is Relay's `model_series` fold, answered on this Mac.
+pub fn build_local_model_series(
+    entries: &[LocalHourUsage],
+    pricing_catalog: Option<&crate::pricing::PricingCatalog>,
+    model_catalog: Option<&crate::model_catalog::ModelCatalog>,
+) -> Result<UsageModelSeries, UsageError> {
+    struct SeriesModel {
+        providers: BTreeMap<InferenceProvider, u64>,
+        tokens: u64,
+    }
+    let mut models: BTreeMap<String, SeriesModel> = BTreeMap::new();
+    let mut model_of = Vec::with_capacity(entries.len());
+    for entry in entries {
+        validate_dated_row(&entry.row)?;
+        let provider = crate::model_catalog::resolve_provider(model_catalog, &entry.row.row);
+        let model = model_catalog
+            .and_then(|catalog| {
+                crate::model_catalog::resolve_model(catalog, &entry.row.row, &entry.row.date)
+            })
+            .unwrap_or_else(|| entry.row.model.clone());
+        let tokens = entry
+            .row
+            .input_tokens
+            .checked_add(entry.row.output_tokens)
+            .ok_or_else(|| UsageError("Usage token total overflowed".into()))?;
+        let slot = models.entry(model.clone()).or_insert_with(|| SeriesModel {
+            providers: BTreeMap::new(),
+            tokens: 0,
+        });
+        *slot.providers.entry(provider).or_default() += tokens;
+        slot.tokens += tokens;
+        model_of.push(model);
+    }
+    let mut ranked: Vec<(&String, &SeriesModel)> = models
+        .iter()
+        .filter(|(model, _)| model.as_str() != USAGE_OTHER_MODEL)
+        .collect();
+    ranked.sort_by(|left, right| right.1.tokens.cmp(&left.1.tokens).then(left.0.cmp(right.0)));
+    ranked.truncate(USAGE_MODEL_SERIES_LIMIT);
+    let position: HashMap<&str, usize> = ranked
+        .iter()
+        .enumerate()
+        .map(|(index, (model, _))| (model.as_str(), index))
+        .collect();
+    let other_position = ranked.len();
+    let mut legend: Vec<UsageModelSeriesEntry> = ranked
+        .iter()
+        .map(|(model, entry)| UsageModelSeriesEntry {
+            model: (*model).clone(),
+            provider: entry
+                .providers
+                .iter()
+                .max_by(|left, right| {
+                    left.1
+                        .cmp(right.1)
+                        .then(right.0.as_str().cmp(left.0.as_str()))
+                })
+                .map(|(provider, _)| *provider),
+        })
+        .collect();
+    if ranked.len() < models.len() {
+        legend.push(UsageModelSeriesEntry {
+            model: USAGE_OTHER_MODEL.to_owned(),
+            provider: None,
+        });
+    }
+
+    let mut by_date: BTreeMap<&str, BTreeMap<usize, Vec<DatedUsageRow>>> = BTreeMap::new();
+    let mut partial_dates: BTreeMap<&str, bool> = BTreeMap::new();
+    for (entry, model) in entries.iter().zip(&model_of) {
+        let slot = position
+            .get(model.as_str())
+            .copied()
+            .unwrap_or(other_position);
+        by_date
+            .entry(entry.date.as_str())
+            .or_default()
+            .entry(slot)
+            .or_default()
+            .push(entry.row.clone());
+        *partial_dates.entry(entry.date.as_str()).or_default() |= entry.partial;
+    }
+    let mut days = Vec::with_capacity(by_date.len());
+    for (date, cells) in by_date {
+        let mut models = Vec::with_capacity(cells.len());
+        for (slot, rows) in cells {
+            let totals = summary_totals(&rows)?;
+            let cost = crate::pricing::calculate_usage_cost(
+                &rows,
+                pricing_catalog,
+                crate::pricing::UsageCostMode::Auto,
+            )?;
+            models.push(UsageModelSeriesCell {
+                model: legend[slot].model.clone(),
+                total_tokens: totals.total_tokens,
+                input_tokens: totals.input_tokens,
+                output_tokens: totals.output_tokens,
+                cache_read_input_tokens: totals.cache_read_input_tokens,
+                cache_write_input_tokens: totals.cache_write_input_tokens,
+                cost_microusd: (cost.status == crate::pricing::UsageCostStatus::Complete)
+                    .then(|| cost.amount_microusd.unwrap_or_else(|| "0".to_owned())),
+            });
+        }
+        days.push(UsageModelSeriesDay {
+            date: date.to_owned(),
+            partial: partial_dates.get(date).copied().unwrap_or(false),
+            models,
+        });
+    }
+    Ok(UsageModelSeries {
+        models: legend,
+        days,
+    })
 }
 
 fn build_local_usage_projects(

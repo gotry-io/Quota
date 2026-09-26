@@ -93,6 +93,12 @@ final class UsageModel {
   @ObservationIgnored
   private var customUsageGeneration: UInt64 = 0
 
+  @ObservationIgnored
+  private var previousUsageTask: Task<Void, Never>?
+
+  @ObservationIgnored
+  private var previousUsageGeneration: UInt64 = 0
+
   /// Last source Dashboard asked a custom period for. Summary periods ignore it.
   @ObservationIgnored
   private var customPeriodSource: UsageSource = .account
@@ -140,6 +146,7 @@ final class UsageModel {
 
   deinit {
     customUsageTask?.cancel()
+    previousUsageTask?.cancel()
     budgetMonthTask?.cancel()
     quotaHistoryTask?.cancel()
     accountHistoryTask?.cancel()
@@ -215,6 +222,35 @@ final class UsageModel {
     return customUsagePeriods[Self.periodKey(source: source, range)]
   }
 
+  /// The period before the selected one, when it has been read: what a model ledger states its
+  /// change of share against. Nil for `all`, and until the read answers.
+  func previousUsageDetail(
+    source: UsageSource,
+    selection: UsagePeriodSelection
+  ) -> LocalServiceUsageDetail? {
+    guard let range = Self.previousRange(of: selection, today: now()) else { return nil }
+    return customUsagePeriods[Self.periodKey(source: source, range)]
+  }
+
+  /// The period a selection is compared against: the unit before a day, week, or month, the same
+  /// number of days just before any other range, and nothing before `all`, which has no first day.
+  nonisolated static func previousRange(
+    of selection: UsagePeriodSelection,
+    today: Date,
+    calendar: Calendar = .current
+  ) -> (from: String, to: String)? {
+    if let previous = selection.previous {
+      return previous.range(today: today, calendar: calendar)
+    }
+    guard let range = selection.range(today: today, calendar: calendar),
+      let days = UsageDateText.days(from: range.from, to: range.to, calendar),
+      let first = UsageDateText.date(from: range.from, calendar),
+      let to = calendar.date(byAdding: .day, value: -1, to: first),
+      let from = calendar.date(byAdding: .day, value: -days, to: first)
+    else { return nil }
+    return (from: UsageDateText.date(from, calendar), to: UsageDateText.date(to, calendar))
+  }
+
   /// Whether the selected period can be answered on this source. Account custom ranges now can.
   func usagePeriodIsAvailable(source: UsageSource, selection: UsagePeriodSelection) -> Bool {
     selection.summaryKey != nil || selection.range(today: now()) != nil
@@ -249,6 +285,9 @@ final class UsageModel {
     customUsageGeneration += 1
     customUsageTask?.cancel()
     customUsageTask = nil
+    previousUsageGeneration += 1
+    previousUsageTask?.cancel()
+    previousUsageTask = nil
     customUsageLoading = false
     hasAccountSession = false
     accountHistoryGeneration += 1
@@ -369,8 +408,10 @@ final class UsageModel {
     return result
   }
 
-  /// Asks the service for the selected period when it is not one of the four already folded.
+  /// Asks the service for the selected period when it is not one of the four already folded, and
+  /// for the period before it, which the model ledger compares against.
   func loadCustomUsagePeriod() {
+    loadPreviousUsagePeriod()
     guard usagePeriod.summaryKey == nil, let transport,
       let range = usagePeriod.range(today: now())
     else { return }
@@ -407,6 +448,30 @@ final class UsageModel {
         Self.periodKey(source: source, range) == key
       else { return }
       customUsageLoading = false
+      customUsagePeriods[key] = detail
+    }
+  }
+
+  /// The previous period is a comparison, not the page: a failed read leaves the change column
+  /// empty and says nothing.
+  private func loadPreviousUsagePeriod() {
+    guard let transport, let range = Self.previousRange(of: usagePeriod, today: now()) else {
+      return
+    }
+    let source = effectiveUsageSource(customPeriodSource)
+    let key = Self.periodKey(source: source, range)
+    guard customUsagePeriods[key] == nil else { return }
+    previousUsageTask?.cancel()
+    previousUsageGeneration += 1
+    let generation = previousUsageGeneration
+    let epoch = sessionEpoch()
+    let timezone = TimeZone.current.identifier
+    previousUsageTask = Task { @MainActor [weak self] in
+      guard
+        let detail = try? await transport.usagePeriod(
+          from: range.from, to: range.to, source: source, timezone: timezone),
+        let self, self.previousUsageGeneration == generation, epoch == self.sessionEpoch()
+      else { return }
       customUsagePeriods[key] = detail
     }
   }

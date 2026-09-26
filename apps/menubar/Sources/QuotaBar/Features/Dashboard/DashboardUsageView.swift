@@ -2,24 +2,31 @@ import QuotaPresentation
 import QuotaWire
 import SwiftUI
 
-/// Dashboard Usage: the panel Usage page at width. Period stepping, custom range, totals,
-/// a cost-per-day chart, Projects on This Mac, and the monthly budget keep their existing
-/// behaviour and copy. The Today period also shows the per-window table that used to be its own
-/// page.
+/// Dashboard Usage, an analysis page (ADR 0064): a sentence about the reader's own model usage,
+/// the period controls, the model river with its ledger, and the token mix; then the Today
+/// windows table, the monthly budget, Projects on This Mac, Rhythm, and Sessions.
 struct DashboardUsageView: View {
   var dashboard: DashboardModel
   let now: Date
   @State private var rangeEditor = false
   @State private var draftFrom = Date()
   @State private var draftTo = Date()
+  @State private var metric: UsageMetric = .tokens
+  @State private var scale: UsageRiverScale = .amount
   @AppStorage(ResetCopyStylePreference.storageKey) private var resetCopyStyle =
     ResetCopyStylePreference.fallback
 
   var body: some View {
     let state = dashboard.presentedUsage(now: now)
     VStack(alignment: .leading, spacing: QuotaDesign.Spacing.section) {
-      Text("Usage")
-        .quotaSectionHeaderStyle()
+      sentenceHeader(state)
+
+      usagePeriodTabs
+      usagePeriodStepper(state)
+
+      if rangeEditor {
+        rangeEditorRow
+      }
 
       if let refreshWarning = state.refreshWarning {
         QuotaInlineNotice(message: refreshWarning)
@@ -31,65 +38,20 @@ struct DashboardUsageView: View {
         QuotaInlineNotice(message: accountErrorMessage)
       }
 
-      usagePeriodTabs
-      usagePeriodStepper(state)
-
-      if rangeEditor {
-        rangeEditorRow
-      }
-
-      if dashboard.showsTodayWindows {
-        DashboardTodayTable(
-          rows: dashboard.todayRows(now: now, resetStyle: resetCopyStyle.style)
-        )
-      }
-
-      if let progress = state.budget {
-        budgetBar(progress, basis: state.budgetBasis)
-      }
-
       if let warning = state.statusWarning {
         QuotaInlineNotice(message: warning)
       }
 
       if let usage = state.usage {
-        usageSummary(usage)
+        modelsCard(usage, state: state)
 
-        if let days = usage.days, days.contains(where: { $0.totals.totalTokens > 0 }) {
-          usageCard("Daily") {
-            dailyUsage(days)
-          }
-        }
-
-        usageCard("Models") {
-          let providers = presentedProviders(usage.models)
-          if providers.isEmpty {
-            QuotaSectionStateView(
-              presentation: .empty(message: "No model usage is available for this period.")
-            )
-          } else {
-            VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sm) {
-              topModels(usage)
-              ForEach(providers) { provider in
-                providerUsage(provider, of: usage.totals.totalTokens)
-              }
-            }
-          }
-        }
-
-        if state.showsProjects, let projects = usage.projects, !projects.isEmpty {
-          usageCard("Projects") {
-            projectUsage(projects)
-          }
-        }
-
-        if let hours = usage.hoursOfDay, hours.contains(where: { $0.totalTokens > 0 }) {
-          usageCard("Rhythm") {
-            rhythm(hours)
+        if usage.totals.totalTokens > 0 {
+          usageCard("Token mix") {
+            UsageTokenMixView(mix: UsageTokenMix(usage.totals), cacheSaved: usage.cacheSaved)
           }
         }
       } else {
-        usageCard("Summary") {
+        usageCard("Usage by model") {
           QuotaSectionStateView(
             presentation: state.isPreparing
               ? .loading(title: "Preparing Usage…")
@@ -102,11 +64,155 @@ struct DashboardUsageView: View {
         }
       }
 
+      if dashboard.showsTodayWindows {
+        DashboardTodayTable(
+          rows: dashboard.todayRows(now: now, resetStyle: resetCopyStyle.style)
+        )
+      }
+
+      if let progress = state.budget {
+        budgetBar(progress, basis: state.budgetBasis)
+      }
+
+      if let usage = state.usage {
+        if state.showsProjects, let projects = usage.projects, !projects.isEmpty {
+          usageCard("Projects") {
+            projectUsage(projects)
+          }
+        }
+
+        if let hours = usage.hoursOfDay, hours.contains(where: { $0.totalTokens > 0 }) {
+          usageCard("Rhythm") {
+            rhythm(hours)
+          }
+        }
+      }
+
       if let sessions = state.sessions {
         sessionsSection(sessions)
       }
     }
     .frame(maxWidth: .infinity, alignment: .topLeading)
+  }
+
+  /// Eyebrow, one sentence written from the reader's numbers, and one meta line.
+  private func sentenceHeader(_ state: DashboardUsagePresentation) -> some View {
+    VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xs) {
+      Text("Usage · \(state.source == .account ? "Account" : "This Mac")")
+        .quotaSectionHeaderStyle()
+      sentence(state)
+        .quotaFont(.sentence)
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityAddTraits(.isHeader)
+      if let usage = state.usage, usage.totals.totalTokens > 0 {
+        Text(
+          UsageSentence.meta(
+            totals: usage.totals,
+            cost: usage.cost,
+            cacheHitBasisPoints: usage.cacheHitBasisPoints,
+            days: usage.days,
+            previous: usage.previousTotals
+          )
+        )
+        .quotaMetaStyle()
+        .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+    .accessibilityElement(children: .combine)
+  }
+
+  private func sentence(_ state: DashboardUsagePresentation) -> Text {
+    guard let usage = state.usage else {
+      return Text(state.isPreparing ? "Preparing Usage…" : "No Usage is available for this period.")
+        .foregroundStyle(QuotaPalette.body)
+    }
+    return UsageSentence.runs(
+      totals: usage.totals,
+      ledger: usage.ledger,
+      periodPhrase: state.periodPhrase
+    )
+    .reduce(Text("")) { text, run in
+      text
+        + Text(run.text)
+        .foregroundStyle(run.emphasized ? QuotaPalette.ink : QuotaPalette.body)
+    }
+  }
+
+  /// The metric switch carrying each metric's value for the period, the river, and the ledger.
+  private func modelsCard(
+    _ usage: DashboardPresentedUsage,
+    state: DashboardUsagePresentation
+  ) -> some View {
+    let river = UsageRiver.make(
+      range: usage.range,
+      series: usage.modelSeries,
+      days: usage.days,
+      metric: metric,
+      scale: scale,
+      colors: state.colors,
+      today: state.today
+    )
+    return VStack(alignment: .leading, spacing: QuotaDesign.Spacing.md) {
+      HStack(alignment: .bottom, spacing: QuotaDesign.Spacing.md) {
+        metricSwitch(usage)
+        Spacer(minLength: 0)
+        if river != nil {
+          Picker("Scale", selection: $scale) {
+            ForEach(UsageRiverScale.allCases) { scale in
+              Text(scale.title).tag(scale)
+            }
+          }
+          .pickerStyle(.segmented)
+          .labelsHidden()
+          .fixedSize()
+          .accessibilityLabel("Scale")
+        }
+      }
+      if let river {
+        UsageRiverChart(river: river)
+      }
+      if usage.ledger.isEmpty {
+        QuotaSectionStateView(
+          presentation: .empty(message: "No model usage is available for this period.")
+        )
+      } else {
+        UsageModelLedgerView(rows: usage.ledger, colors: state.colors, metric: metric)
+      }
+    }
+    .padding(QuotaDesign.Layout.cardPadding)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .quotaCardSurface()
+  }
+
+  /// Tokens, API-equivalent cost, and Messages, each with its value for the period.
+  private func metricSwitch(_ usage: DashboardPresentedUsage) -> some View {
+    HStack(spacing: QuotaDesign.Spacing.lg) {
+      ForEach(UsageMetric.allCases) { item in
+        let selected = metric == item
+        Button { metric = item } label: {
+          VStack(alignment: .leading, spacing: 2) {
+            Text(item.title)
+              .quotaFont(.meta)
+              .foregroundStyle(selected ? QuotaPalette.ink : QuotaPalette.mute)
+            Text(item.periodValue(usage.totals, cost: usage.cost))
+              .quotaFont(.rowTitle)
+              .foregroundStyle(selected ? QuotaPalette.ink : QuotaPalette.body)
+              .monospacedDigit()
+            Rectangle()
+              .fill(selected ? QuotaPalette.ink : Color.clear)
+              .frame(height: 2)
+          }
+          .fixedSize()
+          .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(item.title)
+        .accessibilityValue(item.periodValue(usage.totals, cost: usage.cost))
+        .accessibilityAddTraits(selected ? .isSelected : [])
+      }
+    }
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel("Measure")
   }
 
   /// The six segments a period is named by. A custom range selects none of them and says what it
@@ -237,128 +343,6 @@ struct DashboardUsageView: View {
     }
   }
 
-  private func usageSummary(_ usage: DashboardPresentedUsage) -> some View {
-    let tokens = UsageValueFormatter.count(usage.totals.totalTokens)
-    let cost = UsageValueFormatter.compactCost(usage.cost)
-    let hit = UsageMetrics.cacheHitPercentLabel(basisPoints: usage.cacheHitBasisPoints) ?? "—"
-    let saved = UsageValueFormatter.cacheSaved(usage.cacheSaved)
-    return VStack(alignment: .leading, spacing: QuotaDesign.Spacing.section) {
-      HStack(alignment: .top, spacing: QuotaDesign.Spacing.section) {
-        QuotaStatTile(label: "Tokens", value: tokens)
-        QuotaStatTile(label: "Cost", value: cost)
-        QuotaStatTile(label: "Cache hit", value: hit, caption: saved)
-      }
-      usageCard("Summary") {
-        tokenMetrics(usage.totals)
-      }
-    }
-  }
-
-  private func dailyUsage(_ days: [LocalUsageDay]) -> some View {
-    VStack(alignment: .leading, spacing: QuotaDesign.Spacing.sm) {
-      DashboardUsageChart(days: days)
-        .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
-      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
-        ForEach(days.reversed().prefix(7), id: \.date) { day in
-          HStack(spacing: QuotaDesign.Spacing.xxs) {
-            Text(day.date)
-              .quotaFont(.listSecondary)
-              .foregroundStyle(QuotaPalette.body)
-            Spacer(minLength: 0)
-            Text(UsageValueFormatter.tokensAndCost(day.totals.totalTokens, day.cost))
-              .quotaMonoListValueStyle()
-              .lineLimit(1)
-          }
-          .accessibilityElement(children: .combine)
-        }
-      }
-    }
-    .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
-    .padding(.vertical, QuotaDesign.Layout.groupContentInset)
-  }
-
-  private func providerUsage(
-    _ provider: DashboardPresentedUsageProvider,
-    of total: Int
-  ) -> some View {
-    let models = Array(sortedModels(provider.models).prefix(5))
-    let duplicateNames = Set(
-      Dictionary(grouping: provider.models, by: \.model)
-        .filter { $0.value.count > 1 }
-        .keys
-    )
-    let providerTokens = provider.models.reduce(0) { $0 + $1.totals.totalTokens }
-    return VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
-      providerHeading(provider.provider)
-      shareBar(providerTokens, of: total)
-      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
-        ForEach(models, id: \.id) { model in
-          let title =
-            if duplicateNames.contains(model.model), let agent = model.agent {
-              "\(model.model) · \(agent.displayName)"
-            } else {
-              model.model
-            }
-          modelUsageRow(model, title: title, of: total)
-        }
-      }
-    }
-  }
-
-  private func shareBar(_ tokens: Int, of total: Int) -> some View {
-    let share = total > 0 ? min(1, Double(tokens) / Double(total)) : 0
-    return HStack(spacing: QuotaDesign.Spacing.sm) {
-      GeometryReader { proxy in
-        ZStack(alignment: .leading) {
-          Capsule().fill(QuotaPalette.progressTrack)
-          Capsule()
-            .fill(QuotaPalette.ink.opacity(0.55))
-            .frame(width: proxy.size.width * share)
-        }
-      }
-      .frame(height: 4)
-      Text(UsageValueFormatter.share(tokens, of: total) ?? "—")
-        .quotaMetaStyle()
-        .monospacedDigit()
-    }
-    .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
-    .padding(
-      .leading,
-      QuotaDesign.Layout.settingsIconColumnWidth + QuotaDesign.Spacing.sm
-    )
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel("Share of period")
-    .accessibilityValue(UsageValueFormatter.share(tokens, of: total) ?? "none")
-  }
-
-  @ViewBuilder
-  private func topModels(_ usage: DashboardPresentedUsage) -> some View {
-    let ranked = Array(sortedByTokens(usage.models).prefix(3))
-    if ranked.count > 1 {
-      VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
-        Text("Top models")
-          .quotaMetaStyle()
-        ForEach(ranked, id: \.id) { model in
-          HStack(spacing: QuotaDesign.Spacing.xxs) {
-            Text(model.model)
-              .quotaFont(.listSecondary)
-              .foregroundStyle(QuotaPalette.ink)
-              .lineLimit(1)
-            Spacer(minLength: 0)
-            Text(
-              "\(UsageValueFormatter.share(model.totals.totalTokens, of: usage.totals.totalTokens) ?? "—") · \(UsageValueFormatter.count(model.totals.totalTokens))"
-            )
-            .quotaMonoListValueStyle()
-            .lineLimit(1)
-          }
-          .accessibilityElement(children: .combine)
-        }
-      }
-      .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
-      .padding(.bottom, QuotaDesign.Spacing.sm)
-    }
-  }
-
   private func rhythm(_ hours: [LocalUsageHourOfDay]) -> some View {
     let maximum = hours.map(\.totalTokens).max() ?? 0
     let total = hours.reduce(0) { $0 + $1.totalTokens }
@@ -401,24 +385,6 @@ struct DashboardUsageView: View {
     }
     .padding(.horizontal, QuotaDesign.Layout.groupContentInset * 2)
     .padding(.vertical, QuotaDesign.Layout.groupContentInset)
-  }
-
-  private func providerHeading(_ provider: InferenceProvider?) -> some View {
-    let title = provider?.displayName ?? "Unknown Provider"
-    return HStack(spacing: QuotaDesign.Spacing.sm) {
-      UsageProviderIcon(
-        provider: provider,
-        size: QuotaDesign.Layout.usageProviderIconSize
-      )
-      .frame(width: QuotaDesign.Layout.settingsIconColumnWidth)
-      Text(title)
-        .quotaFont(.quotaLabel)
-        .foregroundStyle(QuotaPalette.ink)
-      Spacer(minLength: 0)
-    }
-    .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel("Provider \(title)")
   }
 
   private func projectUsage(_ projects: [LocalUsageProjectSummary]) -> some View {
@@ -475,53 +441,6 @@ struct DashboardUsageView: View {
       }
     }
     .padding(.bottom, QuotaDesign.Spacing.sm)
-  }
-
-  private func modelUsageRow(
-    _ model: DashboardPresentedUsageModel,
-    title: String,
-    of total: Int
-  ) -> some View {
-    let share = UsageValueFormatter.share(model.totals.totalTokens, of: total)
-    let summary =
-      UsageValueFormatter.tokensAndCost(model.totals.totalTokens, model.cost)
-      + (share.map { " · \($0)" } ?? "")
-    return HStack(spacing: QuotaDesign.Spacing.xxs) {
-      Text(title)
-        .quotaFont(.listSecondary)
-        .foregroundStyle(QuotaPalette.body)
-        .lineLimit(1)
-      Spacer(minLength: 0)
-      Text(summary)
-        .quotaMonoListValueStyle()
-        .lineLimit(1)
-        .minimumScaleFactor(0.75)
-    }
-    .padding(.horizontal, QuotaDesign.Layout.groupContentInset)
-    .padding(
-      .leading,
-      QuotaDesign.Layout.settingsIconColumnWidth + QuotaDesign.Spacing.sm
-    )
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel(model.model)
-    .accessibilityValue(summary)
-  }
-
-  private func tokenMetrics(_ totals: DashboardPresentedUsageTotals) -> some View {
-    LazyVGrid(
-      columns: [
-        GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible()),
-      ],
-      alignment: .leading,
-      spacing: QuotaDesign.Spacing.meta
-    ) {
-      modelMetric("Input", totals.inputTokens)
-      modelMetric("Output", totals.outputTokens)
-      modelMetric("Cache read", totals.cacheReadInputTokens)
-      modelMetric("Cache write", totals.cacheWriteInputTokens)
-      modelMetric("Reasoning", totals.reasoningTokens)
-      modelMetric("Messages", totals.messages)
-    }
   }
 
   private func sessionsSection(_ sessions: LocalUsageSessions) -> some View {
@@ -594,17 +513,6 @@ struct DashboardUsageView: View {
     return parts.joined(separator: ", ")
   }
 
-  private func modelMetric(_ label: String, _ value: Int) -> some View {
-    HStack(alignment: .firstTextBaseline, spacing: QuotaDesign.Spacing.meta) {
-      Text(label).quotaMetaStyle()
-      Spacer(minLength: 2)
-      Text(UsageValueFormatter.count(value)).quotaMonoListValueStyle()
-    }
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel(label)
-    .accessibilityValue(UsageValueFormatter.accessibleCount(value))
-  }
-
   private func usageCard<Content: View>(
     _ title: String,
     @ViewBuilder content: () -> Content
@@ -634,77 +542,6 @@ struct DashboardUsageView: View {
     .quotaCardSurface()
   }
 
-  private func presentedProviders(
-    _ models: [DashboardPresentedUsageModel]
-  ) -> [DashboardPresentedUsageProvider] {
-    Dictionary(grouping: models, by: \.provider)
-      .map { DashboardPresentedUsageProvider(provider: $0.key, models: $0.value) }
-      .sorted {
-        let left = sortedModels($0.models).first
-        let right = sortedModels($1.models).first
-        guard let left, let right else { return left != nil }
-        return UsageValueFormatter.precedes(
-          cost: left.cost,
-          tokens: $0.models.reduce(0) { $0 + $1.totals.totalTokens },
-          name: $0.provider?.rawValue ?? "unknown",
-          before: right.cost,
-          tokens: $1.models.reduce(0) { $0 + $1.totals.totalTokens },
-          name: $1.provider?.rawValue ?? "unknown"
-        )
-      }
-  }
-
-  private func sortedByTokens(_ models: [DashboardPresentedUsageModel])
-    -> [DashboardPresentedUsageModel]
-  {
-    models.sorted {
-      $0.totals.totalTokens != $1.totals.totalTokens
-        ? $0.totals.totalTokens > $1.totals.totalTokens
-        : $0.model < $1.model
-    }
-  }
-
-  private func sortedModels(_ models: [DashboardPresentedUsageModel])
-    -> [DashboardPresentedUsageModel]
-  {
-    models.sorted {
-      UsageValueFormatter.precedes(
-        cost: $0.cost, tokens: $0.totals.totalTokens, name: $0.model,
-        before: $1.cost, tokens: $1.totals.totalTokens, name: $1.model
-      )
-    }
-  }
-}
-
-private struct QuotaStatTile: View {
-  let label: String
-  let value: String
-  var caption: String? = nil
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: QuotaDesign.Spacing.xxs) {
-      Text(label)
-        .quotaMetaStyle()
-      Text(value)
-        .font(QuotaDesign.Typography.statValue)
-        .foregroundStyle(QuotaPalette.ink)
-        .monospacedDigit()
-        .lineLimit(1)
-        .minimumScaleFactor(0.5)
-      if let caption {
-        Text(caption)
-          .quotaMetaStyle()
-          .lineLimit(1)
-          .minimumScaleFactor(0.8)
-      }
-    }
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .padding(QuotaDesign.Layout.cardPadding)
-    .quotaCardSurface()
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel(label)
-    .accessibilityValue(value + (caption.map { ", \($0)" } ?? ""))
-  }
 }
 
 private struct UsageAgentIcon: View {
@@ -713,23 +550,6 @@ private struct UsageAgentIcon: View {
 
   var body: some View {
     if let assetName = agent.brandAssetName {
-      BrandAssetIcon(assetName: assetName, size: size)
-    } else {
-      Image(systemName: "questionmark.square.dashed")
-        .quotaFont(.secondary)
-        .foregroundStyle(QuotaPalette.body)
-        .frame(width: size, height: size)
-        .accessibilityHidden(true)
-    }
-  }
-}
-
-private struct UsageProviderIcon: View {
-  let provider: InferenceProvider?
-  var size = QuotaDesign.Layout.settingsIconColumnWidth
-
-  var body: some View {
-    if let assetName = provider?.brandAssetName {
       BrandAssetIcon(assetName: assetName, size: size)
     } else {
       Image(systemName: "questionmark.square.dashed")
@@ -754,21 +574,6 @@ extension BillingAgent {
     case .copilot: "copilot"
     case .kilo: "kilo"
     case .antigravity: "antigravity"
-    case .unknown: nil
-    }
-  }
-}
-
-extension InferenceProvider {
-  fileprivate var brandAssetName: String? {
-    switch self {
-    case .openai: "openai"
-    case .anthropic: "claude"
-    case .xai: "grok"
-    case .moonshot: "kimi"
-    case .deepseek: "deepseek"
-    case .cursor: "cursor"
-    case .google: "gemini"
     case .unknown: nil
     }
   }

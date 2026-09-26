@@ -872,3 +872,27 @@ func automaticTierHintNamesTheProviderAndWhy() throws {
     _ = try decode(#"{"tier":"normal","interval_seconds":300,"provider":"codex","extra":1}"#)
   }
 }
+
+/// The service writes a period's series in Relay's shape, and the folded `other` names no
+/// provider; the strict local summary has to take both.
+@Test
+func decodesALocalPeriodSeriesWhoseFoldedRestNamesNoProvider() throws {
+  let json = """
+    {"totals":{"total_tokens":3,"input_tokens":2,"output_tokens":1,"cache_read_input_tokens":0,
+    "cache_write_input_tokens":0,"reasoning_tokens":0,"messages":1},
+    "cost":{"mode":"auto","basis":"none","status":"complete","amount_microusd":null,
+    "catalog_revision":null,"calculated_rows":0,"reported_rows":0,"unpriced_rows":0,
+    "assumptions":[],"unpriced":[]},
+    "cache_saved":{"amount_microusd":null,"status":"unavailable","unpriced_rows":1},
+    "agents":[],
+    "model_series":{"models":[{"model":"gpt-5.5","provider":"openai"},{"model":"other","provider":null}],
+    "days":[{"date":"2026-08-10","partial":true,"models":[{"model":"other","total_tokens":3,
+    "input_tokens":2,"output_tokens":1,"cache_read_input_tokens":0,"cache_write_input_tokens":0,
+    "cost_microusd":null}]}]}}
+    """
+  let decoded = try QuotaWireCodec.makeDecoder().decode(
+    LocalUsagePeriodSummary.self, from: Data(json.utf8))
+  let series = try #require(decoded.modelSeries)
+  #expect(series.models.map(\.provider) == [.openai, nil])
+  #expect(series.days.first?.models.first?.costMicrousd == nil)
+}

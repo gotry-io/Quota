@@ -34,6 +34,18 @@ extension QuotaWindow {
     RemainingQuotaFormat.windowTitle(title, isBalanceOnly: isBalanceOnly)
   }
 
+  /// Where remaining would stand now at an even burn rate (`docs/design.md` Even-pace tick):
+  /// only beside a pace line the reading prints, and never on a reading that is no longer
+  /// current, whose clock has stopped.
+  func evenPaceTick(now: Date, isStale: Bool) -> Double? {
+    guard !isStale, let pace, let resetsAt, resetsAt > now,
+      QuotaPaceCopy.headline(pace, resetsAt: resetsAt) != nil
+    else {
+      return nil
+    }
+    return EvenPacePosition.remainingPercent(paceReading, now: now)
+  }
+
   static func formattedPercent(_ value: Double) -> String {
     RemainingQuotaFormat.percent(value)
   }

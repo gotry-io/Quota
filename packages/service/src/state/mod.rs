@@ -2769,10 +2769,12 @@ impl StateStore {
     /// caller that knows the zone places each hour on the local clock. The `date` a row carries
     /// stays the UTC date behind it, because that is what prices the row and resolves its model
     /// alias — the same rule [`Self::usage_period_rows`] follows.
+    ///
+    /// Each row also says whether the scan behind its hour came up short.
     pub fn usage_period_hour_rows(
         &self,
         range: Option<(&str, &str)>,
-    ) -> Result<Vec<(String, DatedUsageRow)>, StateError> {
+    ) -> Result<Vec<(String, bool, DatedUsageRow)>, StateError> {
         self.with_cache(|conn| {
             let (clause, from, to) = match range {
                 Some((start, end)) => (
@@ -2789,7 +2791,8 @@ impl StateStore {
                         SUM(cache_write_1h_tokens), SUM(cache_write_inferred_tokens),
                         SUM(output_tokens), SUM(reasoning_tokens), SUM(requests),
                         SUM(web_search_requests), SUM(web_fetch_requests),
-                        SUM(source_cost_microusd), SUM(source_cost_covered_requests)
+                        SUM(source_cost_microusd), SUM(source_cost_covered_requests),
+                        MAX(partial)
                  FROM usage_hourly_facts {clause}
                  GROUP BY bucket_start_utc, agent, billing_channel, channel_source, model,
                           context_bucket, service_tier, speed, inference_geo
@@ -2798,13 +2801,15 @@ impl StateStore {
             let mut rows = Vec::new();
             let mapped = statement.query_map(params![from, to], |row| {
                 let bucket_start_utc: String = row.get(0)?;
-                Ok((bucket_start_utc, read_grouped_row(row)?))
+                let partial: i64 = row.get(21)?;
+                Ok((bucket_start_utc, partial != 0, read_grouped_row(row)?))
             })?;
             for entry in mapped {
-                let (bucket_start_utc, row) = entry?;
+                let (bucket_start_utc, partial, row) = entry?;
                 let date = bucket_start_utc.get(..10).unwrap_or_default().to_owned();
                 rows.push((
                     bucket_start_utc,
+                    partial,
                     DatedUsageRow {
                         date,
                         project_key: String::new(),
@@ -6365,14 +6370,17 @@ mod tests {
             .usage_period_hour_rows(Some((&span.start, &span.end)))
             .expect("hours");
         assert_eq!(
-            hours.iter().map(|(_, row)| row.input_tokens).sum::<u64>(),
+            hours
+                .iter()
+                .map(|(_, _, row)| row.input_tokens)
+                .sum::<u64>(),
             6
         );
         assert!(hours.len() >= local.len());
         assert!(
             hours
                 .iter()
-                .all(|(bucket, row)| bucket.starts_with(&row.date))
+                .all(|(bucket, _, row)| bucket.starts_with(&row.date))
         );
         drop(store);
         fs::remove_dir_all(root).expect("cleanup");

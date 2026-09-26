@@ -77,9 +77,14 @@ struct QuotaCommandRow: View {
 }
 
 /// Linear remaining 0…100. Hidden from VoiceOver when the remaining figure is already spoken.
+///
+/// `evenPace` draws the even-pace tick: where remaining would stand now at an even burn rate. A
+/// fill ending short of it is burning faster than even. The pace line says so in words, so the
+/// tick carries nothing for assistive tech.
 struct QuotaRemainingMeter: View {
   let value: Double
   let fill: Color
+  var evenPace: Double? = nil
 
   var body: some View {
     GeometryReader { geometry in
@@ -88,9 +93,21 @@ struct QuotaRemainingMeter: View {
           .fill(QuotaPalette.progressTrack)
         Capsule()
           .fill(fill)
-          .frame(width: geometry.size.width * min(max(value / 100, 0), 1))
+          .frame(width: geometry.size.width * Self.clamped(value))
+        if let evenPace {
+          RoundedRectangle(cornerRadius: 0.75)
+            .fill(QuotaPalette.ink.opacity(0.7))
+            .frame(width: 1.5, height: QuotaDesign.Layout.progressHeight + 4)
+            .offset(x: geometry.size.width * Self.clamped(evenPace) - 0.75)
+            .accessibilityHidden(true)
+        }
       }
+      .frame(height: geometry.size.height)
     }
     .frame(height: QuotaDesign.Layout.progressHeight)
+  }
+
+  private static func clamped(_ percent: Double) -> Double {
+    min(max(percent / 100, 0), 1)
   }
 }

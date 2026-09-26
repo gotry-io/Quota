@@ -404,16 +404,16 @@ final class MenuBarViewModel {
       var fixtureBudgetMonth: LocalServiceUsageDetail?
       if let accountUsage = visualTestState.accountSummary?.usage {
         let account = LocalServiceUsagePeriodValues(
-          today: Self.periodDetail(accountUsage.today),
-          last7Days: Self.periodDetail(accountUsage.last7Days),
-          last30Days: Self.periodDetail(accountUsage.last30Days),
-          all: Self.periodDetail(accountUsage.all)
+          today: Self.periodDetail(accountUsage.today, span: 1),
+          last7Days: Self.periodDetail(accountUsage.last7Days, span: 7),
+          last30Days: Self.periodDetail(accountUsage.last30Days, span: 30),
+          all: Self.periodDetail(accountUsage.all, span: nil)
         )
         let local = LocalServiceUsagePeriodValues(
-          today: Self.localPeriodDetail(accountUsage.today),
-          last7Days: Self.localPeriodDetail(accountUsage.last7Days),
-          last30Days: Self.localPeriodDetail(accountUsage.last30Days),
-          all: Self.localPeriodDetail(accountUsage.all)
+          today: Self.localPeriodDetail(accountUsage.today, span: 1),
+          last7Days: Self.localPeriodDetail(accountUsage.last7Days, span: 7),
+          last30Days: Self.localPeriodDetail(accountUsage.last30Days, span: 30),
+          all: Self.localPeriodDetail(accountUsage.all, span: nil)
         )
         fixturePeriods = LocalServiceUsagePeriodCache(local: local, account: account)
         fixtureBudgetMonth = local.last30Days
@@ -443,8 +443,9 @@ final class MenuBarViewModel {
     }
 
     /// The managed period, in the shape the panel already reads. A managed tree states totals
-    /// and cost only at the leaf, so what a fixture shows above them is folded here.
-    private static func periodDetail(_ period: QuotaWire.UsagePeriod)
+    /// and cost only at the leaf, so what a fixture shows above them is folded here. A period of
+    /// `span` days ends on the fixture's day, Aug 3, 2026; `all` names no days.
+    private static func periodDetail(_ period: QuotaWire.UsagePeriod, span: Int?)
       -> LocalServiceUsageDetail
     {
       let agents = period.agents.map { agent in
@@ -464,22 +465,25 @@ final class MenuBarViewModel {
           }
         )
       }
+      let dates = span.map { fixtureDates(count: $0) } ?? []
       return LocalServiceUsageDetail(
-        range: UsageDateRange(from: "2026-08-10", to: "2026-08-10"),
+        range: UsageDateRange(from: dates.first ?? "2026-08-03", to: dates.last ?? "2026-08-03"),
         usage: LocalUsagePeriodSummary(
           totals: period.totals,
           cost: period.cost,
           cacheSaved: period.cacheSaved,
           agents: agents,
-          days: fixtureDays(period.totals, cost: period.cost),
-          hoursOfDay: fixtureHours(period.totals)
+          days: span == nil ? nil : fixtureDays(period.totals, cost: period.cost, dates: dates),
+          hoursOfDay: span == nil ? nil : fixtureHours(period.totals),
+          modelSeries: span == nil ? nil : fixtureSeries(period, dates: dates)
         ),
         incomplete: period.partial,
         detailsTruncated: period.hasTruncatedDetails
       )
     }
 
-    /// Fourteen local days carrying a fixed share of the period, so the Daily bars have a shape.
+    /// Local days carrying a fixed share of the period, so the river has a shape; the fifth is
+    /// a day with no usage.
     private static let dayWeights = [4, 7, 9, 3, 0, 6, 11, 8, 5, 12, 9, 2, 10, 14]
 
     /// A working day: quiet overnight, busiest late morning and mid afternoon.
@@ -487,18 +491,73 @@ final class MenuBarViewModel {
       0, 0, 0, 0, 0, 1, 3, 6, 9, 12, 14, 13, 8, 11, 15, 13, 10, 7, 5, 4, 3, 2, 1, 0,
     ]
 
+    private static func fixtureDates(count: Int) -> [String] {
+      var calendar = Calendar(identifier: .gregorian)
+      calendar.timeZone = TimeZone(identifier: "UTC") ?? .current
+      let last = DateComponents(calendar: calendar, year: 2026, month: 8, day: 3).date ?? Date()
+      return (0..<count).reversed().compactMap { back in
+        calendar.date(byAdding: .day, value: -back, to: last).map {
+          UsageDateText.date($0, calendar)
+        }
+      }
+    }
+
+    private static func weight(_ index: Int, model: Int = 0) -> Int {
+      dayWeights[(index + model * 3) % dayWeights.count]
+    }
+
     private static func fixtureDays(
       _ totals: UsageSummaryTotals,
-      cost: UsageCostOutcome
+      cost: UsageCostOutcome,
+      dates: [String]
     ) -> [LocalUsageDay] {
-      let sum = dayWeights.reduce(0, +)
-      return dayWeights.enumerated().map { index, weight in
+      let sum = max(dates.indices.map { weight($0) }.reduce(0, +), 1)
+      return dates.enumerated().map { index, date in
         LocalUsageDay(
-          date: "2026-08-\(String(format: "%02d", index + 1))",
-          totals: scaled(totals, numerator: weight, denominator: sum),
+          date: date,
+          totals: scaled(totals, numerator: weight(index), denominator: sum),
           cost: cost
         )
       }
+    }
+
+    /// Each model's tokens spread over the same days, each model a little out of step with the
+    /// others, empty where the day is.
+    private static func fixtureSeries(
+      _ period: QuotaWire.UsagePeriod,
+      dates: [String]
+    ) -> UsageModelSeries {
+      let leaves = period.agents.flatMap { agent in
+        agent.providers.flatMap { provider in provider.models.map { (provider.provider, $0) } }
+      }
+      .sorted { $0.1.totals.totalTokens > $1.1.totals.totalTokens }
+      let days = dates.enumerated().map { index, date in
+        UsageModelSeriesDay(
+          date: date,
+          partial: false,
+          models: weight(index) == 0
+            ? []
+            : leaves.enumerated().compactMap { position, leaf in
+              let share = weight(index, model: position)
+              guard share > 0 else { return nil }
+              let tokens = leaf.1.totals.totalTokens * share / (7 * max(dates.count, 1))
+              let input = tokens * 5 / 6
+              return UsageModelSeriesCell(
+                model: leaf.1.model,
+                totalTokens: tokens,
+                inputTokens: input,
+                outputTokens: tokens - input,
+                cacheReadInputTokens: input / 3,
+                cacheWriteInputTokens: 0,
+                costMicrousd: String(tokens)
+              )
+            }
+        )
+      }
+      return UsageModelSeries(
+        models: leaves.map { UsageModelSeriesEntry(model: $0.1.model, provider: $0.0) },
+        days: days
+      )
     }
 
     private static func fixtureHours(_ totals: UsageSummaryTotals) -> [LocalUsageHourOfDay] {
@@ -532,10 +591,10 @@ final class MenuBarViewModel {
     }
 
     /// The same fixture with the Projects fold This Mac adds.
-    private static func localPeriodDetail(_ period: QuotaWire.UsagePeriod)
+    private static func localPeriodDetail(_ period: QuotaWire.UsagePeriod, span: Int?)
       -> LocalServiceUsageDetail
     {
-      let detail = periodDetail(period)
+      let detail = periodDetail(period, span: span)
       let projects = [
         LocalUsageProjectSummary(
           projectKey: "Quota",
@@ -562,6 +621,7 @@ final class MenuBarViewModel {
           projects: projects,
           days: detail.usage.days,
           hoursOfDay: detail.usage.hoursOfDay,
+          modelSeries: detail.usage.modelSeries,
           modelsTruncated: detail.usage.modelsTruncated
         ),
         incomplete: detail.incomplete,

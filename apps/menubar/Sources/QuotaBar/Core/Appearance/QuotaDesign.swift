@@ -147,9 +147,12 @@ enum QuotaDesign {
       case monoMeta
       case quotaLabel
       case remainingValue
+      /// The sentence header of an analysis page (Usage): the page's one sentence.
+      case sentence
 
       fileprivate var baseSize: CGFloat {
         switch self {
+        case .sentence: 17
         case .overviewProviderTitle: 15
         case .panelTitle, .emptyTitle, .rowTitle: 13
         case .settingsLabel, .remainingValue: 12
@@ -163,7 +166,7 @@ enum QuotaDesign {
         switch self {
         case .overviewProviderTitle, .panelTitle, .sectionHeader: .semibold
         case .emptyTitle, .rowTitle, .settingsLabel, .quotaLabel, .remainingValue: .medium
-        case .listSecondary, .secondary, .meta, .mono, .monoMeta: .regular
+        case .listSecondary, .secondary, .meta, .mono, .monoMeta, .sentence: .regular
         }
       }
 
