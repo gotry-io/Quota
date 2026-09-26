@@ -2,6 +2,7 @@
 import { page } from "$app/state";
 import { accountStatusLine, devicesSummaryLine } from "$lib/account-overview";
 import { createAccountStore, setAccountStore } from "$lib/account-store.svelte.ts";
+import { askingCopy } from "$lib/collection-demand";
 import {
   accountPageTitle,
   isDevicesPath,
@@ -30,6 +31,7 @@ const status = $derived.by(() => {
   if (isDevicesPath(path)) {
     return devicesSummaryLine(store.summary.devices, now);
   }
+  if (store.collectionWaitMacs !== null) return askingCopy(store.collectionWaitMacs);
   return accountStatusLine(store.summary, now);
 });
 

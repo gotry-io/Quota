@@ -265,6 +265,34 @@ public struct AccountSummary: Codable, Equatable, Sendable {
   }
 }
 
+/// `POST /api/v6/account/collection-request`: someone is looking, so the Account's Macs are asked
+/// for a fresh reading. The body is the protocol version and nothing else; Relay stores one
+/// instant and never calls a provider itself
+/// ([ADR 0063](../../../../docs/decisions/0063-collection-follows-demand-and-activity.md)).
+public struct CollectionRequest: Encodable, Equatable, Sendable {
+  public let protocolVersion = WireCodec.managedDataProtocolVersion
+
+  public init() {}
+}
+
+/// What Relay answered a collection request with: the instant the Account's Macs are asked to beat.
+/// A request inside Relay's merge window answers the stored instant with `accepted: false`, which
+/// is the same wait, so a reader takes the instant either way.
+public struct CollectionRequestResponse: Decodable, Equatable, Sendable {
+  public let requestedAt: Date
+  public let accepted: Bool
+
+  public init(requestedAt: Date, accepted: Bool) {
+    self.requestedAt = requestedAt
+    self.accepted = accepted
+  }
+
+  private enum CodingKeys: String, CodingKey {
+    case requestedAt
+    case accepted
+  }
+}
+
 public struct CachedAccountSummary: Codable, Equatable, Sendable {
   public let summary: AccountSummary
   public let fetchedAt: Date

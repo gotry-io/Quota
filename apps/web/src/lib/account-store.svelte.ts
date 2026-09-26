@@ -10,8 +10,10 @@ import {
   fetchAccountActivity,
   fetchAccountSummary,
   fetchAccountUsagePeriod,
+  requestCollection,
 } from "./account-client.ts";
 import { accountActivityRange, browserTimezone, usagePeriodResourceKey } from "./account-reads.ts";
+import { abortableWait, followCollectionDemand } from "./collection-demand.ts";
 import { hashSelectorPreimage } from "./subscription-selector.ts";
 
 /**
@@ -67,6 +69,9 @@ export function createAccountStore() {
   let dayDetail = $state<Record<string, AccountLoadResource<UsageActivityDayRead>>>({});
   let rhythm = $state<Record<string, AccountLoadResource<UsageRhythmRead>>>({});
   const selectorCache = new Map<string, string>();
+  /** How many Macs the dashboard is waiting on after asking for a fresh reading, or null. */
+  let collectionWaitMacs = $state<number | null>(null);
+  let demandController: AbortController | null = null;
 
   let summaryInflight: Promise<void> | null = null;
   const activityInflight = new Map<string, Promise<void>>();
@@ -321,6 +326,42 @@ export function createAccountStore() {
     return pull;
   }
 
+  /**
+   * Ask the Account's Macs for a fresh reading when one they sent is old, then follow the summary
+   * until they answer, the tab is hidden, or three minutes pass. One at a time.
+   */
+  async function demandCollection(): Promise<void> {
+    if (demandController !== null) return;
+    const controller = new AbortController();
+    demandController = controller;
+    try {
+      await followCollectionDemand(
+        {
+          summary: () => summary,
+          requestCollection,
+          readSummary: refresh,
+          wait: abortableWait,
+          now: Date.now,
+          onWaiting: (macCount) => {
+            collectionWaitMacs = macCount;
+          },
+        },
+        controller.signal,
+      );
+    } finally {
+      if (demandController === controller) {
+        demandController = null;
+        collectionWaitMacs = null;
+      }
+    }
+  }
+
+  function stopCollectionDemand(): void {
+    demandController?.abort();
+    demandController = null;
+    collectionWaitMacs = null;
+  }
+
   function setError(error: AccountError): void {
     loadError = error;
     summaryStatus = "error";
@@ -360,6 +401,9 @@ export function createAccountStore() {
     get subscriptionSelectors() {
       return subscriptionSelectors;
     },
+    get collectionWaitMacs() {
+      return collectionWaitMacs;
+    },
     get activityRange() {
       return currentActivityRange;
     },
@@ -381,6 +425,8 @@ export function createAccountStore() {
     ensureDay,
     ensureRhythm,
     refresh,
+    demandCollection,
+    stopCollectionDemand,
     setError,
     startClock,
   };

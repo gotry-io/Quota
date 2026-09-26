@@ -22,6 +22,30 @@ let deviceNames = $derived(
 );
 let providerStatus = $state<Map<string, { indicator: string; description: string }>>(new Map());
 
+// Someone opened the dashboard: ask the Macs once when what they sent is old, and again each
+// time the tab comes back into view. A hidden tab has nobody to wait for.
+let askedOnOpen = false;
+$effect(() => {
+  if (askedOnOpen || !store.summary) return;
+  askedOnOpen = true;
+  void store.demandCollection();
+});
+
+$effect(() => {
+  const onVisibility = (): void => {
+    if (document.visibilityState === "hidden") {
+      store.stopCollectionDemand();
+      return;
+    }
+    void store.refresh().then(() => store.demandCollection());
+  };
+  document.addEventListener("visibilitychange", onVisibility);
+  return () => {
+    document.removeEventListener("visibilitychange", onVisibility);
+    store.stopCollectionDemand();
+  };
+});
+
 $effect(() => {
   let cancelled = false;
   void fetchProviderStatus().then((rows) => {

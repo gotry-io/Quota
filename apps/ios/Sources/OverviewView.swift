@@ -34,7 +34,7 @@ struct OverviewView: View {
     .environment(\.defaultMinListRowHeight, QuotaTheme.minimumTouchTarget)
     .accessibilityIdentifier("overview.root")
     .refreshable {
-      await model.refresh()
+      await model.refreshOnRequest()
     }
     .navigationTitle(AppTab.quota.title)
     .navigationSubtitle(subtitle)
@@ -46,11 +46,14 @@ struct OverviewView: View {
     }
   }
 
-  /// Under the title: **Updating…** while a refresh runs, then when the readings on screen were
-  /// last refreshed.
+  /// Under the title: **Updating…** while a refresh runs, **Asking your Mac…** while the Macs
+  /// have been asked for a fresh reading, then when the readings on screen were last refreshed.
   private var subtitle: String {
     if model.isRefreshing {
       return OverviewCopy.updatingLine(progress: model.refreshProgress)
+    }
+    if let macs = model.askingMacs {
+      return OverviewCopy.asking(macs: macs)
     }
     guard let updatedAt = model.updatedAt else { return "" }
     return QuotaFormat.updated(updatedAt, now: displayClock.now())
@@ -121,6 +124,11 @@ enum OverviewCopy {
     guard let progress else { return updating }
     return "\(updating) \(progress.answered) of \(progress.total)"
   }
+
+  /// While the Account's Macs have been asked for a fresh reading.
+  static func asking(macs: Int) -> String {
+    macs == 1 ? "Asking your Mac…" : "Asking your Macs…"
+  }
 }
 
 /// The trailing Overview control: a refresh, or the one already running. Pull to refresh does the
@@ -130,7 +138,7 @@ struct OverviewRefreshButton: View {
 
   var body: some View {
     Button {
-      Task { await model.refresh() }
+      Task { await model.refreshOnRequest() }
     } label: {
       if model.isRefreshing {
         ProgressView()

@@ -135,6 +135,27 @@ struct URLSessionProviderWebTransportBoundaryTests {
     #expect(response.body.count == ProviderWebLimits.bodyLimit)
   }
 
+  /// A 429 is still "unavailable", and it carries the wait the provider named so the phone's
+  /// backoff can honour it. A value that is not whole seconds names no wait.
+  @Test func aRateLimitCarriesTheRetryAfterItWasSent() async throws {
+    let url = URL(string: "https://provider-web.test/limited")!
+    let transport = URLSessionProviderWebTransport(configuration: Self.stubbedConfiguration())
+    let http = ProviderWebHTTP(transport: transport, userAgent: "Quota/test")
+    for (header, seconds) in [("120", 120 as Int?), ("Wed, 21 Oct 2026 07:28:00 GMT", nil)] {
+      ProviderWebScriptedURLProtocol.use(
+        .init(status: 429, headers: ["Retry-After": header]), for: url)
+      await #expect(
+        throws: ProviderWebError(
+          .unavailable, "claude_web_usage_api",
+          rateLimit: ProviderRateLimit(retryAfterSeconds: seconds))
+      ) {
+        _ = try await http.getJSONSession(
+          url, headers: [], timeout: ProviderWebLimits.validationTimeout,
+          source: "claude_web_usage_api")
+      }
+    }
+  }
+
   @Test func aRedirectIsReturnedAndNeverFollowed() async throws {
     let url = URL(string: "https://provider-web.test/redirect")!
     let location = URL(string: "https://evil.example/steal")!

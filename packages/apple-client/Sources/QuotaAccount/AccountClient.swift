@@ -279,6 +279,16 @@ public actor AccountClient {
     }
   }
 
+  /// Ask the Account's Macs for a fresh reading, and answer the instant their readings have to
+  /// beat. Nothing here is a failure a person is told about: a Relay that predates the request
+  /// answers 404, a busy session 429, and either way the readings on screen simply stay what
+  /// they were, so every refusal is `nil`.
+  public func requestCollection() async -> Date? {
+    try? await withAuthorizedSession { session in
+      try await relay.requestCollection(accessToken: session.accessToken).requestedAt
+    }
+  }
+
   /// Reads one inclusive local-date range. Offers If-None-Match when this process already holds
   /// that key. Does not write the summary cache.
   public func fetchUsagePeriod(

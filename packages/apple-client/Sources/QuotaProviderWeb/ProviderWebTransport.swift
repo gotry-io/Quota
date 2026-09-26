@@ -5,10 +5,13 @@ import os
 public struct ProviderWebResponse: Equatable, Sendable {
   public let status: Int
   public let body: Data
+  /// The `Retry-After` header as sent, when there was one. Only a 429 reads it.
+  public let retryAfter: String?
 
-  public init(status: Int, body: Data) {
+  public init(status: Int, body: Data, retryAfter: String? = nil) {
     self.status = status
     self.body = body
+    self.retryAfter = retryAfter
   }
 }
 
@@ -76,6 +79,7 @@ private final class BodyBoundDelegate: NSObject, URLSessionDataDelegate, @unchec
     let bodyLimit: Int
     var data = Data()
     var status: Int?
+    var retryAfter: String?
     var settled = false
   }
 
@@ -141,6 +145,7 @@ private final class BodyBoundDelegate: NSObject, URLSessionDataDelegate, @unchec
     lock.withLock { state in
       if var receive = state[dataTask.taskIdentifier] {
         receive.status = http.statusCode
+        receive.retryAfter = http.value(forHTTPHeaderField: "Retry-After")
         let expected = http.expectedContentLength
         if expected > 0 {
           receive.data.reserveCapacity(min(Int(expected), receive.bodyLimit))
@@ -177,7 +182,8 @@ private final class BodyBoundDelegate: NSObject, URLSessionDataDelegate, @unchec
       guard let receive = state[task.taskIdentifier], !receive.settled,
         let status = receive.status
       else { return nil }
-      return ProviderWebResponse(status: status, body: receive.data)
+      return ProviderWebResponse(
+        status: status, body: receive.data, retryAfter: receive.retryAfter)
     }
     if let response {
       settle(task, .success(response))
@@ -308,9 +314,23 @@ struct ProviderWebHTTP: Sendable {
       throw ProviderWebError(redirect, source)
     }
     guard (200..<300).contains(response.status) else {
-      throw ProviderWebError(Self.category(of: response.status), source)
+      throw ProviderWebError(
+        Self.category(of: response.status),
+        source,
+        rateLimit: response.status == 429
+          ? ProviderRateLimit(retryAfterSeconds: Self.retryAfterSeconds(response.retryAfter))
+          : nil
+      )
     }
     return response.body
+  }
+
+  /// `Retry-After` in delta-seconds, the form the providers send. An HTTP-date, a negative value,
+  /// or anything else is no number at all, and the backoff falls back to its own schedule.
+  static func retryAfterSeconds(_ value: String?) -> Int? {
+    guard let value, let seconds = Int(value.trimmingCharacters(in: .whitespaces)), seconds >= 0
+    else { return nil }
+    return seconds
   }
 
   /// The service's `http_category`, restated here because this is its own trust boundary.
