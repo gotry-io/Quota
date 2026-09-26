@@ -10,7 +10,17 @@
     "color": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["brand", "quota", "meter", "text", "surface", "border", "activity", "chart"],
+      "required": [
+        "brand",
+        "quota",
+        "meter",
+        "text",
+        "surface",
+        "border",
+        "activity",
+        "chart",
+        "model"
+      ],
       "properties": {
         "brand": {
           "type": "object",
@@ -74,11 +84,38 @@
         "chart": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["input", "cache", "output"],
+          "required": ["cache", "cache_write", "input", "output"],
           "properties": {
-            "input": { "$ref": "#/$defs/adaptiveColor" },
             "cache": { "$ref": "#/$defs/adaptiveColor" },
+            "cache_write": { "$ref": "#/$defs/adaptiveColor" },
+            "input": { "$ref": "#/$defs/adaptiveColor" },
             "output": { "$ref": "#/$defs/adaptiveColor" }
+          }
+        },
+        "model": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "anthropic",
+            "openai",
+            "google",
+            "xai",
+            "moonshot",
+            "deepseek",
+            "cursor",
+            "unknown",
+            "other"
+          ],
+          "properties": {
+            "anthropic": { "$ref": "#/$defs/modelFamily" },
+            "openai": { "$ref": "#/$defs/modelFamily" },
+            "google": { "$ref": "#/$defs/modelFamily" },
+            "xai": { "$ref": "#/$defs/modelFamily" },
+            "moonshot": { "$ref": "#/$defs/modelFamily" },
+            "deepseek": { "$ref": "#/$defs/modelFamily" },
+            "cursor": { "$ref": "#/$defs/modelFamily" },
+            "unknown": { "$ref": "#/$defs/modelFamily" },
+            "other": { "$ref": "#/$defs/adaptiveColor" }
           }
         }
       }
@@ -154,6 +191,17 @@
       "properties": {
         "fill": { "$ref": "#/$defs/adaptiveColor" },
         "border": { "$ref": "#/$defs/adaptiveColor" }
+      }
+    },
+    "modelFamily": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["1", "2", "3", "4"],
+      "properties": {
+        "1": { "$ref": "#/$defs/adaptiveColor" },
+        "2": { "$ref": "#/$defs/adaptiveColor" },
+        "3": { "$ref": "#/$defs/adaptiveColor" },
+        "4": { "$ref": "#/$defs/adaptiveColor" }
       }
     },
     "systemColor": {

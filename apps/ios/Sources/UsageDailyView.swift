@@ -79,7 +79,7 @@ struct UsageDailySection: View {
 
   @ViewBuilder private var legendItems: some View {
     legendItem(QuotaTheme.cachedFill, "Cached")
-    legendItem(QuotaTheme.emerald, "Fresh")
+    legendItem(QuotaTheme.freshInputFill, "Fresh")
     legendItem(Color.primary.opacity(0.85), "Output")
   }
 
@@ -154,7 +154,7 @@ struct UsageDailySection: View {
           x: .value("Day", row.date),
           y: .value("Tokens", Double(row.freshInputTokens))
         )
-        .foregroundStyle(QuotaTheme.emerald)
+        .foregroundStyle(QuotaTheme.freshInputFill)
         .opacity(opacity)
         BarMark(
           x: .value("Day", row.date),

@@ -16,8 +16,12 @@ conformance tests. Pace algorithms and English sentence catalogs do not belong i
 
 ## Five principles
 
-1. **Answer “Can I keep working?” first.** Remaining, then when it resets, then a risk sentence
-   when one exists. Analytics come after.
+1. **A glance answers quota; an analysis page tells the reader's usage.** Glance surfaces — the
+   QuotaBar panel, the iPhone Quota tab, widgets — answer “Can I keep working?” first: remaining,
+   then when it resets, then a risk sentence when one exists. Analysis surfaces — the website's
+   `/my`, the iPhone Usage tab, the QuotaBar Usage page — open with one sentence about the
+   reader's own model usage, then the model chart and ledger, with quota kept in view (on the web,
+   the quota band). See [ADR 0064](decisions/0064-analysis-surfaces-lead-with-model-usage.md).
 2. **A number keeps its meaning everywhere.** Remaining is remaining. A period uses one timezone.
    Money names its cost basis. A stale reading keeps the last observation and says why it is not
    current.
@@ -42,15 +46,18 @@ here.
 | `surface.canvas` | Page and grouped background. |
 | `surface.content` | Cards and grouped content. |
 | `border.subtle` | Decorative divider, not the sole control boundary. |
-| `brand.accent` | Quota actions, focus, and the healthy remaining fill. Not a recolor of every vendor mark. |
+| `brand.accent` | The Quota mark, focus, switches, primary Quota actions, cached input, and the healthy remaining fill. Never a model or vendor colour. |
 | `quota.healthy` | Remaining that is enough to keep working. The percent sits next to the bar. |
 | `quota.warning` | Remaining that is getting tight. The percent sits next to the bar. |
 | `quota.critical` | Remaining that is likely to stop the reader. The percent sits next to the bar. |
 | `meter.track` | Neutral unfilled meter. Not an available or unknown state by itself. |
 | `activity.0`…`activity.4` | Activity and rhythm volume steps. The legend states the scale. |
-| `chart.input` | Fresh input in a daily token stack. |
-| `chart.cache` | Cached input in a daily token stack. |
-| `chart.output` | Output in a daily token stack. |
+| `chart.cache` | Cache read in a token stack or mix. The brand colour: cache is what Quota helps the reader keep. |
+| `chart.cache_write` | Cache write, where the data separates it. Brand light. |
+| `chart.input` | Fresh (uncached) input. Neutral. |
+| `chart.output` | Output, reasoning included. Ink. |
+| `model.<provider>.1`…`4` | A model's fill in a chart, ledger swatch, or flow. The family is the model's inference provider; the shade is its rank inside that provider. |
+| `model.other` | Every model ranked fifth or lower inside its provider, and the folded rest of a top-N series. |
 
 Roles the token file does not store as swatches, but every surface still uses:
 
@@ -62,6 +69,17 @@ Roles the token file does not store as swatches, but every surface still uses:
 | Focus | Platform focus. Web uses a solid accent outline and offset. Never hover-only. |
 
 Colour never carries status alone. Every state also has a text label.
+
+**Model colours.** A model's colour comes from its inference provider's family (`anthropic`,
+`openai`, `google`, `xai`, `moonshot`, `deepseek`, `cursor`, `unknown`) and its rank by tokens
+inside that provider over the Account's `all` period: ranks 1–4 take shades 1–4, anything lower is
+`model.other`. The rank is over all history, not the period on screen, so switching period, page,
+or device never recolours a model. Each platform writes one pure function for that assignment and
+every chart on the surface uses it. Never assign colour by rank across providers, and never make a
+model mint. Amber and red appear only for risk. Model fills are chart fills that always sit beside a
+name, a ledger row, or a label, so they are not held to 3:1 against the canvas (WCAG 1.4.11 applies
+where a fill is the only carrier, which no Quota chart allows); inside a family, shade 1 stands out
+most from the canvas and each later rank less.
 
 ### Apple overrides
 
@@ -77,8 +95,8 @@ are platform facts, not a second palette.
 - Meter track is `tertiarySystemFill`.
 - Activity empty cells use `separator`. Non-empty steps keep the shared fill ramp and take a
   contrast-safe outline, so WCAG 1.4.11 does not force the ramp to collapse into one fill.
-- Daily token series on Apple: input is brand emerald, cache is a muted emerald, output is label
-  at reduced opacity — not the web activity-step mapping.
+- Chart output on Apple is `label` at reduced opacity so it follows Increase Contrast; cache, cache
+  write, fresh input, and model fills are the shared values.
 
 ### Spacing, radius, motion
 
@@ -139,14 +157,24 @@ provider-mark catalog.
 
 | Component | Contract |
 | --- | --- |
-| Card | One subject and one dominant value; optional heading or action. No nested card wall. |
-| Stat tile | Label, number, basis or coverage. At most two primary stats per group. |
+| Card | One subject and one dominant value; optional heading or action. No nested card wall. Analysis pages group data in hairline-separated sections, not bordered cards. |
+| Sentence header | Eyebrow (page · period), then one sentence written from the reader's numbers, numbers in ink and the rest in body colour, then controls, then one meta line of supporting facts (cost, cache share, active days, change against the previous period). Loading and empty states are sentences too. It never ranks the reader against anyone. |
+| Stat tile | Label, number, basis or coverage. Not the default headline of an analysis page — the sentence header is. Allowed where space is dense (a detail page, the public page, a panel). At most two primary stats per group. |
 | Quota window | Window title, remaining, meter, reset; risk only when the pace rule answers. |
-| Meter | Linear remaining 0…100, exact zero, no minimum quantitative fill. A capped amount (`$12.50 of $40.00`) replaces a redundant percent bar. Hidden from VoiceOver when the remaining figure is already spoken. |
+| Meter | Linear remaining 0…100, exact zero, no minimum quantitative fill. A capped amount (`$12.50 of $40.00`) replaces a redundant percent bar. Hidden from VoiceOver when the remaining figure is already spoken. The default for every window. |
+| Even-pace tick | A thin tick on a meter where remaining would stand now at an even burn rate. A fill ending short of the tick is burning faster than an even pace. Only where the pace rule answers; hidden from assistive tech, because the pace line says it in words. |
+| Quota band | On analysis pages, one row under the header: per subscription an 18-point ring of its tightest window's remaining in the band colour, provider name, remaining percent, window title; a stale reading shows its status word, a balance its amount. Each item links to the subscription; the row ends with **Quota →** and scrolls sideways when narrow. |
+| Tightest-window gauge | The Quota mark's ring at size, remaining as the arc in the band colour, the percent inside. Only for the single tightest window at the head of a quota page; every other window is a linear meter. |
+| Next resets | The next seven days in local time, one lane per current subscription, a ring per reset instant in the band colour of the window it refills (the lowest when several coincide), labelled with window titles. Its text alternative is each window's **Resets** line. |
 | Pace line | Optional explanatory projection, never a second unlabeled headline. Solid observations, dashed estimate, reset endpoint. The dashed end agrees with the pace sentence. |
 | List row | Leading identity, main text, trailing value or action. The full target is only a control when it navigates or acts. |
 | Capsule | Short plan or scope descriptor; neutral unless it truly signals state. Never a fake button. |
-| Daily chart | The same local dates as the summary. Zero is a baseline tick, not a short bar. Two or three value ticks, date ticks, selected-day detail. |
+| Daily chart | The same local dates as the summary. Zero is a baseline tick, not a short bar. Two or three value ticks, date ticks, selected-day detail. Tokens stack cache read, fresh input, and output in the chart roles. |
+| Model river | Stacked area by model per local day, largest model at the bottom, the top models plus `other`. A metric switch in the chart head (Tokens, API-equivalent cost, Messages) and Amount / Share. The current day is hatched as in progress. An empty day stays in the axis with a baseline tick: in Amount the stack meets the baseline there; in Share the areas break over that day rather than drawing a 0 % dip. Labels sit at a stream's end when there is room; otherwise the ledger under it is the legend. |
+| Model ledger | The legend is the table: swatch, model (names merged across agents and aliases), tokens, share, change against the previous period (**↑ 4 pts**, **New**, or **—**), from cache, and cost, each row tinted by a bar of its value in the model colour. Six rows then **N more models** with their total; the models page lists all. |
+| Token mix | One bar of cache read, cache write, fresh input, and output that adds up to the period's tokens, with percentages, reasoning named inside output, and what cache saved in dollars against list price ([ADR 0036](decisions/0036-usage-derived-metrics.md)). |
+| Agents → models | Agents on the left in ink, models on the right in model colours, ribbons as wide as the tokens one sent to the other, top eight models. Each ribbon names its pair and tokens for assistive tech; where too narrow, the same pairs are a grouped list. |
+| Weekly recap poster | One week, one number and one sentence per poster: volume, model of the week, cache efficiency, rhythm, headroom now. **Copy as image** on each; private until copied. No streaks, no ranking, no volume record. |
 | History chart | The running window, 0–100. Reset cycles do not imply continuous consumption; gaps stay gaps. Several windows of one provider use dash or label as well as colour. |
 | Activity / rhythm | Secondary exploration. Explicit timezone and scale legend. Not automatic dashboard wallpaper. |
 | Empty / error | No-data explanation plus one primary action. Local versus Account only where that distinction is actionable. Last-good remains on a partial failure. |
@@ -273,12 +301,14 @@ fixtures named below; change the fixture, not a surface.
   days carry no agent tree, so a folded period shows totals and cost with no model breakdown and
   says so in one line rather than looking empty. On Account, a period the summary does not carry
   is answered on This Mac only.
-- **The monthly budget is a device preference and never leaves the device.** It is one amount in
-  whole US dollars plus whether it may notify, kept in `UserDefaults` on Apple and
-  `localStorage` on the website — never in the Account, because a budget says what someone wants
-  to be warned about, which is not a fact about their usage. The Usage page shows it as a
-  progress bar above the totals, reading **`$5.39 / $50.00 · 11%`**, with **`≥ `** in front of a
-  spend only partly priced. Crossing 80% and then 100% of the amount notifies once each per
+- **The monthly budget follows the Account.** It is one amount in US dollars plus whether it may
+  notify, in the Account settings document with the alert policy
+  ([ADR 0061](decisions/0061-alert-policy-and-the-budget-follow-the-account.md)); `UserDefaults`
+  on Apple and `localStorage` on the website keep the local copy, and which crossings a device
+  already announced stays on that device. Signed in, every client measures it against the
+  Account's calendar month; signed out, against what the device has, and the surface says which.
+  It reads as a progress bar **`$5.39 / $50.00 · 11%`**, with **`≥ `** in front of a spend only
+  partly priced. Crossing 80% and then 100% of the amount notifies once each per
   calendar month: the title is **`Monthly budget`** and the body is **`80% of $50.00 spent`**,
   or **`$50.00 budget spent`** once the whole amount is gone. A new month starts a new cycle.
   When those crossings fire is `packages/protocol/fixtures/alert-transition-conformance.json`

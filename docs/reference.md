@@ -135,9 +135,43 @@ From `packages/design-tokens/tokens.json`.
 | `color.activity.3.border` | `#087456` | `#82ddb8` | --activity-3-border |
 | `color.activity.4.fill` | `#087456` | `#82ddb8` | --activity-4 |
 | `color.activity.4.border` | `#065a43` | `#b6ead4` | --activity-4-border |
-| `color.chart.input` | `#82ddb8` | `#1a7a58` | --chart-input |
-| `color.chart.cache` | `#c6eddc` | `#134d3a` | --chart-cache |
-| `color.chart.output` | `#087456` | `#82ddb8` | --chart-output |
+| `color.chart.cache` | `#087456` | `#82ddb8` | --chart-cache |
+| `color.chart.cache_write` | `#82ddb8` | `#1a7a58` | --chart-cache-write |
+| `color.chart.input` | `#cfcfcf` | `#4a4a4a` | --chart-input |
+| `color.chart.output` | `#3a3f45` | `#d1d8e1` | --chart-output |
+| `color.model.anthropic.1` | `#90502a` | `#f2ab83` | --model-anthropic-1 |
+| `color.model.anthropic.2` | `#b6734d` | `#ca865f` | --model-anthropic-2 |
+| `color.model.anthropic.3` | `#d29d80` | `#98674c` | --model-anthropic-3 |
+| `color.model.anthropic.4` | `#eac5b1` | `#694b39` | --model-anthropic-4 |
+| `color.model.openai.1` | `#5c646f` | `#b5bfcb` | --model-openai-1 |
+| `color.model.openai.2` | `#7e8792` | `#9099a5` | --model-openai-2 |
+| `color.model.openai.3` | `#a5abb4` | `#6f757d` | --model-openai-3 |
+| `color.model.openai.4` | `#c9ced4` | `#4f5358` | --model-openai-4 |
+| `color.model.google.1` | `#3e668f` | `#97c2f0` | --model-google-1 |
+| `color.model.google.2` | `#608ab5` | `#729cc8` | --model-google-2 |
+| `color.model.google.3` | `#8faed0` | `#597797` | --model-google-3 |
+| `color.model.google.4` | `#bbd0e8` | `#425468` | --model-google-4 |
+| `color.model.xai.1` | `#4a6879` | `#a3c3d7` | --model-xai-1 |
+| `color.model.xai.2` | `#6c8b9e` | `#7e9db0` | --model-xai-2 |
+| `color.model.xai.3` | `#97afbd` | `#627886` | --model-xai-3 |
+| `color.model.xai.4` | `#c0d1db` | `#47555d` | --model-xai-4 |
+| `color.model.moonshot.1` | `#73577b` | `#d0b1d9` | --model-moonshot-1 |
+| `color.model.moonshot.2` | `#977aa0` | `#a98cb3` | --model-moonshot-2 |
+| `color.model.moonshot.3` | `#b8a2bf` | `#816c87` | --model-moonshot-3 |
+| `color.model.moonshot.4` | `#d7c7dc` | `#5a4d5e` | --model-moonshot-4 |
+| `color.model.deepseek.1` | `#526094` | `#aabbf5` | --model-deepseek-1 |
+| `color.model.deepseek.2` | `#7483ba` | `#8695cd` | --model-deepseek-2 |
+| `color.model.deepseek.3` | `#9ca9d4` | `#67729a` | --model-deepseek-3 |
+| `color.model.deepseek.4` | `#c4cdea` | `#4a516a` | --model-deepseek-4 |
+| `color.model.cursor.1` | `#6c6250` | `#c8bca9` | --model-cursor-1 |
+| `color.model.cursor.2` | `#908572` | `#a29784` | --model-cursor-2 |
+| `color.model.cursor.3` | `#b2aa9b` | `#7c7366` | --model-cursor-3 |
+| `color.model.cursor.4` | `#d3cdc3` | `#575249` | --model-cursor-4 |
+| `color.model.unknown.1` | `#636363` | `#bebebe` | --model-unknown-1 |
+| `color.model.unknown.2` | `#868686` | `#989898` | --model-unknown-2 |
+| `color.model.unknown.3` | `#ababab` | `#747474` | --model-unknown-3 |
+| `color.model.unknown.4` | `#cecece` | `#525252` | --model-unknown-4 |
+| `color.model.other` | `#d4d4d4` | `#383838` | --model-other |
 
 ### Thresholds
 
@@ -171,10 +205,6 @@ From `packages/design-tokens/tokens.json`.
 | `apple.color.activity.3.border.light` | #2fa37a |
 | `apple.color.activity.4.border.dark` | #51b391 |
 | `apple.color.activity.4.border.light` | #2fa37a |
-| `apple.color.chart.cache.dark` | #2d9374 |
-| `apple.color.chart.cache.light` | #399078 |
-| `apple.color.chart.input.dark` | #82ddb8 |
-| `apple.color.chart.input.light` | #087456 |
 | `apple.color.chart.output.opacity` | 0.85 |
 | `apple.color.chart.output.system` | label |
 | `apple.color.meter.track.system` | tertiarySystemFill |

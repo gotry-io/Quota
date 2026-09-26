@@ -22,10 +22,10 @@ enum QuotaTheme {
     }
   )
 
-  /// Cached-input chart fill. Translucent emerald on the card was 1.7:1 in light and 2.4:1
-  /// in dark; the Apple `chart.cache` override stays a lighter step than fresh emerald and
-  /// ≥ 3:1 on the card.
+  /// Token-mix fills (docs/design.md colour roles): cached input is the brand colour, ≥ 3:1 on
+  /// the card; fresh input is neutral, and is told apart by the legend beside it, not by contrast.
   static let cachedFill = color(DesignTokens.Color.chartCache)
+  static let freshInputFill = color(DesignTokens.Color.chartInput)
 
   /// The one warning color: a window whose pace runs it out before its reset.
   static let warning = color(DesignTokens.Color.quotaWarning)
