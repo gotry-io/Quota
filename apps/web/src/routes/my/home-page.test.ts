@@ -15,8 +15,8 @@ import {
 } from "$lib/account-reads.ts";
 import { clearStoredAccountSettings } from "$lib/account-settings-client.ts";
 import { activityRangeKey, createAccountStore } from "$lib/account-store.svelte.ts";
-import { formatUtcDateRange } from "$lib/format.ts";
-import UsagePageHarness from "./usage-page-harness.svelte";
+import { previousUsagePeriodRange, usagePeriodRange } from "$lib/usage-period.ts";
+import HomePageHarness from "./home-page-harness.svelte";
 
 afterEach(() => {
   cleanup();
@@ -35,7 +35,7 @@ function acceptedSummary(): AccountSummaryRead {
     readFileSync(
       join(
         dirname(fileURLToPath(import.meta.url)),
-        "../../../../../../packages/protocol/fixtures/wire-conformance.json",
+        "../../../../../packages/protocol/fixtures/wire-conformance.json",
       ),
       "utf8",
     ),
@@ -214,7 +214,7 @@ function activityListCalls(calls: string[]): string[] {
   return calls.filter((url) => url.includes("usage/activity") && !url.includes("detail="));
 }
 
-it("rolls the Usage activity range once when the shell clock crosses UTC midnight", async () => {
+it("rolls the year's activity range once when the shell clock crosses UTC midnight", async () => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-08-12T23:59:00Z"));
   const payload = acceptedSummary();
@@ -228,47 +228,63 @@ it("rolls the Usage activity range once when the shell clock crosses UTC midnigh
   const store = createAccountStore();
   await store.ensureSummary();
   const stopClock = store.startClock();
-  const firstRange = accountActivityRange(new Date("2026-08-12T23:59:00Z"));
-  const firstKey = activityRangeKey(firstRange);
+  const firstKey = activityRangeKey(accountActivityRange(new Date("2026-08-12T23:59:00Z")));
   expect(firstKey).toBe("2025-08-13|2026-08-12");
 
-  const view = render(UsagePageHarness, { store });
-  await waitFor(() => {
-    expect(view.container.querySelector("#usage-activity-status")?.textContent?.trim()).toBe(
-      formatUtcDateRange(firstRange.from, firstRange.to),
-    );
-  });
-  expect(Object.keys(store.activity)).toEqual([firstKey]);
+  render(HomePageHarness, { store });
+  await waitFor(() => expect(store.activity[firstKey]?.data).not.toBeNull());
   expect(activityListCalls(calls)).toHaveLength(1);
-  expect(activityListCalls(calls)[0]).toContain("from=2025-08-13");
-  expect(activityListCalls(calls)[0]).toContain("to=2026-08-12");
 
   await vi.advanceTimersByTimeAsync(120_000);
-  const secondRange = accountActivityRange(new Date("2026-08-13T00:01:00Z"));
-  const secondKey = activityRangeKey(secondRange);
+  const secondKey = activityRangeKey(accountActivityRange(new Date("2026-08-13T00:01:00Z")));
   expect(secondKey).toBe("2025-08-14|2026-08-13");
-
-  await waitFor(() => {
-    expect(view.container.querySelector("#usage-activity-status")?.textContent?.trim()).toBe(
-      formatUtcDateRange(secondRange.from, secondRange.to),
-    );
-  });
-  expect(store.activity[secondKey]?.data).not.toBeNull();
+  await waitFor(() => expect(store.activity[secondKey]?.data).not.toBeNull());
   expect(activityListCalls(calls)).toHaveLength(2);
   expect(activityListCalls(calls)[1]).toContain("from=2025-08-14");
-  expect(activityListCalls(calls)[1]).toContain("to=2026-08-13");
 
   await vi.advanceTimersByTimeAsync(60_000);
-  await waitFor(() => {
-    expect(view.container.querySelector("#usage-activity-status")?.textContent?.trim()).toBe(
-      formatUtcDateRange(secondRange.from, secondRange.to),
-    );
-  });
   expect(activityListCalls(calls)).toHaveLength(2);
   stopClock();
 });
 
-it("parses a period response and renders totals, cost, and coverage", async () => {
+it("reads the period with its tree and model series, and the equal range before it with the tree only", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-08-12T12:00:00Z"));
+  const payload = acceptedSummary();
+  const { calls } = mockFetch((url) => {
+    if (url.includes("/account/summary")) return jsonResponse(payload);
+    if (url.includes("/account/usage/period")) return jsonResponse(periodFromSummary(url, payload));
+    const to = new URL(url, "https://quota.test").searchParams.get("to") ?? "2026-08-12";
+    return jsonResponse(activityBody(to));
+  });
+  const store = createAccountStore();
+  await store.ensureSummary();
+  render(HomePageHarness, { store });
+
+  const now = new Date("2026-08-12T12:00:00Z");
+  const current = usagePeriodRange({ segment: "30d" }, now);
+  const previous = previousUsagePeriodRange({ segment: "30d" }, now);
+  const periodCalls = (): URLSearchParams[] =>
+    calls
+      .filter((url) => url.includes("/account/usage/period"))
+      .map((url) => new URL(url, "https://quota.test").searchParams);
+  await waitFor(() => expect(periodCalls()).toHaveLength(2));
+  const [asked, before] = periodCalls();
+  expect([
+    asked?.get("from"),
+    asked?.get("to"),
+    asked?.get("breakdown"),
+    asked?.get("series"),
+  ]).toEqual([current?.from, current?.to, "1", "model"]);
+  expect([
+    before?.get("from"),
+    before?.get("to"),
+    before?.get("breakdown"),
+    before?.get("series"),
+  ]).toEqual([previous?.from, previous?.to, "1", null]);
+});
+
+it("says in the meta line when hours are incomplete and when retention cut the range", async () => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-08-12T12:00:00Z"));
   const payload = acceptedSummary();
@@ -289,24 +305,14 @@ it("parses a period response and renders totals, cost, and coverage", async () =
     if (url.includes("/account/usage/period")) {
       const asked = new URL(url, "https://quota.test");
       const from = asked.searchParams.get("from") ?? "2026-07-14";
-      const to = asked.searchParams.get("to") ?? "2026-08-12";
-      const timezone = asked.searchParams.get("timezone") ?? "UTC";
-      const breakdown = asked.searchParams.get("breakdown") === "1";
       const body = periodBody({
         from,
-        to,
-        timezone,
+        to: asked.searchParams.get("to") ?? "2026-08-12",
+        timezone: asked.searchParams.get("timezone") ?? "UTC",
         usage,
-        breakdown,
+        breakdown: asked.searchParams.get("breakdown") === "1",
         truncated: true,
-        days: [
-          {
-            date: from,
-            totals: usage.totals,
-            cost: usage.cost,
-            partial: true,
-          },
-        ],
+        days: [{ date: from, totals: usage.totals, cost: usage.cost, partial: true }],
       });
       expect(AccountUsagePeriodResponseReadSchema.safeParse(body).success).toBe(true);
       return jsonResponse(body);
@@ -317,21 +323,11 @@ it("parses a period response and renders totals, cost, and coverage", async () =
 
   const store = createAccountStore();
   await store.ensureSummary();
-  const view = render(UsagePageHarness, { store });
+  const view = render(HomePageHarness, { store });
   await waitFor(() => {
-    expect(view.container.querySelector("#token-total")?.textContent?.trim()).toBe("2.4K");
+    expect(view.container.querySelector("h1")?.textContent).toContain("2.4K tokens");
   });
-  expect(view.container.querySelector("#cost-total")?.textContent).toContain("$1.23");
-  expect(view.container.querySelector("#usage-retention-note")?.textContent).toContain(
-    "This range goes past what Quota still keeps.",
-  );
-  expect(view.container.querySelector(".dashboard-status")?.textContent).toContain(
-    "some hours incomplete",
-  );
-  expect(view.container.querySelector(".dashboard-status")?.textContent).toContain(
-    "some of this range is no longer kept",
-  );
-  expect(view.container.textContent).toContain(
-    "Some hours in this period were scanned incompletely.",
+  expect(view.container.querySelector(".page-header-meta")?.textContent).toContain(
+    "some hours incomplete · some of this range is no longer kept",
   );
 });

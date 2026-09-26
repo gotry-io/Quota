@@ -35,6 +35,7 @@ let {
 <style>
 .page-section {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
   min-width: 0;
   padding: 22px 0 36px;

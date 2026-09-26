@@ -7,6 +7,8 @@ import {
   AccountUsageActivityResponseReadSchema,
   type AccountUsagePeriodResponseRead,
   AccountUsagePeriodResponseReadSchema,
+  type QuotaHistoryResponseRead,
+  QuotaHistoryResponseReadSchema,
   type UsagePeriodRead,
 } from "@gotry-io/quota-protocol";
 import { type AccountError, classifyAccountError } from "./account-errors.ts";
@@ -34,6 +36,8 @@ export type AccountUsagePeriodQuery = {
   to: string;
   timezone: string;
   breakdown?: boolean;
+  /** `model` adds the period's usage by day and model (`model_series`). */
+  series?: "model";
 };
 
 export type AccountUsagePeriodResult =
@@ -69,12 +73,14 @@ export function clearStoredSummary(): void {
 }
 
 /**
- * The period cache key: inclusive local dates, the IANA zone, and whether the agent tree was asked.
+ * The period cache key: inclusive local dates, the IANA zone, whether the agent tree was asked,
+ * and whether the model series was.
  *
- * Breakdown is part of the key because a body without `agents` must not answer the tree.
+ * Breakdown and series are part of the key because a body without `agents` or `model_series`
+ * must not answer a read that asked for them.
  */
 export function usagePeriodResourceKey(query: AccountUsagePeriodQuery): string {
-  return `${query.from}|${query.to}|${query.timezone}|${query.breakdown === true ? "1" : "0"}`;
+  return `${query.from}|${query.to}|${query.timezone}|${query.breakdown === true ? "1" : "0"}|${query.series ?? ""}`;
 }
 
 export function storedPeriodETag(key: string): string | null {
@@ -128,7 +134,31 @@ export function accountUsagePeriodPath(query: AccountUsagePeriodQuery): string {
     timezone: query.timezone,
   });
   if (query.breakdown === true) params.set("breakdown", "1");
+  if (query.series !== undefined) params.set("series", query.series);
   return `/api/v6/account/usage/period?${params.toString()}`;
+}
+
+export type QuotaHistoryResult = { status: "ok"; history: QuotaHistoryResponseRead } | AccountError;
+
+/**
+ * One global-scope subscription's merged Account history since `since`
+ * ([ADR 0062](../../../../docs/decisions/0062-quota-history-may-follow-the-account.md)).
+ * Relay clamps `since` to each window's span and answers `sync: false` while the switch is off.
+ */
+export function quotaHistoryPath(query: {
+  provider: string;
+  fingerprint: string;
+  since: string;
+}): string {
+  return `/api/v6/account/quota-history?${new URLSearchParams(query).toString()}`;
+}
+
+export function parseQuotaHistoryResponse(status: number, body: unknown): QuotaHistoryResult {
+  if (status < 200 || status >= 300) {
+    return classifyAccountError(new Response(null, { status }));
+  }
+  const parsed = QuotaHistoryResponseReadSchema.safeParse(body);
+  return parsed.success ? { status: "ok", history: parsed.data } : classifyAccountError(null);
 }
 
 /** Account metadata and the identities this browser signed in with. */

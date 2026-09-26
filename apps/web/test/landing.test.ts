@@ -12,7 +12,10 @@ const home = readFileSync(join(root, "../src/routes/my/+page.svelte"), "utf8");
 const models = readFileSync(join(root, "../src/routes/my/models/+page.svelte"), "utf8");
 const quota = readFileSync(join(root, "../src/routes/my/quota/+page.svelte"), "utf8");
 const recap = readFileSync(join(root, "../src/routes/my/recap/+page.svelte"), "utf8");
-const usage = readFileSync(join(root, "../src/routes/my/usage/+page.svelte"), "utf8");
+const subscription = readFileSync(
+  join(root, "../src/lib/components/SubscriptionDetail.svelte"),
+  "utf8",
+);
 const devices = readFileSync(join(root, "../src/routes/my/devices/+page.svelte"), "utf8");
 const settings = readFileSync(join(root, "../src/routes/my/settings/+page.svelte"), "utf8");
 const accountLayout = readFileSync(join(root, "../src/routes/my/+layout.svelte"), "utf8");
@@ -53,7 +56,7 @@ test("no surface explains itself in implementation words", () => {
     models,
     quota,
     recap,
-    usage,
+    subscription,
     devices,
     settings,
     accountLayout,

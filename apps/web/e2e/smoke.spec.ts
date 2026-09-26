@@ -51,6 +51,7 @@ async function mockV6(page: Page, summary: unknown = accountSummary): Promise<vo
         body: JSON.stringify(
           accountUsagePeriod(from, to, timezone, {
             breakdown: asked.searchParams.get("breakdown") === "1",
+            series: asked.searchParams.get("series") === "model",
             summary: summary as typeof accountSummary,
           }),
         ),
@@ -98,43 +99,6 @@ function seriousOrCritical(
     }));
 }
 
-test("Home does not prefetch activity", async ({ page }) => {
-  let activityListRequests = 0;
-  let periodRequests = 0;
-  await page.route("**/api/v6/**", async (route) => {
-    const url = route.request().url();
-    if (url.includes("/api/v6/account/summary")) {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(accountSummary),
-      });
-      return;
-    }
-    if (url.includes("/api/v6/account/usage/period")) {
-      periodRequests += 1;
-      await route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
-      return;
-    }
-    if (url.includes("/api/v6/account/usage/activity")) {
-      const asked = new URL(url);
-      if (!asked.searchParams.get("detail")) activityListRequests += 1;
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(accountActivity),
-      });
-      return;
-    }
-    await route.fulfill({ status: 404, contentType: "application/json", body: "{}" });
-  });
-
-  await page.goto("/my");
-  await expect(page.locator(".quota-card").filter({ hasText: "Codex" })).toBeVisible();
-  expect(activityListRequests).toBe(0);
-  expect(periodRequests).toBe(0);
-});
-
 test("moving between account pages does not refetch summary or activity", async ({ page }) => {
   let summaryRequests = 0;
   let activityListRequests = 0;
@@ -162,6 +126,7 @@ test("moving between account pages does not refetch summary or activity", async 
         body: JSON.stringify(
           accountUsagePeriod(from, to, timezone, {
             breakdown: asked.searchParams.get("breakdown") === "1",
+            series: asked.searchParams.get("series") === "model",
             summary: accountSummary,
           }),
         ),
@@ -194,16 +159,14 @@ test("moving between account pages does not refetch summary or activity", async 
   await page.goto("/my");
   const accountNav = page.getByRole("navigation", { name: "Account" });
   const accountMenu = page.locator("#header-account-menu");
-  await expect(page.locator(".quota-card").filter({ hasText: "Codex" })).toBeVisible();
-
-  await page.locator("a.today-strip").click();
+  await expect(page.getByRole("table", { name: "Models in this period" })).toBeVisible();
   await expect(page.getByRole("group", { name: "Usage activity by day" })).toBeVisible();
 
   await accountNav.getByRole("link", { name: "Models" }).click();
-  await expect(page.getByRole("heading", { name: "By agent and model" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Every model" })).toBeVisible();
 
   await accountNav.getByRole("link", { name: "Quota" }).click();
-  await expect(page.locator(".quota-card").filter({ hasText: "Codex" })).toBeVisible();
+  await expect(page.locator(".sub").filter({ hasText: "Codex" })).toBeVisible();
 
   await accountMenu.locator("summary").click();
   await accountMenu.getByRole("link", { name: "Devices" }).click();
@@ -214,11 +177,9 @@ test("moving between account pages does not refetch summary or activity", async 
   await expect(page.getByRole("heading", { name: "Delete Account" })).toBeVisible();
 
   await accountNav.getByRole("link", { name: "Home" }).click();
-  await expect(page.locator(".quota-card").filter({ hasText: "Codex" })).toBeVisible();
-  await expect(page.locator(".loading-block")).toHaveCount(0);
-
-  await page.locator("a.today-strip").click();
+  await expect(page.getByRole("table", { name: "Models in this period" })).toBeVisible();
   await expect(page.getByRole("group", { name: "Usage activity by day" })).toBeVisible();
+  await expect(page.locator(".loading-block")).toHaveCount(0);
 
   expect(summaryRequests).toBe(1);
   expect(activityListRequests).toBe(1);
@@ -235,7 +196,6 @@ test("the account shell carries the quota band, the Account nav, and the account
     "aria-current",
     "page",
   );
-  await expect(page.getByText(/Latest quota updated .* · \d+ devices? reporting/)).toBeVisible();
 
   const band = page.getByRole("navigation", { name: "Remaining quota" });
   await expect(band.locator("[data-provider]")).toHaveCount(accountSummary.subscriptions.length);
@@ -255,14 +215,16 @@ test("the account shell carries the quota band, the Account nav, and the account
     "aria-current",
     "page",
   );
-  await expect(page.locator(".quota-card").filter({ hasText: "Codex" })).toContainText("Plus");
+  await expect(page.locator(".sub").filter({ hasText: "Codex" })).toContainText("Plus");
+  await expect(page.getByText(/Latest quota updated .* · \d+ devices? reporting/)).toBeVisible();
 
-  await page.goto("/my/usage");
-  const tokens = page.locator("#token-total");
-  await expect(tokens).not.toHaveText("—");
-  const thirtyDayTokens = await tokens.innerText();
+  // The shipped Usage address is Home now, and keeps the period it named.
+  await page.goto("/my/usage?period=7d");
+  await expect(page).toHaveURL(/\/my\?period=7d$/);
+  const sentence = page.locator("main h1");
+  await expect(sentence).toContainText("in the last 7 days");
   await page.getByRole("button", { name: "Today", exact: true }).click();
-  await expect(tokens).not.toHaveText(thirtyDayTokens);
+  await expect(sentence).toContainText("today so far");
   await expect(page).toHaveURL(/[?&]period=day(?:&|$)/);
 
   await page.goto("/my/devices");
@@ -283,30 +245,37 @@ test("a band item opens its subscription, which names no device id or key", asyn
   await expect(page.getByText("Reporting")).toBeVisible();
   await expect(page.locator("body")).not.toContainText("codex_account_1");
   await expect(page.locator("body")).not.toContainText("device_1");
-});
-
-test("Usage keeps the model tree beside Activity at 1440 and above it at 390", async ({ page }) => {
-  await mockV6(page);
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto("/my/usage");
-  await expect(page.locator("#token-total")).not.toHaveText("—");
-  await expect(page.getByRole("group", { name: "Usage activity by day" })).toBeVisible();
-  const sideBySide = await page.evaluate(() => {
-    const tree = document.querySelector(".usage-tree-panel")?.getBoundingClientRect();
-    const activity = document.querySelector(".usage-activity-panel")?.getBoundingClientRect();
-    if (!tree || !activity) return false;
-    return activity.left >= tree.right - 1;
-  });
-  expect(sideBySide).toBe(true);
 
   await page.setViewportSize({ width: 390, height: 844 });
-  const stacked = await page.evaluate(() => {
-    const tree = document.querySelector(".usage-tree-panel")?.getBoundingClientRect();
-    const activity = document.querySelector(".usage-activity-panel")?.getBoundingClientRect();
-    if (!tree || !activity) return false;
-    return activity.top >= tree.bottom - 1;
-  });
-  expect(stacked).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  const results = await new AxeBuilder({ page }).analyze();
+  expect(seriousOrCritical(results.violations)).toEqual([]);
+});
+
+test("Home keeps the token mix beside the year at 1440 and above it at 390", async ({ page }) => {
+  await mockV6(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/my");
+  await expect(page.getByRole("group", { name: "Usage activity by day" })).toBeVisible();
+  const boxes = async () =>
+    page.evaluate(() => {
+      const mix = document.querySelector("#mix-title")?.closest("section")?.getBoundingClientRect();
+      const year = document
+        .querySelector("#year-title")
+        ?.closest("section")
+        ?.getBoundingClientRect();
+      return mix && year
+        ? { mixRight: mix.right, mixBottom: mix.bottom, yearLeft: year.left, yearTop: year.top }
+        : null;
+    });
+  const wide = await boxes();
+  expect(wide && wide.yearLeft >= wide.mixRight - 1).toBe(true);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const narrow = await boxes();
+  expect(narrow && narrow.yearTop >= narrow.mixBottom - 1).toBe(true);
 });
 
 function accountReadWithIdentities(
@@ -378,8 +347,8 @@ test("sign-in with intent=link lists bindable channels when signed in", async ({
 
 test("activity grid is one tab stop and Enter opens the day tree", async ({ page }) => {
   await mockV6(page);
-  await page.goto("/my/usage");
-  await expect(page.getByRole("heading", { name: "Activity" })).toBeVisible();
+  await page.goto("/my");
+  await expect(page.getByRole("heading", { name: "Your year" })).toBeVisible();
   await expect(page.locator("button.usage-activity-cell[tabindex='0']")).toHaveCount(1);
 
   const rover = page.locator("button.usage-activity-cell[tabindex='0']");
@@ -400,11 +369,8 @@ test("activity grid is one tab stop and Enter opens the day tree", async ({ page
   const panel = page.locator(".usage-activity-detail");
   await expect(panel.getByRole("button", { name: "Close" })).toBeVisible();
   await expect(page).toHaveURL(/[?&]day=\d{4}-\d{2}-\d{2}/);
-  await expect(
-    panel.getByRole("table", { name: "Usage by agent, provider, and model" }),
-  ).toBeVisible();
-  await expect(panel.getByRole("rowheader", { name: "Codex" })).toBeVisible();
-  await expect(panel.getByRole("rowheader", { name: "gpt-5.6-sol" })).toBeVisible();
+  await expect(panel.getByRole("table", { name: "Models on this day" })).toBeVisible();
+  await expect(panel.getByRole("rowheader", { name: /^gpt-5.6-sol/ })).toContainText("Codex");
 });
 
 /** Every page opens on the same column: the header, the page header, and the footer align. */
@@ -413,7 +379,9 @@ const shellPages = [
   "/sign-in",
   "/download",
   "/my",
+  "/my/models",
   "/my/quota",
+  "/my/recap",
   "/my/devices",
   "/my/settings",
 ] as const;
@@ -441,7 +409,7 @@ test("every page's content starts on the same left edge at 1440", async ({ page 
   expect(brand).toBe((1440 - 1080) / 2);
 });
 
-for (const path of [...shellPages, "/my/models", "/my/recap", "/my/usage", "/u/octocat"]) {
+for (const path of [...shellPages, "/u/octocat"]) {
   test(`${path} fits 390 px and axe finds nothing serious`, async ({ page }) => {
     await mockV6(page);
     await page.setViewportSize({ width: 390, height: 844 });

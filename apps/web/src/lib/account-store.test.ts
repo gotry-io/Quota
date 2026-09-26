@@ -320,6 +320,11 @@ it("stores a period by from, to, timezone, and breakdown", async () => {
     breakdown: false,
   });
   expect(store.period[without]?.data?.agents).toBeUndefined();
+
+  // A body read without the model series must not answer a read that asks for it.
+  await store.ensurePeriod(range, { breakdown: true, series: "model" });
+  expect(calls.filter((url) => url.includes("usage/period"))).toHaveLength(3);
+  expect(calls.at(-1)).toContain("series=model");
 });
 
 it("keeps the last period on error", async () => {

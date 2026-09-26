@@ -2,15 +2,15 @@
  * Which period the Usage page is showing, and how the URL carries it.
  *
  * Three periods are anchored to this browser's own calendar and step: a day, a week, and a month,
- * each an offset back from the current one. Two are the trailing windows the Account summary
- * already folds, `all` is everything retained, and `custom` is a range someone picked. The
- * phrases are in `docs/design.md` Shared product vocabulary.
+ * each an offset back from the current one. Three are trailing windows (the website adds the last
+ * 90 days to the two the Account summary folds), `all` is everything retained, and `custom` is a
+ * range someone picked. The phrases are in `docs/design.md` Shared product vocabulary.
  *
  * Every selection except `all` is `GET /api/v6/account/usage/period` with these inclusive local
  * dates and the browser's IANA timezone. Presets are the same read. `all` stays the summary's
  * 730 UTC-day window. The year activity heatmap still reads the activity route.
  */
-export type UsagePeriodSegment = "day" | "week" | "month" | "7d" | "30d" | "all" | "custom";
+export type UsagePeriodSegment = "day" | "week" | "month" | "7d" | "30d" | "90d" | "all" | "custom";
 
 export type UsagePeriodSelection =
   | { segment: "day"; offset: number }
@@ -18,6 +18,7 @@ export type UsagePeriodSelection =
   | { segment: "month"; offset: number }
   | { segment: "7d" }
   | { segment: "30d" }
+  | { segment: "90d" }
   | { segment: "all" }
   | { segment: "custom"; from: string; to: string };
 
@@ -33,19 +34,18 @@ export const USAGE_PERIOD_SEGMENTS: { segment: UsagePeriodSegment; label: string
     { segment: "month", label: "Month", name: "This month" },
     { segment: "7d", label: "7D", name: "Last 7 days" },
     { segment: "30d", label: "30D", name: "Last 30 days" },
+    { segment: "90d", label: "90D", name: "Last 90 days" },
     { segment: "all", label: "All", name: "All" },
     { segment: "custom", label: "Custom", name: "Custom range" },
   ];
 
+/** The periods the control shows as segments; the rest sit under **More**. */
+export const USAGE_PERIOD_PRIMARY: readonly UsagePeriodSegment[] = ["day", "7d", "30d", "90d"];
+export const USAGE_PERIOD_MORE: readonly UsagePeriodSegment[] = ["week", "month", "all", "custom"];
+
 export const DEFAULT_USAGE_PERIOD: UsagePeriodSelection = { segment: "30d" };
-export const USAGE_MODEL_FOLD_LIMIT = 5;
 
 const DAY_MS = 86_400_000;
-
-/** How many extra models a provider group hides behind Show N more. */
-export function hiddenModelCount(modelCount: number): number {
-  return Math.max(0, modelCount - USAGE_MODEL_FOLD_LIMIT);
-}
 
 /** Whether this period steps one unit at a time. */
 export function usagePeriodSteps(selection: UsagePeriodSelection): boolean {
@@ -64,6 +64,7 @@ export function usagePeriodFromUrl(url: URL): UsagePeriodSelection {
       return { segment, offset };
     case "7d":
     case "30d":
+    case "90d":
     case "all":
       return { segment };
     case "custom": {
@@ -154,6 +155,8 @@ export function usagePeriodRange(
       return trailing(today, 7);
     case "30d":
       return trailing(today, 30);
+    case "90d":
+      return trailing(today, 90);
     case "all":
       return null;
     case "custom":
@@ -175,6 +178,91 @@ export function usagePeriodTitle(selection: UsagePeriodSelection, today: Date): 
   if (!from || !to) return `${range.from} – ${range.to}`;
   if (range.from === range.to) return full(from);
   return `${from.getFullYear() === to.getFullYear() ? short(from) : full(from)} – ${full(to)}`;
+}
+
+/**
+ * The equal range just before this period, which the page compares against, or null for `all`
+ * and a custom range. A trailing window shifts back by its length. A day, week, or month steps
+ * back one unit; the current unit is still running, so it is compared with the same number of
+ * days at the start of the one before (this week so far against the same days last week).
+ */
+export function previousUsagePeriodRange(
+  selection: UsagePeriodSelection,
+  today: Date,
+): UsageDateRange | null {
+  switch (selection.segment) {
+    case "7d":
+    case "30d":
+    case "90d": {
+      const days = selection.segment === "7d" ? 7 : selection.segment === "30d" ? 30 : 90;
+      const end = shiftDays(startOfDay(today), -days);
+      return { from: localDate(shiftDays(end, -(days - 1))), to: localDate(end) };
+    }
+    case "day":
+    case "week":
+    case "month": {
+      const previous = usagePeriodRange({ ...selection, offset: selection.offset + 1 }, today);
+      const current = usagePeriodRange(selection, today);
+      if (!previous || !current) return null;
+      if (selection.offset > 0) return previous;
+      const elapsed = usageRangeDays({ from: current.from, to: localDate(startOfDay(today)) });
+      const start = parseDate(previous.from);
+      if (!start) return null;
+      const to = localDate(shiftDays(start, elapsed - 1));
+      return { from: previous.from, to: to < previous.to ? to : previous.to };
+    }
+    default:
+      return null;
+  }
+}
+
+/** What the comparison is against, in the words of the meta line: `previous 30 days`. */
+export function previousUsagePeriodName(selection: UsagePeriodSelection): string | null {
+  switch (selection.segment) {
+    case "7d":
+      return "previous 7 days";
+    case "30d":
+      return "previous 30 days";
+    case "90d":
+      return "previous 90 days";
+    case "day":
+      return selection.offset === 0 ? "yesterday" : "the day before";
+    case "week":
+      return selection.offset === 0 ? "the same days last week" : "the week before";
+    case "month":
+      return selection.offset === 0 ? "the same days last month" : "the month before";
+    default:
+      return null;
+  }
+}
+
+/**
+ * The period as the end of a sentence: `in the last 30 days`, `today so far`, `this week`.
+ * A stepped-back or custom period names its dates.
+ */
+export function usagePeriodPhrase(selection: UsagePeriodSelection, today: Date): string {
+  switch (selection.segment) {
+    case "7d":
+      return "in the last 7 days";
+    case "30d":
+      return "in the last 30 days";
+    case "90d":
+      return "in the last 90 days";
+    case "all":
+      return "across everything kept";
+    case "day":
+      if (selection.offset === 0) return "today so far";
+      break;
+    case "week":
+      if (selection.offset === 0) return "this week";
+      break;
+    case "month":
+      if (selection.offset === 0) return "this month";
+      break;
+  }
+  const range = usagePeriodRange(selection, today);
+  if (range && range.from === range.to) return `on ${usagePeriodTitle(selection, today)}`;
+  return `from ${usagePeriodTitle(selection, today).replace(" – ", " to ")}`;
 }
 
 /** What the selector calls this period, which is what VoiceOver reads. */
@@ -229,9 +317,9 @@ function isDate(value: string | null): value is string {
 }
 
 function full(value: Date): string {
-  return value.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  return value.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
 function short(value: Date): string {
-  return value.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return value.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }

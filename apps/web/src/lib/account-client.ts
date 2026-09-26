@@ -21,6 +21,9 @@ import {
   parseAccountResponse,
   parseAccountSummaryBody,
   parseAccountUsagePeriodResponse,
+  parseQuotaHistoryResponse,
+  type QuotaHistoryResult,
+  quotaHistoryPath,
   storedPeriod,
   storedPeriodETag,
   storedSummary,
@@ -150,6 +153,20 @@ export async function fetchAccountUsagePeriod(
     const nextETag = response.headers.get("ETag");
     if (nextETag) storePeriod(key, nextETag, parsed.period);
     return parsed;
+  } catch {
+    return classifyAccountError(null);
+  }
+}
+
+export async function fetchQuotaHistory(query: {
+  provider: string;
+  fingerprint: string;
+  since: string;
+}): Promise<QuotaHistoryResult> {
+  try {
+    const response = await fetch(quotaHistoryPath(query), jsonRequest);
+    if (!response.ok) return classifyAccountError(response);
+    return parseQuotaHistoryResponse(response.status, await response.json());
   } catch {
     return classifyAccountError(null);
   }

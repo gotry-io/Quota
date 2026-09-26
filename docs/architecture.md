@@ -190,8 +190,9 @@ duration from then on, so two devices that disagree converge instead of re-backf
 other. The watermark and that fact live in
 `identity.sqlite` and are cleared on sign-out and on `409 history_sync_off`. `413
 quota_history_full` stops the upload until the next collection. Relay merges on the read
-([ADR 0062](decisions/0062-quota-history-may-follow-the-account.md)). The website draws no
-history this cycle. A reading that arrived from another device still has no *local* samples; with
+([ADR 0062](decisions/0062-quota-history-may-follow-the-account.md)). The website reads it only
+to draw a subscription page's pace line under the current window. A reading that arrived from
+another device still has no *local* samples; with
 the switch on, the chart asks `quota_history { since, source: account, provider, fingerprint }`
 and the helper reads `GET /api/v6/account/quota-history` for that one subscription (cached ETag;
 304 reuses the body) and answers the same sample shape as the local read.
