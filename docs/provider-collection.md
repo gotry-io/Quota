@@ -132,7 +132,9 @@ How often this Mac asks each provider is decided per provider
   or a shared pass brings early. A manual refresh or Recheck waits only 60 s per provider. Only a provider a source was actually
   tried for counts as asked, so a provider set up a moment ago is read at once.
 - **Jitter.** Each provider's periodic tick moves by up to 10 % either way. A pass also takes every
-  provider due within 30 s, so providers on one interval share a pass. Usage is scanned with a pass
+  provider due within 30 s, so providers on one interval share a pass, and waits up to those 30 s
+  for one its floor still holds rather than leave it to a pass, Account read and upload of its own.
+  Usage is scanned with a pass
   once its own interval has passed: the fixed interval, or every five minutes under Automatic
   whatever the tiers are, because activity is already judged from modification times and the scan
   only has to keep Usage current.
